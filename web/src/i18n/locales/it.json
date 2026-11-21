@@ -260,7 +260,7 @@
   "proposals.title": "Proposte di {addon}",
   "proposals.suggestion": "Suggerimento",
   "proposals.suggestedBy": "Suggerito da {addon}",
-  "proposals.hint": "{addon} è un add-on di intelligenza artificiale. Non cambia nulla finché un operatore non accetta una proposta.",
+  "proposals.hint": "Suggerimenti di {addon}: non cambia nulla finché un operatore non ne accetta uno.",
   "proposals.accept": "Accetta",
   "proposals.discard": "Scarta il suggerimento",
   "proposals.openTicket": "Aprire un ticket per {customer}",

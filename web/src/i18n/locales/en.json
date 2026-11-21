@@ -260,7 +260,7 @@
   "proposals.title": "Proposals from {addon}",
   "proposals.suggestion": "Suggestion",
   "proposals.suggestedBy": "Suggested by {addon}",
-  "proposals.hint": "{addon} is an AI add-on. Nothing changes until an agent accepts a proposal.",
+  "proposals.hint": "Suggestions from {addon}: nothing changes until an agent accepts one.",
   "proposals.accept": "Accept",
   "proposals.discard": "Discard suggestion",
   "proposals.openTicket": "Open a ticket for {customer}",
