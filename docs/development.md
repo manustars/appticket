@@ -32,6 +32,12 @@ HD_IMAP_POLL_SECONDS=5
 Other variables: `HD_LISTEN` (default `127.0.0.1:8080`) and `HD_LOG` (a `tracing` filter, default
 `info,sqlx=warn`).
 
+A real mailbox needs TLS: `HD_IMAP_URL=imaps://user:password@host/INBOX` (port 993 unless given;
+percent-encode `@`, `/` and `:` inside the user or password). The server's certificate is checked
+against the public web PKI; for a server with a private certificate authority, point
+`HD_IMAP_CA_FILE` at a PEM file of that authority. Plain `imap://` is accepted only for a server on
+this machine, such as the test one.
+
 ## First run
 
 ```sh
@@ -64,6 +70,7 @@ ticket, any other sender lands in the inbox.
 
 ```sh
 cargo test                    # needs the database: each test gets a fresh one from sqlx
+cargo test -- --ignored       # tests that also need the test mail server (TLS reading)
 ```
 
 ## API specification

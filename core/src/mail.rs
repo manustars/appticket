@@ -1,15 +1,11 @@
-//! Incoming mail: reading an IMAP mailbox and routing each message to a ticket or to the inbox.
+//! Incoming mail: routing each received message to a ticket or to the inbox.
 //!
 //! Routing follows docs/domain-rules.md ("Incoming messages"):
 //! a reply joins its ticket, a new message from a known requester opens a ticket, and anything
 //! else waits in the inbox.
 
-use std::time::Duration;
-
-use anyhow::{Context, bail};
-use futures_util::TryStreamExt;
 use mail_parser::MessageParser;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 /// A received e-mail, reduced to what routing and display need.
@@ -249,7 +245,7 @@ async fn insert_message(
 
 /// Routes one fetched message. A message that cannot be parsed or routed is parked in the inbox
 /// as it is, so that one bad message never stops the ones after it.
-async fn store(tx: &mut Transaction<'_, Postgres>, uid: i64, raw: &[u8]) -> anyhow::Result<()> {
+pub async fn store(tx: &mut Transaction<'_, Postgres>, uid: i64, raw: &[u8]) -> anyhow::Result<()> {
     if let Some(incoming) = Incoming::parse(raw) {
         let mut attempt = sqlx::Connection::begin(&mut **tx).await?;
         match route(&mut attempt, &incoming).await {
@@ -289,124 +285,10 @@ async fn park(tx: &mut Transaction<'_, Postgres>, raw: &[u8]) -> anyhow::Result<
     Ok(())
 }
 
-/// Connection details of the mailbox the help desk reads.
-#[derive(Debug, Clone)]
-pub struct MailboxConfig {
-    pub host: String,
-    pub port: u16,
-    pub user: String,
-    pub password: String,
-    pub mailbox: String,
-}
-
-impl MailboxConfig {
-    /// Parses `imap://user:password@host:port/MAILBOX`. Only plain IMAP is supported for now,
-    /// which is fine for the local test server and nothing else.
-    pub fn from_url(raw: &str) -> anyhow::Result<MailboxConfig> {
-        let url = url::Url::parse(raw).context("HD_IMAP_URL is not a valid URL")?;
-        if url.scheme() != "imap" {
-            bail!("HD_IMAP_URL must use imap:// (TLS is not supported yet)");
-        }
-        let decode = |s: &str| {
-            percent_encoding::percent_decode_str(s)
-                .decode_utf8_lossy()
-                .into_owned()
-        };
-        let mailbox = decode(url.path().trim_start_matches('/'));
-        Ok(MailboxConfig {
-            host: url
-                .host_str()
-                .context("HD_IMAP_URL has no host")?
-                .to_owned(),
-            port: url.port().unwrap_or(143),
-            user: decode(url.username()),
-            password: decode(url.password().unwrap_or_default()),
-            mailbox: if mailbox.is_empty() {
-                "INBOX".into()
-            } else {
-                mailbox
-            },
-        })
-    }
-}
-
-/// Reads the mailbox every `interval`, forever. Errors are logged and retried on the next round.
-pub async fn poll(db: PgPool, config: MailboxConfig, interval: Duration) {
-    loop {
-        match read_new(&db, &config).await {
-            Ok(0) => {}
-            Ok(n) => tracing::info!(messages = n, "read new mail"),
-            Err(error) => tracing::warn!(error = format!("{error:#}"), "reading mail failed"),
-        }
-        tokio::time::sleep(interval).await;
-    }
-}
-
-/// Fetches the messages that arrived since the last run and routes them. Returns how many.
-async fn read_new(db: &PgPool, config: &MailboxConfig) -> anyhow::Result<usize> {
-    let tcp = tokio::net::TcpStream::connect((config.host.as_str(), config.port))
-        .await
-        .context("connecting to the IMAP server")?;
-    let mut session = async_imap::Client::new(tcp)
-        .login(&config.user, &config.password)
-        .await
-        .map_err(|(error, _)| error)
-        .context("logging in to the IMAP server")?;
-    let mailbox = session
-        .select(&config.mailbox)
-        .await
-        .context("selecting the mailbox")?;
-    let uidvalidity = i64::from(mailbox.uid_validity.context("server sent no UIDVALIDITY")?);
-
-    let cursor: Option<(i64, i64)> =
-        sqlx::query_as("SELECT uidvalidity, last_uid FROM mailbox_cursors WHERE mailbox = $1")
-            .bind(&config.mailbox)
-            .fetch_optional(db)
-            .await?;
-    // A changed UIDVALIDITY means the old UIDs are meaningless: read everything again and let
-    // the Message-ID check skip what is already stored.
-    let last_uid = match cursor {
-        Some((validity, last)) if validity == uidvalidity => last,
-        _ => 0,
-    };
-
-    let mut fetched: Vec<(i64, Vec<u8>)> = session
-        .uid_fetch(format!("{}:*", last_uid + 1), "(UID BODY.PEEK[])")
-        .await?
-        .try_filter_map(|f| async move {
-            Ok(match (f.uid, f.body()) {
-                (Some(uid), Some(body)) => Some((i64::from(uid), body.to_vec())),
-                _ => None,
-            })
-        })
-        .try_collect()
-        .await?;
-    session.logout().await.ok();
-    // `N:*` always returns the newest message, even when its UID is below N.
-    fetched.retain(|(uid, _)| *uid > last_uid);
-    fetched.sort_by_key(|(uid, _)| *uid);
-
-    let count = fetched.len();
-    for (uid, raw) in fetched {
-        let mut tx = db.begin().await?;
-        store(&mut tx, uid, &raw).await?;
-        sqlx::query(
-            "INSERT INTO mailbox_cursors (mailbox, uidvalidity, last_uid) VALUES ($1, $2, $3)
-             ON CONFLICT (mailbox) DO UPDATE SET uidvalidity = $2, last_uid = $3",
-        )
-        .bind(&config.mailbox)
-        .bind(uidvalidity)
-        .bind(uid)
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-    }
-    Ok(count)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::PgPool;
 
     fn mail(from: &str, id: &str, in_reply_to: Option<&str>) -> Incoming {
         let mut raw = format!(
