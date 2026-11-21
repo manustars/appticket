@@ -10,6 +10,8 @@ export type CustomerEntry = Schemas['CustomerEntry']
 export type CustomerSummary = Schemas['CustomerSummary']
 export type InboxMessage = Schemas['InboxMessage']
 export type Moved = Schemas['Moved']
+export type Priority = Schemas['Priority']
+export type Proposal = Schemas['ProposalView']
 export type ResolvedChildren = Schemas['ResolvedChildren']
 export type Service = Schemas['Service']
 export type ServiceDetail = Schemas['ServiceDetail']
@@ -144,6 +146,23 @@ export async function addNote(number: number, body: string): Promise<void> {
 export async function reply(number: number, body: string, then?: TicketState): Promise<void> {
   const request: Schemas['NewReply'] = { body, then }
   await call('POST', `${ticketPath(number)}/replies`, request)
+}
+
+export async function setPriority(number: number, priority: Priority): Promise<void> {
+  const request: Schemas['PriorityChange'] = { priority }
+  await call('PUT', `${ticketPath(number)}/priority`, request)
+}
+
+/**
+ * Accepts a proposal of an add-on: it is applied as if the agent did it. A draft reply comes back in
+ * `reply_body` for the composer; nothing is sent.
+ */
+export function acceptProposal(id: string): Promise<Schemas['Accepted']> {
+  return json('POST', `/api/proposals/${encodeURIComponent(id)}/accept`)
+}
+
+export async function discardProposal(id: string): Promise<void> {
+  await call('POST', `/api/proposals/${encodeURIComponent(id)}/discard`)
 }
 
 export async function setState(number: number, state: TicketState): Promise<void> {

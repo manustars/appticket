@@ -72,6 +72,7 @@ function TicketTable({ tickets }: { tickets: TicketSummary[] }) {
         <tr>
           <th>{t('tickets.number')}</th><th>{t('tickets.title')}</th><th>{t('tickets.customer')}</th>
           <th>{t('tickets.requester')}</th><th>{t('tickets.assignee')}</th><th>{t('tickets.state')}</th>
+          <th>{t('tickets.priority')}</th>
           <th>{t('tickets.updated')}</th>
         </tr>
       </thead>
@@ -85,6 +86,7 @@ function TicketTable({ tickets }: { tickets: TicketSummary[] }) {
             <td>{ticket.requester_email ?? '—'}</td>
             <td>{ticket.assignee_name ?? '—'}</td>
             <td><span className={`state ${ticket.state}`}>{t(`state.${ticket.state}`)}</span></td>
+            <td><span className={`priority ${ticket.priority}`}>{t(`priority.${ticket.priority}`)}</span></td>
             <td className="when">{formatTime(ticket.updated_at)}</td>
           </tr>
         ))}

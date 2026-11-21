@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react'
 import {
   addNote,
   getTicket,
@@ -8,21 +8,26 @@ import {
   moveTicket,
   reply,
   setAssignee,
+  setPriority,
   setState,
   Unauthorized,
   type AgentEntry,
   type CustomerEntry,
   type Moved,
+  type Priority,
   type Service,
   type TicketDetail,
   type TicketState,
   type TimelineEntry,
 } from './api/client'
 import { useI18n } from './i18n/context'
+import { addonName } from './addon'
+import { TicketProposals } from './Proposals'
 import { TicketAssets, TicketFamily, TicketServices } from './TicketLinks'
 import { useLoad } from './useAction'
 
 const states: TicketState[] = ['open', 'waiting', 'resolved', 'closed']
+const priorities: Priority[] = ['low', 'normal', 'high', 'urgent']
 
 interface Props {
   number: number
@@ -48,6 +53,13 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
   const [moved, setMoved] = useState<Moved | null>(null)
   // Only the latest load may update the view: a slow poll must not overwrite a newer answer.
   const latest = useRef(0)
+  // The composer's text and mode live here, so that an accepted draft reply can be put into it.
+  const [draft, setDraft] = useState('')
+  // null until the agent picks: reply when there is a requester, else note.
+  const [chosen, setChosen] = useState<Mode | null>(null)
+  // The add-on whose accepted draft is in the composer, unsent.
+  const [draftFrom, setDraftFrom] = useState<string | null>(null)
+  const composerText = useRef<HTMLTextAreaElement>(null)
 
   const fail = useCallback((error: unknown, show: (error: unknown) => void) => {
     if (error instanceof Unauthorized) onSignedOut()
@@ -104,6 +116,17 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
     }
   }
 
+  /** Puts an accepted draft reply into the composer, in reply mode; it is not sent. */
+  function takeDraft(addon: string, body: string) {
+    setDraft(body)
+    setChosen('reply')
+    setDraftFrom(addon)
+    requestAnimationFrame(() => {
+      composerText.current?.scrollIntoView({ block: 'center' })
+      composerText.current?.focus()
+    })
+  }
+
   function changeState(state: TicketState) {
     if (state === 'closed' && !window.confirm(t('ticket.confirmClose', { number }))) return
     void change(() => setState(number, state))
@@ -156,6 +179,16 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
           </dd>
         </div>
         <div>
+          <dt><label htmlFor="ticket-priority">{t('ticket.priority')}</label></dt>
+          <dd>
+            <select id="ticket-priority" className={`priority ${ticket.priority}`} value={ticket.priority}
+              disabled={closed || busy}
+              onChange={(e) => void change(() => setPriority(number, e.target.value as Priority))}>
+              {priorities.map((p) => <option key={p} value={p}>{t(`priority.${p}`)}</option>)}
+            </select>
+          </dd>
+        </div>
+        <div>
           <dt><label htmlFor="ticket-assignee">{t('ticket.assignee')}</label></dt>
           <dd>
             <select id="ticket-assignee" value={ticket.assignee?.id ?? ''} disabled={closed || busy}
@@ -193,6 +226,9 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
       )}
       {actionError !== null && <p className="error" role="alert">{errorText(actionError)}</p>}
 
+      <TicketProposals ticket={ticket} draftInUse={draft.trim() !== ''} onReplyDraft={takeDraft}
+        onChanged={changed} onSignedOut={onSignedOut} />
+
       <div className="ticket-links">
         <TicketAssets ticket={ticket} onChanged={changed} onSignedOut={onSignedOut} />
         <TicketServices ticket={ticket} onChanged={changed} onSignedOut={onSignedOut} />
@@ -207,7 +243,18 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
       {closed && (
         <p className="closed-notice">{t('ticket.closedNotice')}</p>
       )}
-      <Composer ticket={ticket} onDone={() => { void load(); onChanged() }} onSignedOut={onSignedOut} />
+      <Composer ticket={ticket} body={draft} chosen={chosen} draftFrom={draftFrom} textarea={composerText}
+        onBody={(body) => {
+          setDraft(body)
+          if (!body.trim()) setDraftFrom(null)
+        }}
+        onChoose={setChosen}
+        onDone={() => {
+          setDraftFrom(null)
+          void load()
+          onChanged()
+        }}
+        onSignedOut={onSignedOut} />
     </div>
   )
 }
@@ -262,16 +309,24 @@ const strong = (inner: ReactNode) => <strong>{inner}</strong>
 // confirmation.
 const thenStates: TicketState[] = ['open', 'waiting', 'resolved']
 
-function Composer({ ticket, onDone, onSignedOut }: {
+function Composer({ ticket, body, chosen: picked, draftFrom, textarea, onBody, onChoose, onDone, onSignedOut }: {
   ticket: TicketDetail
+  body: string
+  /** The mode the agent picked; null for the default. The poll never changes it. */
+  chosen: Mode | null
+  /** The add-on whose accepted draft reply is in the composer, not sent yet. */
+  draftFrom: string | null
+  textarea: RefObject<HTMLTextAreaElement | null>
+  onBody: (body: string) => void
+  onChoose: (mode: Mode) => void
   onDone: () => void
   onSignedOut: () => void
 }) {
   const { t, rich, errorText } = useI18n()
   const requester = ticket.requester
-  // Chosen once per ticket; the poll never changes it.
-  const [chosen, setChosen] = useState<Mode>(requester ? 'reply' : 'note')
-  const [body, setBody] = useState('')
+  const chosen: Mode = picked ?? (requester ? 'reply' : 'note')
+  const setChosen = onChoose
+  const setBody = onBody
   const [then, setThen] = useState<TicketState>('waiting')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
@@ -327,7 +382,12 @@ function Composer({ ticket, onDone, onSignedOut }: {
       <label className="visually-hidden" htmlFor={`${id}-body`}>
         {mode === 'reply' ? t('composer.replyLabel') : t('composer.noteLabel')}
       </label>
-      <textarea id={`${id}-body`} rows={5} value={body} aria-describedby={`${id}-hint`}
+      {draftFrom && mode === 'reply' && (
+        <p className="draft-notice" role="status">
+          {rich('proposals.draftReady', { addon: addonName(draftFrom), strong })}
+        </p>
+      )}
+      <textarea ref={textarea} id={`${id}-body`} rows={5} value={body} aria-describedby={`${id}-hint`}
         placeholder={mode === 'reply' ? t('composer.replyPlaceholder') : t('composer.notePlaceholder')}
         onChange={(e) => setBody(e.target.value)} />
       {error !== null && <p className="error" role="alert">{errorText(error)}</p>}

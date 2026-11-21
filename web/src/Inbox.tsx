@@ -9,6 +9,7 @@ import {
   type InboxMessage,
 } from './api/client'
 import { useI18n } from './i18n/context'
+import { InboxProposal, type TriageDone } from './Proposals'
 import { ticketHref } from './route'
 
 interface Props {
@@ -66,7 +67,7 @@ export function Inbox({ messages, onChanged, onSignedOut }: Props) {
       ) : (
         <ul className="inbox">
           {messages.map((m) => (
-            <InboxItem key={m.id} message={m} customers={customers} onSignedOut={onSignedOut}
+            <InboxItem key={m.id} message={m} customers={customers} onSignedOut={onSignedOut} onChanged={onChanged}
               onDone={(result) => { setDone(result); onChanged() }} />
           ))}
         </ul>
@@ -79,10 +80,12 @@ type Action = 'open' | 'attach' | null
 /** Typed into the ticket number: not a number a ticket can have. */
 const notATicket = Symbol('not a ticket number')
 
-function InboxItem({ message: m, customers, onDone, onSignedOut }: {
+function InboxItem({ message: m, customers, onDone, onChanged, onSignedOut }: {
   message: InboxMessage
   customers: CustomerEntry[] | null
   onDone: (result: Done) => void
+  /** Something changed that leaves the message in the inbox, such as a discarded proposal. */
+  onChanged: () => void
   onSignedOut: () => void
 }) {
   const { t, formatTime, errorText } = useI18n()
@@ -137,6 +140,18 @@ function InboxItem({ message: m, customers, onDone, onSignedOut }: {
     })
   }
 
+  /** What an accepted proposal did, as the inbox's notice tells it. */
+  function triageDone(done: TriageDone): Done {
+    switch (done.kind) {
+      case 'opened':
+        return { kind: 'opened', ticket: done.ticket, subject: m.subject }
+      case 'attached':
+        return { kind: 'attached', ticket: done.ticket }
+      case 'discarded':
+        return { kind: 'discarded', sender }
+    }
+  }
+
   function choose(next: Action) {
     setAction(next)
     setError(null)
@@ -150,6 +165,12 @@ function InboxItem({ message: m, customers, onDone, onSignedOut }: {
       </div>
       <div className="subject">{m.subject || t('inbox.noSubject')}</div>
       <p className="body">{m.body_text}</p>
+
+      {m.proposal && (
+        <InboxProposal proposal={m.proposal} sender={sender} onSignedOut={onSignedOut}
+          onDiscarded={onChanged}
+          onDone={(done) => onDone(triageDone(done))} />
+      )}
 
       <div className="actions">
         <button type="button" className={action === 'open' ? 'current' : ''} aria-expanded={action === 'open'}

@@ -18,6 +18,11 @@
   --note-button: #8a5a00;
   --note-button-text: #ffffff;
   --reply-bg: #eef3ff;
+  /* Suggestions of add-ons: a quiet tint of their own, never the colour of something done. */
+  --suggest: #6a4fb3;
+  --suggest-bg: #f6f3fd;
+  --suggest-line: #d8cdf2;
+  --on-danger: #ffffff;
   font: 15px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   color: var(--text);
   background: var(--bg);
@@ -43,6 +48,10 @@
     --note-button: #f0c96a;
     --note-button-text: #14171c;
     --reply-bg: #1a2336;
+    --suggest: #b9a5ff;
+    --suggest-bg: #1e1b2b;
+    --suggest-line: #3f365f;
+    --on-danger: #14171c;
   }
 }
 
@@ -407,3 +416,66 @@ button.link.danger { color: var(--danger); }
 /* Editing a service: name and description share the row with its buttons. */
 .inline-form.service-edit label.wide { flex: 1 1 14rem; min-width: 0; }
 .inline-form.service-edit label.wide input { width: 100%; }
+
+/* Priority: low and normal stay quiet; high stands out, urgent most of all. */
+.priority { font-size: 0.85rem; color: var(--muted); white-space: nowrap; }
+.priority.high { color: var(--waiting); font-weight: 600; }
+.priority.urgent {
+  padding: 0 0.5em;
+  border-radius: 999px;
+  background: var(--danger);
+  color: var(--on-danger);
+  font-weight: 700;
+}
+select.priority { font-size: inherit; color: var(--text); padding: 0.3rem 0.5rem; border-radius: 6px; background: var(--bg); }
+select.priority.high { color: var(--waiting); border-color: var(--waiting); }
+select.priority.urgent { color: var(--danger); border-color: var(--danger); background: var(--bg); }
+
+/* Proposals of add-ons: marked as suggestions, with their reason, never loud. */
+.suggestion-tag {
+  display: inline-block;
+  padding: 0 0.5em;
+  border: 1px dashed var(--suggest-line);
+  border-radius: 999px;
+  color: var(--suggest);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.panel.proposals { border-color: var(--suggest-line); background: var(--suggest-bg); }
+.proposals-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem 0.6rem; }
+.proposal-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
+.proposal { display: grid; gap: 0.3rem; }
+.panel.proposals .proposal + .proposal { padding-top: 0.6rem; border-top: 1px solid var(--suggest-line); }
+.rationale { margin: 0; color: var(--muted); font-size: 0.9rem; font-style: italic; }
+.proposal-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.proposal-actions button:not(.quiet) { border-color: var(--suggest); color: var(--suggest); }
+.draft {
+  margin: 0.3rem 0 0;
+  padding: 0.4rem 0.7rem;
+  border-left: 3px solid var(--suggest-line);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.inbox-proposal {
+  display: grid;
+  gap: 0.4rem;
+  justify-items: start;
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--suggest-line);
+  border-radius: 6px;
+  background: var(--suggest-bg);
+}
+.inbox-proposal .proposal-list { justify-self: stretch; }
+.draft-notice {
+  margin: 0;
+  padding: 0.4rem 0.7rem;
+  border: 1px dashed var(--suggest-line);
+  border-radius: 6px;
+  background: var(--suggest-bg);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.inbox .inbox-proposal li.proposal { padding: 0; border: 0; border-radius: 0; background: none; }

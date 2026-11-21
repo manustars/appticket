@@ -30,6 +30,10 @@ export interface Messages {
   "state.waiting": { plural: false; placeholders: never; tags: never }
   "state.resolved": { plural: false; placeholders: never; tags: never }
   "state.closed": { plural: false; placeholders: never; tags: never }
+  "priority.low": { plural: false; placeholders: never; tags: never }
+  "priority.normal": { plural: false; placeholders: never; tags: never }
+  "priority.high": { plural: false; placeholders: never; tags: never }
+  "priority.urgent": { plural: false; placeholders: never; tags: never }
   "customer.helpDesk": { plural: false; placeholders: "name"; tags: never }
   "customer.choose": { plural: false; placeholders: never; tags: never }
   "customer.loading": { plural: false; placeholders: never; tags: never }
@@ -42,6 +46,7 @@ export interface Messages {
   "tickets.requester": { plural: false; placeholders: never; tags: never }
   "tickets.assignee": { plural: false; placeholders: never; tags: never }
   "tickets.state": { plural: false; placeholders: never; tags: never }
+  "tickets.priority": { plural: false; placeholders: never; tags: never }
   "tickets.updated": { plural: false; placeholders: never; tags: never }
   "newTicket.customer": { plural: false; placeholders: never; tags: never }
   "newTicket.title": { plural: false; placeholders: never; tags: never }
@@ -71,6 +76,7 @@ export interface Messages {
   "ticket.requester": { plural: false; placeholders: never; tags: never }
   "ticket.noRequester": { plural: false; placeholders: never; tags: never }
   "ticket.state": { plural: false; placeholders: never; tags: never }
+  "ticket.priority": { plural: false; placeholders: never; tags: never }
   "ticket.assignee": { plural: false; placeholders: never; tags: never }
   "ticket.unassigned": { plural: false; placeholders: never; tags: never }
   "ticket.opened": { plural: false; placeholders: never; tags: never }
@@ -234,4 +240,19 @@ export interface Messages {
   "inbox.ticketNumber": { plural: false; placeholders: never; tags: never }
   "inbox.attachSubmit": { plural: false; placeholders: never; tags: never }
   "inbox.cancel": { plural: false; placeholders: never; tags: never }
+  "proposals.title": { plural: false; placeholders: "addon"; tags: never }
+  "proposals.suggestion": { plural: false; placeholders: never; tags: never }
+  "proposals.suggestedBy": { plural: false; placeholders: "addon"; tags: never }
+  "proposals.hint": { plural: false; placeholders: "addon"; tags: never }
+  "proposals.accept": { plural: false; placeholders: never; tags: never }
+  "proposals.discard": { plural: false; placeholders: never; tags: never }
+  "proposals.openTicket": { plural: false; placeholders: "customer"; tags: never }
+  "proposals.someCustomer": { plural: false; placeholders: never; tags: never }
+  "proposals.attach": { plural: false; placeholders: "number"; tags: never }
+  "proposals.discardMessage": { plural: false; placeholders: never; tags: never }
+  "proposals.priority": { plural: false; placeholders: "priority"; tags: never }
+  "proposals.assets": { plural: false; placeholders: "assets"; tags: never }
+  "proposals.reply": { plural: false; placeholders: never; tags: never }
+  "proposals.replaceDraft": { plural: false; placeholders: "addon"; tags: never }
+  "proposals.draftReady": { plural: false; placeholders: "addon"; tags: "strong" }
 }
