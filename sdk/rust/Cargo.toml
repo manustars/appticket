@@ -1,0 +1,33 @@
+[package]
+name = "hd-addon-sdk"
+version = "0.1.0"
+description = "Building blocks for add-ons of the help desk core: events, signatures and the add-on API."
+edition.workspace = true
+# The contract is Apache-2.0 so that add-ons can carry any license (sdk/LICENSE).
+license = "Apache-2.0"
+publish.workspace = true
+
+[features]
+default = []
+# An axum router that turns a handler into a verified `/events` endpoint.
+axum = ["dep:axum", "dep:tracing"]
+
+[dependencies]
+axum = { version = "0.8.9", optional = true }
+hex = "0.4.3"
+hmac = "0.13.0"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls-no-provider"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+time = { version = "0.3.55", features = ["serde", "serde-well-known"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
+tracing = { version = "0.1.44", optional = true }
+uuid = { version = "1.29.3", features = ["serde"] }
+webpki-roots = "1.0.12"
+
+[dev-dependencies]
+axum = "0.8.9"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net"] }
+tower = { version = "0.5.3", features = ["util"] }
+uuid = { version = "1.29.3", features = ["v4", "serde"] }

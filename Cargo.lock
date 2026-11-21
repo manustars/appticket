@@ -936,6 +936,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "hd-addon-sdk"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "hex",
+ "hmac",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "tracing",
+ "uuid",
+ "webpki-roots",
+]
+
+[[package]]
+name = "hd-assistant"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "dotenvy",
+ "hd-addon-sdk",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "hd-core"
 version = "0.1.0"
 dependencies = [
@@ -1816,6 +1854,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

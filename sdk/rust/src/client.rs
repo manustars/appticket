@@ -1,0 +1,251 @@
+//! The add-on API: an add-on's calls to the core with `Authorization: Bearer <token>`.
+
+use std::fmt;
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::api::{Asset, Customer, Identity, Ticket, TicketSummary};
+use crate::proposals::{Content, Target};
+
+/// Why a call to the core failed.
+#[derive(Debug)]
+pub enum Error {
+    /// The core answered with an error status; `message` is its sentence for the reason, such as
+    /// "The add-on assistant lacks the scope tickets:read." (409) or "Ticket not found." (404).
+    Api { status: u16, message: String },
+    /// The core could not be reached, or its answer could not be read.
+    Http(reqwest::Error),
+    /// The HTTP client could not be built.
+    Setup(String),
+}
+
+impl Error {
+    /// The HTTP status the core answered with, if it answered.
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            Error::Api { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+
+    /// Worth trying again later: the core was unreachable or failed on its side. A refusal
+    /// (4xx) will not change by retrying.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Error::Api { status, .. } => *status >= 500 || *status == 429,
+            Error::Http(e) => !e.is_decode() && !e.is_builder(),
+            Error::Setup(_) => false,
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Api { status, message } => write!(f, "the core answered {status}: {message}"),
+            Error::Http(e) => write!(f, "calling the core failed: {e}"),
+            Error::Setup(why) => write!(f, "building the HTTP client failed: {why}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Http(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(e: reqwest::Error) -> Self {
+        Error::Http(e)
+    }
+}
+
+/// An HTTP client with TLS through rustls and the public web PKI, like the core's own.
+pub fn http_client(timeout: Duration) -> Result<reqwest::Client, Error> {
+    let roots = tokio_rustls::rustls::RootCertStore::from_iter(
+        webpki_roots::TLS_SERVER_ROOTS.iter().cloned(),
+    );
+    let tls = tokio_rustls::rustls::ClientConfig::builder_with_provider(Arc::new(
+        tokio_rustls::rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| Error::Setup(e.to_string()))?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    reqwest::Client::builder()
+        .tls_backend_preconfigured(tls)
+        .timeout(timeout)
+        .build()
+        .map_err(|e| Error::Setup(e.to_string()))
+}
+
+/// The add-on API of one core, called with one add-on's token.
+#[derive(Clone)]
+pub struct Client {
+    http: reqwest::Client,
+    base: String,
+    token: Arc<str>,
+}
+
+impl fmt::Debug for Client {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Client")
+            .field("base", &self.base)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Deserialize)]
+struct Problem {
+    error: String,
+}
+
+#[derive(Serialize)]
+struct NewProposal<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ticket_number: Option<i64>,
+    content: &'a Content,
+    rationale: &'a str,
+}
+
+#[derive(Deserialize)]
+struct Created {
+    id: Uuid,
+}
+
+impl Client {
+    /// A client for the core at `base_url` (such as `https://helpdesk.example.com`), with a
+    /// 30-second timeout per call.
+    pub fn new(base_url: &str, token: &str) -> Result<Self, Error> {
+        Ok(Self::with_http(
+            http_client(Duration::from_secs(30))?,
+            base_url,
+            token,
+        ))
+    }
+
+    /// A client that sends its calls through `http`.
+    pub fn with_http(http: reqwest::Client, base_url: &str, token: &str) -> Self {
+        Client {
+            http,
+            base: base_url.trim_end_matches('/').to_owned(),
+            token: token.trim().into(),
+        }
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}/api/addon{path}", self.base)
+    }
+
+    async fn read<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, Error> {
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response.json().await?);
+        }
+        let text = response.text().await.unwrap_or_default();
+        let message = serde_json::from_str::<Problem>(&text)
+            .map(|p| p.error)
+            .unwrap_or_else(|_| {
+                status
+                    .canonical_reason()
+                    .unwrap_or("unexpected answer")
+                    .to_owned()
+            });
+        Err(Error::Api {
+            status: status.as_u16(),
+            message,
+        })
+    }
+
+    async fn get<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<T, Error> {
+        let response = self
+            .http
+            .get(self.url(path))
+            .bearer_auth(&self.token)
+            .query(query)
+            .send()
+            .await?;
+        Self::read(response).await
+    }
+
+    /// The add-on's name and scopes. Needs no scope.
+    pub async fn whoami(&self) -> Result<Identity, Error> {
+        self.get("/whoami", &[]).await
+    }
+
+    /// Customers that can get tickets, with their mail domains. Scope `directory:read`.
+    pub async fn customers(&self) -> Result<Vec<Customer>, Error> {
+        self.get("/customers", &[]).await
+    }
+
+    /// A customer's active assets. Scope `directory:read`.
+    pub async fn customer_assets(&self, customer: Uuid) -> Result<Vec<Asset>, Error> {
+        self.get(&format!("/customers/{customer}/assets"), &[])
+            .await
+    }
+
+    /// Tickets that are not closed whose requester has this address, most recent first.
+    /// Scope `tickets:read`.
+    pub async fn open_tickets_of_requester(
+        &self,
+        email: &str,
+    ) -> Result<Vec<TicketSummary>, Error> {
+        self.get("/tickets", &[("requester_email", email)]).await
+    }
+
+    /// Tickets of a customer that are not closed, most recent first. Scope `tickets:read`.
+    pub async fn open_tickets_of_customer(
+        &self,
+        customer: Uuid,
+    ) -> Result<Vec<TicketSummary>, Error> {
+        self.get("/tickets", &[("customer", &customer.to_string())])
+            .await
+    }
+
+    /// A ticket with its conversation and links. Scope `tickets:read`.
+    pub async fn ticket(&self, number: i64) -> Result<Ticket, Error> {
+        self.get(&format!("/tickets/{number}"), &[]).await
+    }
+
+    /// Proposes `content` on `target`, with a one-sentence `rationale` the agent reads; it
+    /// replaces the open proposal of the same kind there. Returns the proposal's id. The core
+    /// answers 409 when the proposal no longer applies. Scope `proposals:write`.
+    pub async fn propose(
+        &self,
+        target: Target,
+        content: &Content,
+        rationale: &str,
+    ) -> Result<Uuid, Error> {
+        let (message_id, ticket_number) = match target {
+            Target::Message(id) => (Some(id), None),
+            Target::Ticket(number) => (None, Some(number)),
+        };
+        let response = self
+            .http
+            .post(self.url("/proposals"))
+            .bearer_auth(&self.token)
+            .json(&NewProposal {
+                message_id,
+                ticket_number,
+                content,
+                rationale,
+            })
+            .send()
+            .await?;
+        Ok(Self::read::<Created>(response).await?.id)
+    }
+}
