@@ -24,6 +24,11 @@ struct Seen {
 
 type Log = Arc<Mutex<Vec<Seen>>>;
 
+/// The agents' languages the tests write rationales in.
+fn languages() -> Vec<String> {
+    vec!["en".to_owned(), "it".to_owned()]
+}
+
 const ANSWER: &str = r#"{"action":"none","customer":null,"ticket_number":null,"evidence":null,"rationale":"Unsure."}"#;
 
 /// Answers any POST like the provider would: the Messages API shape on `/v1/messages`, the chat
@@ -84,12 +89,13 @@ async fn ask(provider: &str, model: &str, url_path: &str, extra: &[(&str, &str)]
     }
     let config = Config::from_vars(|name| vars.get(name).cloned()).unwrap();
     let model = Model::new(config.model).unwrap();
+    let system = prompts::system(prompts::TRIAGE_SYSTEM, &languages());
     let answer = model
         .answer(&Task {
             name: "triage",
-            system: prompts::TRIAGE_SYSTEM,
+            system: &system,
             input: "<message>Hello</message>".into(),
-            schema: prompts::triage_schema(),
+            schema: prompts::triage_schema(&languages()),
         })
         .await
         .unwrap();
@@ -109,7 +115,14 @@ fn assert_schema_output(seen: &Seen) {
     assert_eq!(format["type"], "json_schema", "{}", seen.body);
     assert_eq!(format["json_schema"]["name"], "triage");
     assert_eq!(format["json_schema"]["strict"], true);
-    assert_eq!(format["json_schema"]["schema"], prompts::triage_schema());
+    assert_eq!(
+        format["json_schema"]["schema"],
+        prompts::triage_schema(&languages())
+    );
+    assert_eq!(
+        format["json_schema"]["schema"]["properties"]["rationale"]["required"],
+        json!(["en", "it"])
+    );
     assert_instructions(seen);
 }
 
@@ -131,6 +144,9 @@ fn assert_instructions(seen: &Seen) {
     let system = seen.body["messages"][0]["content"].as_str().unwrap();
     assert!(system.starts_with(prompts::TRIAGE_SYSTEM));
     assert!(system.contains("follows this JSON Schema") && system.contains("\"open_ticket\""));
+    // The rationale languages, in the words and in the schema.
+    assert!(system.contains("\"en\" (English), \"it\" (Italian)"));
+    assert!(system.contains(r#""required":["en","it"]"#), "{system}");
     for absent in ["temperature", "max_tokens"] {
         assert!(seen.body.get(absent).is_none(), "{absent} is not sent");
     }
@@ -148,7 +164,14 @@ async fn anthropic() {
     assert_eq!(seen.body["model"], "claude-opus-5-5");
     assert_eq!(seen.body["output_config"]["format"]["type"], "json_schema");
     assert_eq!(seen.body["output_config"]["effort"], "medium");
-    assert_eq!(seen.body["system"], prompts::TRIAGE_SYSTEM);
+    assert_eq!(
+        seen.body["system"],
+        prompts::system(prompts::TRIAGE_SYSTEM, &languages())
+    );
+    assert_eq!(
+        seen.body["output_config"]["format"]["schema"]["properties"]["rationale"]["required"],
+        json!(["en", "it"])
+    );
 }
 
 #[tokio::test]
@@ -228,14 +251,7 @@ async fn openai_compatible() {
         header(&seen, "authorization"),
         Some("Bearer provider-test-key")
     );
-    assert_eq!(seen.body["response_format"], json!({"type": "json_object"}));
-    let system = seen.body["messages"][0]["content"].as_str().unwrap();
-    assert!(system.starts_with(prompts::TRIAGE_SYSTEM));
-    assert!(system.contains("follows this JSON Schema"));
-    assert!(
-        system.contains("\"open_ticket\""),
-        "the schema is in the instructions"
-    );
+    assert_json_mode(&seen);
 
     let keyless = ask("openai-compatible", "served-test", "/api/v1", &[]).await;
     assert_eq!(keyless.uri, "/api/v1/chat/completions");

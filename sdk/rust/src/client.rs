@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::{Asset, Customer, Identity, Ticket, TicketSummary};
-use crate::proposals::{Content, Target};
+use crate::proposals::{Content, Rationale, Target};
 
 /// Why a call to the core failed.
 #[derive(Debug)]
@@ -115,7 +115,7 @@ struct NewProposal<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     ticket_number: Option<i64>,
     content: &'a Content,
-    rationale: &'a str,
+    rationale: &'a Rationale,
 }
 
 #[derive(Deserialize)]
@@ -221,14 +221,16 @@ impl Client {
         self.get(&format!("/tickets/{number}"), &[]).await
     }
 
-    /// Proposes `content` on `target`, with a one-sentence `rationale` the agent reads; it
-    /// replaces the open proposal of the same kind there. Returns the proposal's id. The core
-    /// answers 409 when the proposal no longer applies. Scope `proposals:write`.
+    /// Proposes `content` on `target`, with a `rationale` the agent reads: one sentence per
+    /// language listed by [`Client::whoami`] (see [`crate::proposals::in_english`] for a single
+    /// English sentence). It replaces the open proposal of the same kind there. Returns the
+    /// proposal's id. The core answers 409 when the proposal no longer applies. Scope
+    /// `proposals:write`.
     pub async fn propose(
         &self,
         target: Target,
         content: &Content,
-        rationale: &str,
+        rationale: &Rationale,
     ) -> Result<Uuid, Error> {
         let (message_id, ticket_number) = match target {
             Target::Message(id) => (Some(id), None),

@@ -13,7 +13,7 @@ use axum::{
 };
 use hd_addon_sdk::api::Priority;
 use hd_addon_sdk::events::{HEADER_SIGNATURE, HEADER_TIMESTAMP};
-use hd_addon_sdk::{Client, Content, Envelope, Target, Triage, Verifier, signature};
+use hd_addon_sdk::{Client, Content, Envelope, Rationale, Target, Triage, Verifier, signature};
 use hd_assistant::config::{ModelSettings, Provider};
 use hd_assistant::model::Model;
 use hd_assistant::{Assistant, Proposed, server};
@@ -129,7 +129,15 @@ async fn fake_core(core: SharedCore) -> String {
         core.proposals.push(body);
         (StatusCode::CREATED, Json(json!({"id": Uuid::new_v4()})))
     }
+    async fn whoami(State(core): State<SharedCore>) -> Json<Value> {
+        core.lock().unwrap().calls.push("whoami".into());
+        Json(
+            json!({"name": "assistant", "scopes": ["directory:read", "tickets:read",
+            "proposals:write"], "languages": ["en", "it"]}),
+        )
+    }
     let app = Router::new()
+        .route("/api/addon/whoami", get(whoami))
         .route("/api/addon/customers", get(customers))
         .route("/api/addon/customers/{id}/assets", get(assets))
         .route("/api/addon/tickets", get(tickets))
@@ -326,8 +334,16 @@ fn triage(
 ) -> Value {
     json!({
         "action": action, "customer": customer, "ticket_number": ticket, "evidence": evidence,
-        "rationale": "A test rationale."
+        "rationale": {"en": "A test rationale.", "it": "Una motivazione di prova."}
     })
+}
+
+/// The rationale both test sentences make.
+fn both() -> Rationale {
+    Rationale::from([
+        ("en".to_owned(), "A test rationale.".to_owned()),
+        ("it".to_owned(), "Una motivazione di prova.".to_owned()),
+    ])
 }
 
 const SIGNED: &str =
@@ -357,14 +373,15 @@ async fn a_message_tied_to_a_customer_gets_an_open_ticket_proposal() {
             content: Content::Triage(Triage::OpenTicket {
                 customer_id: uuid(BRIGHTFIELD)
             }),
-            rationale: "A test rationale.".into(),
+            rationale: both(),
         }]
     );
     assert_eq!(
         w.posted(),
         [
             json!({"message_id": MESSAGE, "content": {"kind": "triage", "action": "open_ticket",
-            "customer_id": BRIGHTFIELD}, "rationale": "A test rationale."})
+            "customer_id": BRIGHTFIELD}, "rationale": {"en": "A test rationale.",
+            "it": "Una motivazione di prova."}})
         ]
     );
 
@@ -576,9 +593,14 @@ async fn a_busy_model_is_asked_again() {
 
 fn ticket_answer(priority: Option<&str>, assets: &[&str], reply: Option<&str>) -> Value {
     json!({
-        "priority": priority, "priority_rationale": "The requester cannot work.",
-        "assets": assets, "assets_rationale": "The message names PC-0042.",
-        "reply": reply, "reply_rationale": "Asks for the missing details."
+        "priority": priority,
+        "priority_rationale": {"en": "The requester cannot work.",
+            "it": "La richiedente non può lavorare."},
+        "assets": assets,
+        "assets_rationale": {"en": "The message names PC-0042.", "it": "Il messaggio cita PC-0042."},
+        "reply": reply,
+        "reply_rationale": {"en": "Asks for the missing details.",
+            "it": "Chiede i dettagli che mancano."}
     })
 }
 
@@ -829,4 +851,98 @@ async fn the_endpoint_queues_each_verified_event_once() {
 
     assert_eq!(receiver.recv().await.unwrap(), event);
     assert!(receiver.try_recv().is_err(), "queued once");
+}
+
+// ----- rationales in the agents' languages -----
+
+#[tokio::test]
+async fn rationales_come_in_each_language_and_english_is_required() {
+    let w = world(Provider::Anthropic).await;
+    let message = || inbox_message("news@offers.test", "Deals", "Unsubscribe here.");
+
+    // Italian missing (or empty): the proposal goes with English only.
+    w.answer(claude(
+        json!({"action": "discard", "customer": null, "ticket_number": null,
+        "evidence": null, "rationale": {"en": "A newsletter.", "it": "  "}}),
+    ));
+    let made = w.process("message.received", message()).await;
+    assert_eq!(
+        made[0].rationale,
+        Rationale::from([("en".to_owned(), "A newsletter.".to_owned())])
+    );
+    assert_eq!(w.posted()[0]["rationale"], json!({"en": "A newsletter."}));
+
+    // English missing: no proposal, even with Italian; a plain string is not taken either.
+    w.answer(claude(
+        json!({"action": "discard", "customer": null, "ticket_number": null,
+        "evidence": null, "rationale": {"it": "Una newsletter."}}),
+    ));
+    w.answer(claude(
+        json!({"action": "discard", "customer": null, "ticket_number": null,
+        "evidence": null, "rationale": "A newsletter."}),
+    ));
+    assert!(w.process("message.received", message()).await.is_empty());
+    assert!(w.process("message.received", message()).await.is_empty());
+    assert_eq!(w.posted().len(), 1);
+
+    // A language that was not asked for is dropped.
+    w.answer(claude(
+        json!({"action": "discard", "customer": null, "ticket_number": null,
+        "evidence": null, "rationale": {"en": "Spam.", "it": "Spam.", "fr": "Pourriel."}}),
+    ));
+    let made = w.process("message.received", message()).await;
+    assert_eq!(made[0].rationale.keys().collect::<Vec<_>>(), ["en", "it"]);
+
+    // The languages came from whoami, once, and shaped what the model was asked.
+    assert_eq!(
+        w.core
+            .lock()
+            .unwrap()
+            .calls
+            .iter()
+            .filter(|c| *c == "whoami")
+            .count(),
+        1
+    );
+    let body = &w.requests()[0].1;
+    assert_eq!(
+        body["output_config"]["format"]["schema"]["properties"]["rationale"]["required"],
+        json!(["en", "it"])
+    );
+    assert!(
+        body["system"]
+            .as_str()
+            .unwrap()
+            .contains("\"it\" (Italian)")
+    );
+}
+
+#[tokio::test]
+async fn each_ticket_proposal_needs_its_own_english_rationale() {
+    let w = world(Provider::Anthropic).await;
+    w.core
+        .lock()
+        .unwrap()
+        .tickets
+        .insert(20, ticket_json(20, "open", true, &[], "requester"));
+    let mut answer = ticket_answer(Some("high"), &["A1"], Some(DRAFT));
+    answer["assets_rationale"] = json!({"it": "Il messaggio cita PC-0042."});
+    answer["reply_rationale"] = json!({"en": "Asks for the missing details."});
+    w.answer(claude(answer));
+    let made = w
+        .process("ticket.opened", json!({"ticket_number": 20}))
+        .await;
+    let kinds: Vec<_> = made.iter().map(|p| p.content.kind()).collect();
+    assert_eq!(
+        kinds,
+        ["priority", "reply"],
+        "assets dropped without English"
+    );
+    assert_eq!(made[0].rationale.len(), 2);
+    assert_eq!(
+        made[1].rationale,
+        Rationale::from([("en".to_owned(), "Asks for the missing details.".to_owned())])
+    );
+    // The draft reply itself is not touched: it stays in the requester's language.
+    assert_eq!(made[1].content, Content::Reply { body: DRAFT.into() });
 }

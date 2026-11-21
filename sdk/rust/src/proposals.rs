@@ -1,6 +1,8 @@
 //! What an add-on proposes to the agents. The JSON matches the core's `proposals::Content`: a
 //! `kind` tag, and for triage an `action` tag.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -43,6 +45,15 @@ impl Content {
             Content::Reply { .. } => "reply",
         }
     }
+}
+
+/// Why a proposal is made, one sentence per language of the agents' UI, keyed by language tag:
+/// `{"en": "...", "it": "..."}`. Agents whose language is missing see the English one.
+pub type Rationale = BTreeMap<String, String>;
+
+/// A rationale with only an English sentence.
+pub fn in_english(sentence: impl Into<String>) -> Rationale {
+    Rationale::from([("en".to_owned(), sentence.into())])
 }
 
 /// Where a proposal applies: triage goes on an inbox message, everything else on a ticket.

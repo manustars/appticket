@@ -3,19 +3,23 @@
 
 use std::collections::HashSet;
 use std::fmt;
+use std::sync::RwLock;
+use std::time::{Duration, Instant};
 
 use hd_addon_sdk::api::{
     Asset, Customer, Direction, Priority, Ticket, TicketState, TicketSummary, TimelineEntry,
 };
-use hd_addon_sdk::{Client, Content, Envelope, Event, MessageReceived, Target, Triage};
+use hd_addon_sdk::{Client, Content, Envelope, Event, MessageReceived, Rationale, Target, Triage};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::model::{Model, ModelError, Task};
 use crate::prompts;
 
-/// The longest rationale shown to an agent; a longer one is cut.
+/// The longest rationale shown to an agent, per language; a longer one is cut.
 const MAX_RATIONALE_CHARS: usize = 300;
+/// How long the agents' languages from `whoami` are trusted before asking again.
+const LANGUAGES_TTL: Duration = Duration::from_secs(10 * 60);
 /// The longest draft reply proposed; a longer one is dropped as unlikely to be a short reply.
 const MAX_REPLY_CHARS: usize = 4_000;
 
@@ -24,7 +28,8 @@ const MAX_REPLY_CHARS: usize = 4_000;
 pub struct Proposed {
     pub target: Target,
     pub content: Content,
-    pub rationale: String,
+    /// One sentence per language of the agents; English is always there.
+    pub rationale: Rationale,
 }
 
 /// Why an event could not be handled.
@@ -57,6 +62,27 @@ impl From<hd_addon_sdk::Error> for Failure {
 pub struct Assistant {
     core: Client,
     model: Model,
+    languages: RwLock<Languages>,
+}
+
+/// The languages of the agents' UI, as the core last listed them.
+struct Languages {
+    tags: Vec<String>,
+    fetched: Option<Instant>,
+}
+
+/// The languages to write rationales in: valid tags from the core, each once, English first and
+/// always present.
+fn usable_languages(listed: &[String]) -> Vec<String> {
+    let mut tags = vec!["en".to_owned()];
+    for tag in listed {
+        let tag = tag.trim();
+        let valid = (2..=8).contains(&tag.len()) && tag.chars().all(|c| c.is_ascii_lowercase());
+        if valid && !tags.iter().any(|t| t == tag) {
+            tags.push(tag.to_owned());
+        }
+    }
+    tags
 }
 
 /// The model's answer on an inbox message.
@@ -70,7 +96,7 @@ struct TriageAnswer {
     #[serde(default)]
     evidence: Option<String>,
     #[serde(default)]
-    rationale: String,
+    rationale: Value,
 }
 
 /// The model's answer on a ticket.
@@ -79,20 +105,58 @@ struct TicketAnswer {
     #[serde(default)]
     priority: Option<Priority>,
     #[serde(default)]
-    priority_rationale: String,
+    priority_rationale: Value,
     #[serde(default)]
     assets: Vec<String>,
     #[serde(default)]
-    assets_rationale: String,
+    assets_rationale: Value,
     #[serde(default)]
     reply: Option<String>,
     #[serde(default)]
-    reply_rationale: String,
+    reply_rationale: Value,
 }
 
 impl Assistant {
     pub fn new(core: Client, model: Model) -> Assistant {
-        Assistant { core, model }
+        Assistant {
+            core,
+            model,
+            languages: RwLock::new(Languages {
+                tags: usable_languages(&[]),
+                fetched: None,
+            }),
+        }
+    }
+
+    /// The languages rationales are written in.
+    pub fn languages(&self) -> Vec<String> {
+        self.languages.read().unwrap().tags.clone()
+    }
+
+    /// Asks the core for the agents' languages (`whoami`); on failure the previous ones stay.
+    pub async fn refresh_languages(&self) -> Result<Vec<String>, hd_addon_sdk::Error> {
+        let me = self.core.whoami().await?;
+        let tags = usable_languages(&me.languages);
+        *self.languages.write().unwrap() = Languages {
+            tags: tags.clone(),
+            fetched: Some(Instant::now()),
+        };
+        Ok(tags)
+    }
+
+    /// The languages, asked of the core again when never fetched or older than
+    /// [`LANGUAGES_TTL`].
+    async fn current_languages(&self) -> Vec<String> {
+        let stale = self
+            .languages
+            .read()
+            .unwrap()
+            .fetched
+            .is_none_or(|at| at.elapsed() > LANGUAGES_TTL);
+        if stale && let Err(e) = self.refresh_languages().await {
+            tracing::warn!(error = %e, "could not read the agents' languages; keeping the previous ones");
+        }
+        self.languages()
     }
 
     /// Handles one verified event and returns the proposals the core accepted.
@@ -144,18 +208,22 @@ impl Assistant {
             .core
             .open_tickets_of_requester(&message.from_address)
             .await?;
+        let languages = self.current_languages().await;
+        let system = prompts::system(prompts::TRIAGE_SYSTEM, &languages);
         let task = Task {
             name: "triage",
-            system: prompts::TRIAGE_SYSTEM,
+            system: &system,
             input: prompts::triage_input(message, &customers, &tickets),
-            schema: prompts::triage_schema(),
+            schema: prompts::triage_schema(&languages),
         };
         let Some(answer) = self.ask(task).await? else {
             return Ok(Vec::new());
         };
-        Ok(decide_triage(answer, message, &customers, &tickets)
-            .into_iter()
-            .collect())
+        Ok(
+            decide_triage(answer, message, &customers, &tickets, &languages)
+                .into_iter()
+                .collect(),
+        )
     }
 
     async fn on_ticket(&self, number: i64) -> Result<Vec<Proposed>, Failure> {
@@ -164,25 +232,55 @@ impl Assistant {
             return Ok(Vec::new());
         }
         let assets = self.core.customer_assets(ticket.customer.id).await?;
+        let languages = self.current_languages().await;
+        let system = prompts::system(prompts::TICKET_SYSTEM, &languages);
         let task = Task {
             name: "ticket",
-            system: prompts::TICKET_SYSTEM,
+            system: &system,
             input: prompts::ticket_input(&ticket, &assets),
-            schema: prompts::ticket_schema(),
+            schema: prompts::ticket_schema(&languages),
         };
         let Some(answer) = self.ask(task).await? else {
             return Ok(Vec::new());
         };
-        Ok(decide_ticket(answer, &ticket, &assets))
+        Ok(decide_ticket(answer, &ticket, &assets, &languages))
     }
 }
 
-fn rationale(text: &str) -> String {
+fn sentence(text: &str) -> String {
     let text = text.trim();
     match text.char_indices().nth(MAX_RATIONALE_CHARS) {
         None => text.to_owned(),
         Some((cut, _)) => format!("{}…", text[..cut].trim_end()),
     }
+}
+
+/// The sentences of a rationale in `languages`, dropping missing or empty ones and languages not
+/// asked for. `None` without an English sentence: agents whose language is missing read the
+/// English one, so every proposal needs it.
+fn rationale(value: &Value, languages: &[String]) -> Option<Rationale> {
+    let mut out = Rationale::new();
+    if let Value::Object(map) = value {
+        for language in languages {
+            if let Some(text) = map.get(language).and_then(Value::as_str) {
+                let text = sentence(text);
+                if !text.is_empty() {
+                    out.insert(language.clone(), text);
+                }
+            }
+        }
+    }
+    if !out.contains_key("en") {
+        return None;
+    }
+    let missing: Vec<_> = languages.iter().filter(|l| !out.contains_key(*l)).collect();
+    if !missing.is_empty() {
+        tracing::info!(
+            ?missing,
+            "a rationale lacks some languages; those agents read English"
+        );
+    }
+    Some(out)
 }
 
 /// Lowercase words, so that quoted evidence matches the message whatever its spacing and case.
@@ -199,6 +297,7 @@ fn decide_triage(
     message: &MessageReceived,
     customers: &[Customer],
     tickets: &[TicketSummary],
+    languages: &[String],
 ) -> Option<Proposed> {
     let answer: TriageAnswer = match serde_json::from_value(answer) {
         Ok(a) => a,
@@ -207,11 +306,13 @@ fn decide_triage(
             return None;
         }
     };
-    let why = rationale(&answer.rationale);
-    if why.is_empty() && answer.action != "none" {
-        tracing::warn!("no triage proposal: the answer gives no rationale");
+    if answer.action == "none" {
         return None;
     }
+    let Some(why) = rationale(&answer.rationale, languages) else {
+        tracing::warn!("no triage proposal: the answer gives no English rationale");
+        return None;
+    };
     let triage = match answer.action.as_str() {
         "none" => return None,
         "discard" => Triage::Discard,
@@ -281,7 +382,12 @@ fn decide_triage(
 }
 
 /// Keeps the parts of a ticket answer that are valid and would change something.
-fn decide_ticket(answer: Value, ticket: &Ticket, assets: &[Asset]) -> Vec<Proposed> {
+fn decide_ticket(
+    answer: Value,
+    ticket: &Ticket,
+    assets: &[Asset],
+    languages: &[String],
+) -> Vec<Proposed> {
     let answer: TicketAnswer = match serde_json::from_value(answer) {
         Ok(a) => a,
         Err(e) => {
@@ -291,15 +397,23 @@ fn decide_ticket(answer: Value, ticket: &Ticket, assets: &[Asset]) -> Vec<Propos
     };
     let target = Target::Ticket(ticket.number);
     let mut out = Vec::new();
+    // Each proposal needs its own English rationale.
+    let mut push = |content: Content, why: &Value| match rationale(why, languages) {
+        Some(rationale) => out.push(Proposed {
+            target,
+            content,
+            rationale,
+        }),
+        None => tracing::warn!(
+            kind = content.kind(),
+            "no proposal of this kind: the answer gives no English rationale"
+        ),
+    };
 
     if let Some(priority) = answer.priority
         && priority != ticket.priority
     {
-        out.push(Proposed {
-            target,
-            content: Content::Priority { priority },
-            rationale: rationale(&answer.priority_rationale),
-        });
+        push(Content::Priority { priority }, &answer.priority_rationale);
     }
 
     let mut ids = Vec::new();
@@ -317,11 +431,7 @@ fn decide_ticket(answer: Value, ticket: &Ticket, assets: &[Asset]) -> Vec<Propos
     if unknown {
         tracing::warn!("no assets proposal: the answer names an asset that was not listed");
     } else if !ids.is_empty() {
-        out.push(Proposed {
-            target,
-            content: Content::Assets { asset_ids: ids },
-            rationale: rationale(&answer.assets_rationale),
-        });
+        push(Content::Assets { asset_ids: ids }, &answer.assets_rationale);
     }
 
     // A draft only answers a requester who wrote last; an agent may already have replied.
@@ -342,13 +452,12 @@ fn decide_ticket(answer: Value, ticket: &Ticket, assets: &[Asset]) -> Vec<Propos
         if body.chars().count() > MAX_REPLY_CHARS {
             tracing::warn!("no reply proposal: the draft is too long");
         } else {
-            out.push(Proposed {
-                target,
-                content: Content::Reply {
+            push(
+                Content::Reply {
                     body: body.to_owned(),
                 },
-                rationale: rationale(&answer.reply_rationale),
-            });
+                &answer.reply_rationale,
+            );
         }
     }
     out

@@ -16,5 +16,5 @@ pub mod signature;
 
 pub use client::{Client, Error, http_client};
 pub use events::{Envelope, Event, MessageReceived, TicketOpened};
-pub use proposals::{Content, Target, Triage};
+pub use proposals::{Content, Rationale, Target, Triage};
 pub use signature::{Verifier, VerifyError};

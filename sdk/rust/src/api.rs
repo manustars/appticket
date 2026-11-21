@@ -10,6 +10,10 @@ use uuid::Uuid;
 pub struct Identity {
     pub name: String,
     pub scopes: Vec<String>,
+    /// The languages of the agents' UI, such as `["en", "it"]`: write each rationale in all
+    /// of them. Empty from a core that predates per-language rationales.
+    #[serde(default)]
+    pub languages: Vec<String>,
 }
 
 /// A customer that can get tickets.

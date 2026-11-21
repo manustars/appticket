@@ -25,6 +25,14 @@ The model's answer is checked before anything is proposed, and whatever does not
 When the model is unsure it is asked to propose nothing, which is the answer agents prefer to a
 wrong one.
 
+Every proposal carries a rationale, a short sentence telling the agent why, in each language of
+the agents' UI, so that each agent reads it in their own. The Assistant reads those languages from
+the core (`GET /api/addon/whoami`) at startup and again every ten minutes, asks the model for one
+sentence per language in the same answer (written in each language, not translated word by word),
+and sends them all. A language the model left out or empty is dropped, and agents working in it
+read the English sentence; a proposal without an English sentence is not made. The draft reply is
+not a rationale: it stays in the requester's language.
+
 The prompts are in [`src/prompts.rs`](src/prompts.rs). The model sees messages as data and is told
 never to follow instructions inside them; internal notes are never shown to it, so they cannot end
 up in a draft reply.
@@ -104,9 +112,10 @@ HD_ASSISTANT_MODEL=<a model you have pulled>
 To make its proposals the Assistant sends the model the messages it reads: customers' mail, with
 senders' names and addresses, the customer's name and its assets (never internal notes). With any
 hosted provider that means sending them to an external service. Whether a help desk may do that
-is its own data-protection decision; the Assistant logs a warning at startup for every provider
-except `ollama` and an `openai-compatible` server on this machine (a loopback address). To keep
-the mail in house, run a model on your own servers.
+is its own data-protection decision; the Assistant logs a warning at startup unless the model
+service is on this machine: `ollama` or `openai-compatible` with a loopback address (Ollama's
+default). A hosted provider always gets the warning, even behind a local proxy. To keep the mail
+in house, run a model on your own servers.
 
 ## Delivery and duplicates
 

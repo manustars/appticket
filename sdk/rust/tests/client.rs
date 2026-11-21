@@ -9,7 +9,8 @@ use axum::{
     routing::{get, post},
 };
 use hd_addon_sdk::api::{Direction, Priority, TicketState, TimelineEntry};
-use hd_addon_sdk::{Client, Content, Error, Target, Triage};
+use hd_addon_sdk::proposals::in_english;
+use hd_addon_sdk::{Client, Content, Error, Rationale, Target, Triage};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -37,7 +38,8 @@ async fn fake_core() -> (String, Posted) {
                 }
                 (
                     StatusCode::OK,
-                    Json(json!({"name": "assistant", "scopes": ["directory:read"]})),
+                    Json(json!({"name": "assistant", "scopes": ["directory:read"],
+                        "languages": ["en", "it"]})),
                 )
             }),
         )
@@ -133,7 +135,11 @@ async fn reads_what_an_addon_needs_and_ignores_the_rest() {
     let (url, _) = fake_core().await;
     let client = Client::new(&format!("{url}/"), TOKEN).unwrap();
 
-    assert_eq!(client.whoami().await.unwrap().name, "assistant");
+    let me = client.whoami().await.unwrap();
+    assert_eq!(
+        (me.name.as_str(), me.languages),
+        ("assistant", vec!["en".into(), "it".into()])
+    );
     let customers = client.customers().await.unwrap();
     assert_eq!(customers[0].domains, ["brightfield.test"]);
     let customer = customers[0].id;
@@ -207,7 +213,13 @@ async fn proposals_are_posted_in_the_core_shape() {
             &Content::Triage(Triage::OpenTicket {
                 customer_id: customer,
             }),
-            "The signature names Brightfield.",
+            &Rationale::from([
+                (
+                    "en".to_owned(),
+                    "The signature names Brightfield.".to_owned(),
+                ),
+                ("it".to_owned(), "La firma indica Brightfield.".to_owned()),
+            ]),
         )
         .await
         .unwrap();
@@ -217,7 +229,7 @@ async fn proposals_are_posted_in_the_core_shape() {
             &Content::Priority {
                 priority: Priority::Urgent,
             },
-            "Nobody can print.",
+            &in_english("Nobody can print."),
         )
         .await
         .unwrap();
@@ -225,7 +237,7 @@ async fn proposals_are_posted_in_the_core_shape() {
         .propose(
             Target::Ticket(99),
             &Content::Reply { body: "Hi".into() },
-            "",
+            &Rationale::new(),
         )
         .await
         .unwrap_err();
@@ -235,11 +247,12 @@ async fn proposals_are_posted_in_the_core_shape() {
     assert_eq!(
         posted[0],
         json!({"message_id": message, "content": {"kind": "triage", "action": "open_ticket",
-            "customer_id": customer}, "rationale": "The signature names Brightfield."})
+            "customer_id": customer}, "rationale": {"en": "The signature names Brightfield.",
+            "it": "La firma indica Brightfield."}})
     );
     assert_eq!(
         posted[1],
         json!({"ticket_number": 12, "content": {"kind": "priority", "priority": "urgent"},
-            "rationale": "Nobody can print."})
+            "rationale": {"en": "Nobody can print."}})
     );
 }

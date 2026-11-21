@@ -30,11 +30,16 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let core = Client::new(&config.core_url, &config.token)?;
-    match core.whoami().await {
-        Ok(me) => tracing::info!(name = %me.name, scopes = ?me.scopes, "connected to the core"),
+    let assistant = Arc::new(Assistant::new(core, Model::new(config.model.clone())?));
+    // Rationales are written in the agents' languages, from `whoami`; they are read again every
+    // few minutes, and before the first event if the core does not answer now.
+    match assistant.refresh_languages().await {
+        Ok(languages) => tracing::info!(
+            ?languages,
+            "connected to the core; rationales in these languages"
+        ),
         Err(e) => tracing::warn!(error = %e, "the core does not answer yet; events will wait"),
     }
-    let assistant = Arc::new(Assistant::new(core, Model::new(config.model.clone())?));
 
     let (sender, receiver) = server::queue();
     let worker = tokio::spawn(server::work(

@@ -10,8 +10,11 @@ Apache-2.0, like the rest of `sdk/`.
   tests. `sign` computes the header, for testing an add-on.
 - `Client`: the add-on API (`whoami`, `customers`, `customer_assets`, `open_tickets_of_requester`,
   `open_tickets_of_customer`, `ticket`, `propose`). Errors carry the core's sentence. Answers keep
-  only the fields an add-on needs and ignore the rest.
-- `proposals`: `Content` and `Triage`, the same JSON as the core.
+  only the fields an add-on needs and ignore the rest. `whoami` lists the `languages` of the
+  agents' UI.
+- `proposals`: `Content` and `Triage`, the same JSON as the core, and `Rationale`, one sentence
+  per language (`{"en": …, "it": …}`) that `propose` sends; `in_english` makes one with only an
+  English sentence, which agents in other languages then read.
 - `server` (feature `axum`): `events_router` turns a handler into a `POST /events` endpoint that
   only passes verified envelopes on.
 

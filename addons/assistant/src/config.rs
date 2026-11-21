@@ -162,12 +162,12 @@ pub struct ModelSettings {
 }
 
 impl ModelSettings {
-    /// Whether customers' mail leaves the help desk when the model reads it: true for every
-    /// provider except Ollama and an OpenAI-compatible server on this machine.
+    /// Whether customers' mail leaves this machine when the model reads it: false only for a
+    /// self-hosted model service (Ollama or an OpenAI-compatible server) on a loopback address.
+    /// A hosted provider is external even behind a local proxy, which forwards the mail.
     pub fn is_external(&self) -> bool {
         match self.provider {
-            Provider::Ollama => false,
-            Provider::OpenAiCompatible => !is_loopback(&self.url),
+            Provider::Ollama | Provider::OpenAiCompatible => !is_loopback(&self.url),
             _ => true,
         }
     }
@@ -470,6 +470,16 @@ mod tests {
             "http://127.0.0.1:11434/v1/chat/completions"
         );
         assert!(!ollama.model.is_external());
+        let remote_ollama = config(&with(&[
+            ("HD_ASSISTANT_MODEL_PROVIDER", "ollama"),
+            ("HD_ASSISTANT_MODEL", "a-local-model"),
+            ("HD_ASSISTANT_MODEL_URL", "http://192.0.2.20:11434"),
+        ]))
+        .unwrap();
+        assert!(
+            remote_ollama.model.is_external(),
+            "Ollama elsewhere warns too"
+        );
 
         let compatible = |url: &'static str| {
             config(&with(&[
