@@ -4,8 +4,15 @@ import type { components } from './schema'
 type Schemas = components['schemas']
 export type Agent = Schemas['Agent']
 export type AgentEntry = Schemas['AgentEntry']
+export type Asset = Schemas['Asset']
+export type CustomerDetail = Schemas['CustomerDetail']
 export type CustomerEntry = Schemas['CustomerEntry']
+export type CustomerSummary = Schemas['CustomerSummary']
 export type InboxMessage = Schemas['InboxMessage']
+export type Moved = Schemas['Moved']
+export type ResolvedChildren = Schemas['ResolvedChildren']
+export type Service = Schemas['Service']
+export type ServiceDetail = Schemas['ServiceDetail']
 export type TicketDetail = Schemas['TicketDetail']
 export type TicketState = Schemas['TicketState']
 export type TicketSummary = Schemas['TicketSummary']
@@ -74,8 +81,21 @@ export async function signOut(): Promise<void> {
   await call('DELETE', '/api/session')
 }
 
-export function listTickets(): Promise<TicketSummary[]> {
-  return json('GET', '/api/tickets')
+/** What the ticket list is narrowed to; a field left out or empty does not narrow it. */
+export interface TicketQuery {
+  /** Comma-separated states. */
+  state?: string
+  /** `me`, `none` or an agent's id. */
+  assignee?: string
+  customer?: string
+  q?: string
+}
+
+export function listTickets(query: TicketQuery = {}): Promise<TicketSummary[]> {
+  const params = new URLSearchParams()
+  for (const [name, value] of Object.entries(query)) if (value) params.set(name, value)
+  const search = params.toString()
+  return json('GET', search ? `/api/tickets?${search}` : '/api/tickets')
 }
 
 export function listInbox(): Promise<InboxMessage[]> {
@@ -91,8 +111,16 @@ export function listCustomers(): Promise<CustomerEntry[]> {
   return json('GET', '/api/customers')
 }
 
+/** Every customer, offboarded ones included (last), with counts. */
+export function listAllCustomers(): Promise<CustomerSummary[]> {
+  return json('GET', '/api/customers/all')
+}
+
 const ticketPath = (number: number) => `/api/tickets/${encodeURIComponent(number)}`
 const inboxPath = (id: string) => `/api/inbox/${encodeURIComponent(id)}`
+const customerPath = (id: string) => `/api/customers/${encodeURIComponent(id)}`
+const assetPath = (id: string) => `/api/assets/${encodeURIComponent(id)}`
+const servicePath = (id: string) => `/api/services/${encodeURIComponent(id)}`
 
 export function getTicket(number: number): Promise<TicketDetail> {
   return json('GET', ticketPath(number))
@@ -124,15 +152,47 @@ export async function setAssignee(number: number, agentId: string | null): Promi
 /**
  * Moves a ticket to another customer. With `requester` "move", the requester moves too and takes
  * all of their tickets along; with "remove", the requester leaves this ticket. Returns how many
- * tickets moved.
+ * tickets moved and how many asset and service links were removed for not fitting the new customer.
  */
-export async function moveTicket(
+export function moveTicket(
   number: number,
   customerId: string,
   requester: Schemas['RequesterMove'],
-): Promise<number> {
+): Promise<Moved> {
   const request: Schemas['CustomerChange'] = { customer_id: customerId, requester }
-  return (await json<Schemas['Moved']>('PUT', `${ticketPath(number)}/customer`, request)).moved
+  return json('PUT', `${ticketPath(number)}/customer`, request)
+}
+
+export async function linkTicketAsset(number: number, assetId: string): Promise<void> {
+  await call('PUT', `${ticketPath(number)}/assets/${encodeURIComponent(assetId)}`)
+}
+
+export async function unlinkTicketAsset(number: number, assetId: string): Promise<void> {
+  await call('DELETE', `${ticketPath(number)}/assets/${encodeURIComponent(assetId)}`)
+}
+
+export async function linkTicketService(number: number, serviceId: string): Promise<void> {
+  await call('PUT', `${ticketPath(number)}/services/${encodeURIComponent(serviceId)}`)
+}
+
+export async function unlinkTicketService(number: number, serviceId: string): Promise<void> {
+  await call('DELETE', `${ticketPath(number)}/services/${encodeURIComponent(serviceId)}`)
+}
+
+/** Makes the ticket a child of `parentNumber`, a ticket of the help desk's own organization. */
+export async function setParent(number: number, parentNumber: number): Promise<void> {
+  const request: Schemas['ParentChange'] = { parent_number: parentNumber }
+  await call('PUT', `${ticketPath(number)}/parent`, request)
+}
+
+export async function clearParent(number: number): Promise<void> {
+  await call('DELETE', `${ticketPath(number)}/parent`)
+}
+
+/** Replies `body` to the requester of every open or waiting child, and resolves those children. */
+export function resolveChildren(number: number, body: string): Promise<ResolvedChildren> {
+  const request: Schemas['ResolveChildren'] = { body }
+  return json('POST', `${ticketPath(number)}/resolve-children`, request)
 }
 
 /** Opens a ticket for `customerId` from an inbox message; returns the new ticket's number. */
@@ -148,4 +208,97 @@ export async function attachInboxMessage(id: string, ticketNumber: number): Prom
 
 export async function discardInboxMessage(id: string): Promise<void> {
   await call('POST', `${inboxPath(id)}/discard`)
+}
+
+/** Adds a customer; returns its id. */
+export async function createCustomer(name: string, domains: string[]): Promise<string> {
+  const request: Schemas['NewCustomer'] = { name, domains }
+  return (await json<Schemas['CreatedCustomer']>('POST', '/api/customers/all', request)).id
+}
+
+export function getCustomer(id: string): Promise<CustomerDetail> {
+  return json('GET', customerPath(id))
+}
+
+export async function renameCustomer(id: string, name: string): Promise<void> {
+  const request: Schemas['Rename'] = { name }
+  await call('PUT', customerPath(id), request)
+}
+
+/** Mail from the domain then opens tickets for this customer. */
+export async function addDomain(id: string, domain: string): Promise<void> {
+  const request: Schemas['NewDomain'] = { domain }
+  await call('POST', `${customerPath(id)}/domains`, request)
+}
+
+/** Requesters already registered from the domain stay. */
+export async function removeDomain(id: string, domain: string): Promise<void> {
+  await call('DELETE', `${customerPath(id)}/domains/${encodeURIComponent(domain)}`)
+}
+
+export async function addRequester(id: string, email: string, name: string | null): Promise<void> {
+  const request: Schemas['NewRequester'] = { email, name }
+  await call('POST', `${customerPath(id)}/requesters`, request)
+}
+
+/** No new tickets from then on; the customer's history stays. Refused for the help desk. */
+export async function offboardCustomer(id: string): Promise<void> {
+  await call('POST', `${customerPath(id)}/offboard`)
+}
+
+/** The customer's assets, active ones first. */
+export function listCustomerAssets(id: string): Promise<Asset[]> {
+  return json('GET', `${customerPath(id)}/assets`)
+}
+
+export async function createAsset(customerId: string, kind: string, name: string): Promise<void> {
+  const request: Schemas['AssetFields'] = { kind, name }
+  await call('POST', `${customerPath(customerId)}/assets`, request)
+}
+
+export async function updateAsset(id: string, kind: string, name: string): Promise<void> {
+  const request: Schemas['AssetFields'] = { kind, name }
+  await call('PUT', assetPath(id), request)
+}
+
+/** The asset stays on the tickets that refer to it but gets no new links. */
+export async function retireAsset(id: string): Promise<void> {
+  await call('POST', `${assetPath(id)}/retire`)
+}
+
+/** The services the customer uses. */
+export function listCustomerServices(id: string): Promise<Service[]> {
+  return json('GET', `${customerPath(id)}/services`)
+}
+
+/** Every service, active ones first. */
+export function listServices(): Promise<Service[]> {
+  return json('GET', '/api/services')
+}
+
+/** Adds a service, which the help desk's own organization uses from the start; returns its id. */
+export async function createService(name: string, description: string): Promise<string> {
+  const request: Schemas['NewService'] = { name, description }
+  return (await json<Schemas['Created']>('POST', '/api/services', request)).id
+}
+
+export function getService(id: string): Promise<ServiceDetail> {
+  return json('GET', servicePath(id))
+}
+
+export async function startUsingService(serviceId: string, customerId: string): Promise<void> {
+  await call('PUT', `${servicePath(serviceId)}/customers/${encodeURIComponent(customerId)}`)
+}
+
+/** Refused for the help desk, and while tickets of the customer refer to the service. */
+export async function stopUsingService(serviceId: string, customerId: string): Promise<void> {
+  await call('DELETE', `${servicePath(serviceId)}/customers/${encodeURIComponent(customerId)}`)
+}
+
+export async function runOnAsset(serviceId: string, assetId: string): Promise<void> {
+  await call('PUT', `${servicePath(serviceId)}/assets/${encodeURIComponent(assetId)}`)
+}
+
+export async function stopRunningOnAsset(serviceId: string, assetId: string): Promise<void> {
+  await call('DELETE', `${servicePath(serviceId)}/assets/${encodeURIComponent(assetId)}`)
 }

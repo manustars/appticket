@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   currentAgent,
   listInbox,
   listTickets,
+  Refused,
   signIn,
   signOut,
   Unauthorized,
@@ -10,10 +11,23 @@ import {
   type InboxMessage,
   type TicketSummary,
 } from './api/client'
+import { CustomerPage, Customers } from './Customers'
 import { useI18n } from './i18n/context'
 import { LanguageSwitcher } from './i18n/LanguageSwitcher'
 import { Inbox } from './Inbox'
-import { go, inboxHref, ticketHref, ticketsHref, useRoute } from './route'
+import {
+  customersHref,
+  defaultFilters,
+  go,
+  inboxHref,
+  servicesHref,
+  ticketQuery,
+  ticketsHref,
+  useRoute,
+  type TicketFilters,
+} from './route'
+import { ServicePage, Services } from './Services'
+import { Tickets } from './Tickets'
 import { TicketView } from './TicketView'
 
 function App() {
@@ -88,21 +102,45 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
 function Desk({ agent, onSignedOut }: { agent: Agent; onSignedOut: () => void }) {
   const { t, formatNumber } = useI18n()
   const route = useRoute()
+  // The filters of the list last shown, kept while a ticket or another screen is open, so that the
+  // way back finds the list as it was.
+  const [filters, setFilters] = useState<TicketFilters>(
+    route.view === 'tickets' ? route.filters : defaultFilters)
+  if (route.view === 'tickets' && ticketsHref(route.filters) !== ticketsHref(filters)) {
+    setFilters(route.filters)
+  }
+  const listHref = ticketsHref(filters)
   const [tickets, setTickets] = useState<TicketSummary[] | null>(null)
+  const [ticketsError, setTicketsError] = useState<unknown>(null)
   const [inbox, setInbox] = useState<InboxMessage[] | null>(null)
-  const [loadFailed, setLoadFailed] = useState(false)
+  const [inboxFailed, setInboxFailed] = useState(false)
+  // Only the latest list may be shown: an answer for filters changed since must not overwrite it.
+  const latest = useRef(0)
 
   const refresh = useCallback(async () => {
-    try {
-      const [t, i] = await Promise.all([listTickets(), listInbox()])
-      setTickets(t)
-      setInbox(i)
-      setLoadFailed(false)
-    } catch (e) {
-      if (e instanceof Unauthorized) onSignedOut()
-      else setLoadFailed(true)
+    const mine = ++latest.current
+    const [list, waiting] = await Promise.allSettled([listTickets(ticketQuery(filters)), listInbox()])
+    if ([list, waiting].some((r) => r.status === 'rejected' && r.reason instanceof Unauthorized)) {
+      onSignedOut()
+      return
     }
-  }, [onSignedOut])
+    if (mine === latest.current) {
+      if (list.status === 'fulfilled') {
+        setTickets(list.value)
+        setTicketsError(null)
+      } else {
+        // A refused filter shows the core's words instead of a list it did not give.
+        if (list.reason instanceof Refused) setTickets(null)
+        setTicketsError(list.reason)
+      }
+    }
+    if (waiting.status === 'fulfilled') {
+      setInbox(waiting.value)
+      setInboxFailed(false)
+    } else {
+      setInboxFailed(true)
+    }
+  }, [filters, onSignedOut])
 
   useEffect(() => {
     // Mail is read every few seconds, so the lists follow it.
@@ -119,15 +157,28 @@ function Desk({ agent, onSignedOut }: { agent: Agent; onSignedOut: () => void })
     onSignedOut()
   }
 
+  const section = route.view === 'ticket' ? 'tickets'
+    : route.view === 'customer' ? 'customers'
+    : route.view === 'service' ? 'services'
+    : route.view
+  const current = (s: typeof section) => (section === s ? 'current' : '')
+
   return (
     <div className="desk">
       <header>
         <nav>
-          <button className={route.view === 'inbox' ? '' : 'current'} onClick={() => go(ticketsHref)}>
+          {/* The count is of the list as filtered, as the list itself shows it. */}
+          <button className={current('tickets')} onClick={() => go(listHref)}>
             {t('desk.tickets')} {tickets && <span className="count">{formatNumber(tickets.length)}</span>}
           </button>
-          <button className={route.view === 'inbox' ? 'current' : ''} onClick={() => go(inboxHref)}>
+          <button className={current('inbox')} onClick={() => go(inboxHref)}>
             {t('desk.inbox')} {inbox && <span className="count">{formatNumber(inbox.length)}</span>}
+          </button>
+          <button className={current('customers')} onClick={() => go(customersHref)}>
+            {t('desk.customers')}
+          </button>
+          <button className={current('services')} onClick={() => go(servicesHref)}>
+            {t('desk.services')}
           </button>
         </nav>
         <span className="who">{agent.name}</span>
@@ -135,48 +186,25 @@ function Desk({ agent, onSignedOut }: { agent: Agent; onSignedOut: () => void })
         <button className="quiet" onClick={leave}>{t('desk.signOut')}</button>
       </header>
       <main>
-        {loadFailed && <p className="error" role="alert">{t('error.loadFailed')}</p>}
+        {inboxFailed && <p className="error" role="alert">{t('error.loadFailed')}</p>}
         {route.view === 'ticket' ? (
-          <TicketView key={route.number} number={route.number} onChanged={refresh}
+          <TicketView key={route.number} number={route.number} backHref={listHref} onChanged={refresh}
             onSignedOut={onSignedOut} />
         ) : route.view === 'inbox' ? (
           <Inbox messages={inbox} onChanged={refresh} onSignedOut={onSignedOut} />
+        ) : route.view === 'customers' ? (
+          <Customers onSignedOut={onSignedOut} />
+        ) : route.view === 'customer' ? (
+          <CustomerPage key={route.id} id={route.id} onChanged={refresh} onSignedOut={onSignedOut} />
+        ) : route.view === 'services' ? (
+          <Services onSignedOut={onSignedOut} />
+        ) : route.view === 'service' ? (
+          <ServicePage key={route.id} id={route.id} onSignedOut={onSignedOut} />
         ) : (
-          <Tickets tickets={tickets} />
+          <Tickets filters={route.filters} tickets={tickets} error={ticketsError} onSignedOut={onSignedOut} />
         )}
       </main>
     </div>
-  )
-}
-
-function Tickets({ tickets }: { tickets: TicketSummary[] | null }) {
-  const { t, formatTime } = useI18n()
-  if (tickets === null) return null
-  if (tickets.length === 0) return <p className="empty">{t('tickets.empty')}</p>
-  return (
-    <table className="tickets">
-      <thead>
-        <tr>
-          <th>{t('tickets.number')}</th><th>{t('tickets.title')}</th><th>{t('tickets.customer')}</th>
-          <th>{t('tickets.requester')}</th><th>{t('tickets.assignee')}</th><th>{t('tickets.state')}</th>
-          <th>{t('tickets.updated')}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {tickets.map((ticket) => (
-          // The title is the link; the rest of the row is a larger target for the mouse.
-          <tr key={ticket.id} onClick={() => go(ticketHref(ticket.number))}>
-            <td className="number">{ticket.number}</td>
-            <td><a href={ticketHref(ticket.number)}>{ticket.title}</a></td>
-            <td>{ticket.customer_name}</td>
-            <td>{ticket.requester_email ?? '—'}</td>
-            <td>{ticket.assignee_name ?? '—'}</td>
-            <td><span className={`state ${ticket.state}`}>{t(`state.${ticket.state}`)}</span></td>
-            <td className="when">{formatTime(ticket.updated_at)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
   )
 }
 

@@ -4,6 +4,7 @@ import {
   getTicket,
   listAgents,
   listCustomers,
+  listCustomerServices,
   moveTicket,
   reply,
   setAssignee,
@@ -11,33 +12,40 @@ import {
   Unauthorized,
   type AgentEntry,
   type CustomerEntry,
+  type Moved,
+  type Service,
   type TicketDetail,
   type TicketState,
   type TimelineEntry,
 } from './api/client'
 import { useI18n } from './i18n/context'
-import { ticketsHref } from './route'
+import { TicketAssets, TicketFamily, TicketServices } from './TicketLinks'
+import { useLoad } from './useAction'
 
 const states: TicketState[] = ['open', 'waiting', 'resolved', 'closed']
 
 interface Props {
   number: number
+  /** Where "back" goes: the ticket list as it was last filtered. */
+  backHref: string
   /** Called after a change, so the lists follow it. */
   onChanged: () => void
   onSignedOut: () => void
 }
 
-export function TicketView({ number, onChanged, onSignedOut }: Props) {
+export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) {
   const { t, formatTime, errorText } = useI18n()
   const [ticket, setTicket] = useState<TicketDetail | null>(null)
   // Failures are kept as they came and put into words when shown, so they follow the language.
   const [loadError, setLoadError] = useState<unknown>(null)
   const [agents, setAgents] = useState<AgentEntry[]>([])
+  // Customers that can get tickets; they also tell whether this ticket is the help desk's own.
+  const [customers, setCustomers] = useState<CustomerEntry[] | null>(null)
   const [actionError, setActionError] = useState<unknown>(null)
   const [busy, setBusy] = useState(false)
   const [moving, setMoving] = useState(false)
-  // How many tickets the last move took along.
-  const [moved, setMoved] = useState<number | null>(null)
+  // What the last move did: how many tickets it took along, how many links it removed.
+  const [moved, setMoved] = useState<Moved | null>(null)
   // Only the latest load may update the view: a slow poll must not overwrite a newer answer.
   const latest = useRef(0)
 
@@ -70,7 +78,14 @@ export function TicketView({ number, onChanged, onSignedOut }: Props) {
 
   useEffect(() => {
     listAgents().then(setAgents, (error) => fail(error, setActionError))
+    listCustomers().then(setCustomers, (error) => fail(error, setActionError))
   }, [fail])
+
+  /** After a change made by one of the parts below: reloads the ticket and the lists. */
+  const changed = useCallback(async () => {
+    await load()
+    onChanged()
+  }, [load, onChanged])
 
   /** Runs a change, then reloads the ticket and the lists. Returns whether it succeeded. */
   async function change(action: () => Promise<void>): Promise<boolean> {
@@ -97,7 +112,7 @@ export function TicketView({ number, onChanged, onSignedOut }: Props) {
   if (!ticket) {
     return (
       <div className="ticket">
-        <a className="back" href={ticketsHref}>{t('ticket.back')}</a>
+        <a className="back" href={backHref}>{t('ticket.back')}</a>
         {loadError !== null && <p className="error" role="alert">{errorText(loadError)}</p>}
       </div>
     )
@@ -105,9 +120,11 @@ export function TicketView({ number, onChanged, onSignedOut }: Props) {
 
   const closed = ticket.state === 'closed'
   const requester = ticket.requester
+  // The help desk's own organization is never offboarded, so it is always in the list.
+  const helpDesk = customers?.some((c) => c.id === ticket.customer.id && c.is_help_desk)
   return (
     <div className="ticket">
-      <a className="back" href={ticketsHref}>{t('ticket.back')}</a>
+      <a className="back" href={backHref}>{t('ticket.back')}</a>
       <h1><span className="number">#{ticket.number}</span> {ticket.title}</h1>
       {loadError !== null && <p className="error" role="alert">{errorText(loadError)}</p>}
 
@@ -157,24 +174,32 @@ export function TicketView({ number, onChanged, onSignedOut }: Props) {
         <div><dt>{t('ticket.opened')}</dt><dd className="when">{formatTime(ticket.created_at)}</dd></div>
       </dl>
       {moving && (
-        <MoveCustomer ticket={ticket} busy={busy} onCancel={() => setMoving(false)}
+        <MoveCustomer ticket={ticket} customers={customers} busy={busy} onCancel={() => setMoving(false)}
+          onSignedOut={onSignedOut}
           onMove={async (customerId, requesterMove) => {
-            let count = 0
+            let result: Moved | null = null
             const ok = await change(async () => {
-              count = await moveTicket(number, customerId, requesterMove)
+              result = await moveTicket(number, customerId, requesterMove)
             })
             if (ok) {
               setMoving(false)
-              setMoved(count)
+              setMoved(result)
             }
           }} />
       )}
       {moved !== null && (
         <p className="done" role="status">
-          {moved > 1 ? t('ticket.movedWithRequester', { count: moved }) : t('ticket.moved')}
+          {moved.moved > 1 ? t('ticket.movedWithRequester', { count: moved.moved }) : t('ticket.moved')}
+          {moved.unlinked > 0 && <> {t('ticket.unlinked', { count: moved.unlinked })}</>}
         </p>
       )}
       {actionError !== null && <p className="error" role="alert">{errorText(actionError)}</p>}
+
+      <div className="ticket-links">
+        <TicketAssets ticket={ticket} onChanged={changed} onSignedOut={onSignedOut} />
+        <TicketServices ticket={ticket} onChanged={changed} onSignedOut={onSignedOut} />
+        <TicketFamily ticket={ticket} helpDesk={helpDesk} onChanged={changed} onSignedOut={onSignedOut} />
+      </div>
 
       <ol className="timeline">
         {ticket.timeline.map((entry) => <Entry key={`${entry.kind}-${entry.id}`} entry={entry} />)}
@@ -326,24 +351,31 @@ function Composer({ ticket, onDone, onSignedOut }: {
 }
 
 /** Moves the ticket to the right customer, and says what happens to the requester. */
-function MoveCustomer({ ticket, busy, onCancel, onMove }: {
+function MoveCustomer({ ticket, customers, busy, onCancel, onMove, onSignedOut }: {
   ticket: TicketDetail
+  customers: CustomerEntry[] | null
   busy: boolean
   onCancel: () => void
   onMove: (customerId: string, requester: 'move' | 'remove') => Promise<void>
+  onSignedOut: () => void
 }) {
   const { t, errorText } = useI18n()
-  const [customers, setCustomers] = useState<CustomerEntry[] | null>(null)
   const [customerId, setCustomerId] = useState('')
   const [requesterMove, setRequesterMove] = useState<'move' | 'remove'>('move')
-  const [error, setError] = useState<unknown>(null)
   const id = useId()
   const requester = ticket.requester
   const others = requester ? requester.ticket_count - 1 : 0
-
-  useEffect(() => {
-    listCustomers().then(setCustomers, setError)
-  }, [])
+  const linked = ticket.assets.length + ticket.services.length > 0
+  // What the chosen customer uses decides which linked services stay.
+  const loadUsed = useCallback(
+    (): Promise<Service[]> => (linked && customerId ? listCustomerServices(customerId) : Promise.resolve([])),
+    [linked, customerId])
+  const used = useLoad(loadUsed, onSignedOut)
+  const target = customers?.find((c) => c.id === customerId)
+  const dropped = target && used.data
+    ? ticket.services.filter((s) => !used.data?.some((u) => u.id === s.id))
+    : null
+  const error = used.error
 
   function submit(event: FormEvent) {
     event.preventDefault()
@@ -375,6 +407,27 @@ function MoveCustomer({ ticket, busy, onCancel, onMove }: {
             {t('move.requesterStays', { customer: ticket.customer.name })}
           </label>
         </fieldset>
+      )}
+      {linked && (
+        <div className="warning" role="note">
+          {!target || !dropped ? (
+            <p>{t('move.linksWarning', { customer: ticket.customer.name })}</p>
+          ) : ticket.assets.length + dropped.length === 0 ? (
+            <p>{t('move.keepsLinks', { customer: target.name })}</p>
+          ) : (
+            <>
+              <p>{t('move.willUnlink')}</p>
+              <ul>
+                {ticket.assets.map((a) => (
+                  <li key={a.id}>{t('move.unlinkAsset', { name: a.name, kind: a.kind, customer: ticket.customer.name })}</li>
+                ))}
+                {dropped.map((s) => (
+                  <li key={s.id}>{t('move.unlinkService', { name: s.name, customer: target.name })}</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
       )}
       {error !== null && <p className="error" role="alert">{errorText(error)}</p>}
       <div className="move-foot">

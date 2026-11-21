@@ -278,3 +278,118 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent); fon
 .move fieldset label { display: flex; gap: 0.5rem; align-items: baseline; }
 .move fieldset input { width: auto; margin: 0; }
 .move-foot { display: flex; justify-content: flex-end; gap: 0.5rem; }
+
+/* The ticket list's filters: narrowing is kept in the address, so a reload keeps it. */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem 0.9rem;
+  margin-bottom: 0.8rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.filters label { display: grid; gap: 0.2rem; color: var(--muted); font-size: 0.85rem; }
+.filters select, .inline-form select { color: var(--text); padding: 0.45rem 0.6rem; }
+.filters .search { flex: 1 1 14rem; }
+.filters input { margin-top: 0; }
+
+/* Screens about customers and services, and the parts of a ticket that refer to them. */
+.page { max-width: 56rem; margin: 0 auto; display: grid; gap: 0.9rem; }
+.page h1 { margin: 0; }
+.title-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem 0.75rem; }
+.title-row h1 { margin: 0; }
+.description { margin: 0; color: var(--muted); }
+.panel {
+  display: grid;
+  align-content: start;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0.8rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.panel h2 { margin: 0; font-size: 1rem; }
+.panel .empty, .panel .done { margin: 0; }
+.panel table { border: 0; }
+.panel tr:last-child td { border-bottom: 0; }
+.hint { margin: 0; color: var(--muted); font-size: 0.9rem; }
+.notice {
+  margin: 0;
+  padding: 0.8rem 1rem;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+}
+.marker {
+  display: inline-block;
+  padding: 0 0.45em;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  vertical-align: 0.1em;
+}
+.marker.offboarded, .marker.retired { border-style: dashed; color: var(--closed); }
+tr.offboarded td, tr.retired td { color: var(--muted); }
+
+.inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem 0.75rem; }
+.inline-form label { display: grid; gap: 0.2rem; color: var(--muted); font-size: 0.85rem; }
+.inline-form input { width: 14rem; max-width: 100%; margin-top: 0; }
+.inline-form label.wide input { width: 22rem; }
+.inline-form.rename { align-items: center; }
+.inline-form.rename input { width: 22rem; }
+
+.data td.wrap { white-space: normal; }
+.data input { margin-top: 0; }
+.figure { text-align: right; font-variant-numeric: tabular-nums; }
+.row-actions { text-align: right; }
+.row-actions > * + * { margin-left: 0.7rem; }
+.rows tbody tr { cursor: pointer; }
+.rows tbody tr:hover { background: var(--bg); }
+.rows td a { color: inherit; text-decoration: none; }
+.rows td a:hover, .rows td a:focus-visible { text-decoration: underline; }
+button.link.danger { color: var(--danger); }
+
+.chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.chips li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.15rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+}
+.items { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
+.items li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem 0.6rem; }
+.items li button.link { margin-left: auto; }
+.related { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.6rem; }
+.related a { text-decoration: none; }
+.related a:hover, .related a:focus-visible { text-decoration: underline; }
+.related .number { color: var(--muted); }
+.danger-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.6rem; }
+
+/* Assets and services side by side; the parent or children below them, across. */
+.ticket-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; }
+@media (max-width: 40rem) { .ticket-links { grid-template-columns: minmax(0, 1fr); } }
+.ticket-links .family { grid-column: 1 / -1; }
+.ticket-links .panel:not(.family) .inline-form label { flex: 1 1 12rem; min-width: 0; }
+.ticket-links .panel:not(.family) .inline-form select { width: 100%; }
+.resolve { display: grid; gap: 0.5rem; }
+.resolve > label { color: var(--muted); font-size: 0.9rem; }
+
+/* What a move will unlink: said before the agent moves, not after. */
+.warning {
+  padding: 0.5rem 0.75rem;
+  border-left: 4px solid var(--waiting);
+  border-radius: 4px;
+  background: var(--bg);
+}
+.warning p { margin: 0; }
+.warning ul { margin: 0.3rem 0 0; padding-left: 1.2rem; }
