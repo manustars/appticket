@@ -33,10 +33,12 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
   alerts) and, when present, belongs to that customer.
 - Only a ticket with a requester can be replied to. A reply goes through the outbox and moves the
   ticket to the state the agent picks: waiting, unless the agent says otherwise.
+- What an agent writes on a ticket and has not sent yet is kept as their draft, one per agent and
+  ticket, until they send it as a reply or a note; it survives leaving the page.
 - A closed ticket changes no more: no state change, no assignee change, no reply, no message
   attached from the inbox. Agents can still add internal notes to it.
 - Opening a ticket from an inbox message makes the sender its requester, registered with the
-  ticket's customer if new; a sender who is already a requester of another customer is refused.
+  ticket's customer if new, with the name the message carries; a sender who is already a requester of another customer is refused.
 - A ticket links zero or more assets of its own customer and zero or more services its customer
   uses, at any time.
 - A ticket's states are open, waiting, resolved (a reply from the requester reopens it) and closed
@@ -70,7 +72,7 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
 ## Assistant
 
 - It proposes on inbox messages (open a ticket for a customer, attach to a ticket, discard) and on
-  tickets (assets involved, priority, a draft reply).
+  tickets (priority, assets and services involved, a draft reply).
 - It never acts alone: every proposal waits for an agent to accept, edit or discard it. An
   accepted draft reply goes into the composer; the agent sends it.
 - A proposal's rationale is written in every language of the agents' UI, and each agent reads it in

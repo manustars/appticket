@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/addon/customers/{id}/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The active services a customer uses. Scope `directory:read`. */
+        get: operations["customer_services"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/addon/proposals": {
         parameters: {
             query?: never;
@@ -636,6 +653,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tickets/{number}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The signed-in agent's unsent draft on the ticket, or null. */
+        get: operations["get_draft"];
+        /** Saves the signed-in agent's draft on the ticket. Sending a reply or a note clears it. */
+        put: operations["save_draft"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tickets/{number}/notes": {
         parameters: {
             query?: never;
@@ -858,6 +893,10 @@ export interface components {
             /** @enum {string} */
             kind: "assets";
         } | {
+            /** @enum {string} */
+            kind: "services";
+            service_ids: string[];
+        } | {
             body: string;
             /** @enum {string} */
             kind: "reply";
@@ -921,6 +960,22 @@ export interface components {
          * @enum {string}
          */
         Direction: "inbound" | "outbound";
+        Draft: {
+            body: string;
+            mode: components["schemas"]["DraftMode"];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        DraftChange: {
+            /** @description The text so far; empty removes the draft. */
+            body: string;
+            mode: components["schemas"]["DraftMode"];
+        };
+        /**
+         * @description Whether the draft is a reply to the requester or an internal note.
+         * @enum {string}
+         */
+        DraftMode: "reply" | "note";
         Health: {
             status: string;
         };
@@ -1097,11 +1152,18 @@ export interface components {
             id: string;
             /** @description Why it is proposed, by language; show the agent's language, else English. */
             rationale: components["schemas"]["BTreeMap"];
+            /** @description For a services proposal: the services' names. */
+            services: components["schemas"]["ProposedService"][];
         };
         ProposedAsset: {
             /** Format: uuid */
             id: string;
             kind: string;
+            name: string;
+        };
+        ProposedService: {
+            /** Format: uuid */
+            id: string;
             name: string;
         };
         /** @description A rationale as an add-on sends it. */
@@ -1319,6 +1381,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Asset"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    customer_services: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Service"][];
                 };
             };
             401: {
@@ -3131,6 +3231,84 @@ export interface operations {
                 };
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_draft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's number */
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Draft"] | null;
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    save_draft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's number */
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftChange"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -104,6 +104,59 @@
         }
       }
     },
+    "/api/addon/customers/{id}/services": {
+      "get": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "The active services a customer uses. Scope `directory:read`.",
+        "operationId": "customer_services",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Service"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/addon/proposals": {
       "post": {
         "tags": [
@@ -2384,6 +2437,113 @@
         }
       }
     },
+    "/api/tickets/{number}/draft": {
+      "get": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "The signed-in agent's unsent draft on the ticket, or null.",
+        "operationId": "get_draft",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Draft"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Saves the signed-in agent's draft on the ticket. Sending a reply or a note clears it.",
+        "operationId": "save_draft",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tickets/{number}/notes": {
       "post": {
         "tags": [
@@ -3249,6 +3409,29 @@
           },
           {
             "type": "object",
+            "description": "Services the ticket's customer uses that the ticket is about.",
+            "required": [
+              "service_ids",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "services"
+                ]
+              },
+              "service_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "A draft reply to the requester; accepting it puts it in the agent's composer.",
             "required": [
               "body",
@@ -3436,6 +3619,50 @@
         "enum": [
           "inbound",
           "outbound"
+        ]
+      },
+      "Draft": {
+        "type": "object",
+        "required": [
+          "mode",
+          "body",
+          "updated_at"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DraftMode"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DraftChange": {
+        "type": "object",
+        "required": [
+          "mode",
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "The text so far; empty removes the draft."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DraftMode"
+          }
+        }
+      },
+      "DraftMode": {
+        "type": "string",
+        "description": "Whether the draft is a reply to the requester or an internal note.",
+        "enum": [
+          "reply",
+          "note"
         ]
       },
       "Health": {
@@ -3910,7 +4137,8 @@
           "content",
           "rationale",
           "created_at",
-          "assets"
+          "assets",
+          "services"
         ],
         "properties": {
           "addon": {
@@ -3945,6 +4173,13 @@
           "rationale": {
             "$ref": "#/components/schemas/BTreeMap",
             "description": "Why it is proposed, by language; show the agent's language, else English."
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProposedService"
+            },
+            "description": "For a services proposal: the services' names."
           }
         }
       },
@@ -3962,6 +4197,22 @@
           },
           "kind": {
             "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ProposedService": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
           },
           "name": {
             "type": "string"

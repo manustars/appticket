@@ -23,6 +23,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(whoami))
         .routes(routes!(customers))
         .routes(routes!(customer_assets))
+        .routes(routes!(customer_services))
         .routes(routes!(open_tickets))
         .routes(routes!(ticket))
         .routes(routes!(propose))
@@ -264,4 +265,24 @@ async fn propose(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(ProposalCreated { id })))
+}
+
+/// The active services a customer uses. Scope `directory:read`.
+#[utoipa::path(get, path = "/api/addon/customers/{id}/services", tag = "add-ons",
+    params(("id" = Uuid, Path, description = "The customer")),
+    responses((status = OK, body = Vec<crate::catalog::Service>), (status = CONFLICT, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn customer_services(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<crate::catalog::Service>>, ApiError> {
+    caller.require(DIRECTORY_READ)?;
+    let services = crate::catalog::services_of(&state.db, id).await?;
+    Ok(Json(
+        services
+            .into_iter()
+            .filter(|s| s.retired_at.is_none())
+            .collect(),
+    ))
 }

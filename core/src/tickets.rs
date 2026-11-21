@@ -89,6 +89,7 @@ pub async fn add_note(db: &PgPool, number: i64, author: Uuid, body: &str) -> Res
         .bind(body)
         .execute(&mut *tx)
         .await?;
+    crate::drafts::clear(&mut tx, ticket_id, author).await?;
     touch(&mut tx, ticket_id).await?;
     tx.commit().await?;
     Ok(id)
@@ -200,6 +201,7 @@ pub async fn reply(
         .bind(then)
         .execute(&mut *tx)
         .await?;
+    crate::drafts::clear(&mut tx, ticket_id, author).await?;
     tx.commit().await?;
     Ok(id)
 }

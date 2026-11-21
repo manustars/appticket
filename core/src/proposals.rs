@@ -55,6 +55,8 @@ pub enum Content {
     Priority { priority: Priority },
     /// Assets of the ticket's customer the ticket is about.
     Assets { asset_ids: Vec<Uuid> },
+    /// Services the ticket's customer uses that the ticket is about.
+    Services { service_ids: Vec<Uuid> },
     /// A draft reply to the requester; accepting it puts it in the agent's composer.
     Reply { body: String },
 }
@@ -73,6 +75,7 @@ impl Content {
             Content::Triage(_) => "triage",
             Content::Priority { .. } => "priority",
             Content::Assets { .. } => "assets",
+            Content::Services { .. } => "services",
             Content::Reply { .. } => "reply",
         }
     }
@@ -183,6 +186,25 @@ pub async fn submit(
                         );
                     }
                 }
+                Content::Services { service_ids } => {
+                    if service_ids.is_empty() {
+                        return rule("a services proposal names at least one service");
+                    }
+                    let fitting: i64 = sqlx::query_scalar(
+                        "SELECT count(*) FROM services s
+                         JOIN customer_services cs ON cs.service_id = s.id AND cs.customer_id = $2
+                         WHERE s.id = ANY($1) AND s.retired_at IS NULL",
+                    )
+                    .bind(service_ids)
+                    .bind(customer)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                    if fitting as usize != service_ids.len() {
+                        return rule(
+                            "every proposed service must be an active service the ticket's customer uses",
+                        );
+                    }
+                }
                 Content::Reply { body } => {
                     if body.trim().is_empty() {
                         return rule("a draft reply cannot be empty");
@@ -240,6 +262,14 @@ pub struct ProposalView {
     pub customer_name: Option<String>,
     /// For an assets proposal: the assets' names.
     pub assets: Vec<ProposedAsset>,
+    /// For a services proposal: the services' names.
+    pub services: Vec<ProposedService>,
+}
+
+#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
+pub struct ProposedService {
+    pub id: Uuid,
+    pub name: String,
 }
 
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
@@ -280,6 +310,15 @@ async fn views(db: &PgPool, rows: Vec<Row>) -> Result<Vec<ProposalView>> {
             }
             _ => Vec::new(),
         };
+        let services = match &content {
+            Content::Services { service_ids } => {
+                sqlx::query_as("SELECT id, name FROM services WHERE id = ANY($1) ORDER BY name")
+                    .bind(service_ids)
+                    .fetch_all(db)
+                    .await?
+            }
+            _ => Vec::new(),
+        };
         out.push(ProposalView {
             id: row.id,
             addon: row.addon,
@@ -288,6 +327,7 @@ async fn views(db: &PgPool, rows: Vec<Row>) -> Result<Vec<ProposalView>> {
             created_at: row.created_at,
             customer_name,
             assets,
+            services,
         });
     }
     Ok(out)
@@ -382,7 +422,15 @@ pub async fn accept(db: &PgPool, id: Uuid, agent: Uuid) -> Result<Accepted> {
             }
             accepted.ticket_number = Some(number);
         }
+        (Content::Services { service_ids }, _, Some(number)) => {
+            for service in service_ids {
+                crate::catalog::link_service(db, number, service, true).await?;
+            }
+            accepted.ticket_number = Some(number);
+        }
         (Content::Reply { body }, _, Some(number)) => {
+            // The draft is kept for the agent until sent, even if they leave the ticket.
+            crate::drafts::save(db, number, agent, crate::drafts::DraftMode::Reply, &body).await?;
             accepted.ticket_number = Some(number);
             accepted.reply_body = Some(body);
         }
@@ -521,6 +569,81 @@ mod tests {
             submit(&db, "assistant", Target::Message(m), &discard, &en("")).await,
             Err(Error::Rule(_))
         ));
+    }
+
+    #[sqlx::test]
+    async fn services_are_proposed_and_an_accepted_draft_is_kept(db: PgPool) {
+        assistant(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let n = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
+        let mail = crate::catalog::create_service(&db, "Hosted mail", "")
+            .await
+            .unwrap();
+        let backup = crate::catalog::create_service(&db, "Backup", "")
+            .await
+            .unwrap();
+        crate::catalog::use_service(&db, mail, brightfield)
+            .await
+            .unwrap();
+        let t = Target::Ticket(n);
+
+        assert!(
+            matches!(
+                submit(
+                    &db,
+                    "assistant",
+                    t,
+                    &Content::Services {
+                        service_ids: vec![backup]
+                    },
+                    &en("")
+                )
+                .await,
+                Err(Error::Rule(_))
+            ),
+            "the customer does not use backup"
+        );
+        let services = submit(
+            &db,
+            "assistant",
+            t,
+            &Content::Services {
+                service_ids: vec![mail],
+            },
+            &en("Mail is down"),
+        )
+        .await
+        .unwrap();
+        let ticket_id: Uuid = sqlx::query_scalar("SELECT id FROM tickets WHERE number = $1")
+            .bind(n)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        let views = open_on_ticket(&db, ticket_id).await.unwrap();
+        assert_eq!(views[0].services[0].name, "Hosted mail");
+        accept(&db, services, agent).await.unwrap();
+        assert_eq!(
+            crate::tickets::detail(&db, n).await.unwrap().services.len(),
+            1
+        );
+
+        let reply = submit(
+            &db,
+            "assistant",
+            t,
+            &Content::Reply {
+                body: "Buongiorno Ada,".into(),
+            },
+            &en(""),
+        )
+        .await
+        .unwrap();
+        accept(&db, reply, agent).await.unwrap();
+        let draft = crate::drafts::get(&db, n, agent).await.unwrap().unwrap();
+        assert_eq!(draft.body, "Buongiorno Ada,");
+        assert_eq!(draft.mode, crate::drafts::DraftMode::Reply);
     }
 
     #[sqlx::test]

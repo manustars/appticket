@@ -79,6 +79,7 @@ sentence saying which scope is missing.
 | `GET /api/addon/whoami` | none | The add-on's name, scopes and the languages of the agents' UI. |
 | `GET /api/addon/customers` | `directory:read` | Customers that can get tickets, with their mail domains. |
 | `GET /api/addon/customers/{id}/assets` | `directory:read` | A customer's active assets. |
+| `GET /api/addon/customers/{id}/services` | `directory:read` | The active services a customer uses. |
 | `GET /api/addon/tickets?requester_email=…` or `?customer=…` | `tickets:read` | Tickets that are not closed. |
 | `GET /api/addon/tickets/{number}` | `tickets:read` | A ticket with its messages, links and open proposals; internal notes are never given to add-ons. |
 | `POST /api/addon/proposals` | `proposals:write` | Proposes something to the agents. |
@@ -108,7 +109,8 @@ not in the agents'.
 | `triage` | message | `action`: `open_ticket` with `customer_id`, `attach` with `ticket_number`, or `discard` |
 | `priority` | ticket | `priority`: `low`, `normal`, `high` or `urgent` |
 | `assets` | ticket | `asset_ids`: active assets of the ticket's customer |
-| `reply` | ticket | `body`: a draft reply; an accepted draft goes into the agent's composer, it is never sent by itself |
+| `services` | ticket | `service_ids`: active services the ticket's customer uses |
+| `reply` | ticket | `body`: a draft reply; an accepted draft becomes the agent's saved draft on the ticket, it is never sent by itself |
 
 A new proposal replaces the open one of the same kind on the same message or ticket. The core
 refuses (409) a proposal that does not apply any more: a message already out of the inbox, a closed

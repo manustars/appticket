@@ -21,6 +21,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(reply))
         .routes(routes!(set_state))
         .routes(routes!(set_priority))
+        .routes(routes!(get_draft, save_draft))
         .routes(routes!(accept_proposal))
         .routes(routes!(discard_proposal))
         .routes(routes!(set_assignee))
@@ -427,5 +428,41 @@ async fn discard_proposal(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     crate::proposals::discard(&state.db, id, agent.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The signed-in agent's unsent draft on the ticket, or null.
+#[utoipa::path(get, path = "/api/tickets/{number}/draft", tag = "tickets",
+    params(("number" = i64, Path, description = "The ticket's number")),
+    responses((status = OK, body = Option<crate::drafts::Draft>), (status = NOT_FOUND, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn get_draft(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(number): Path<i64>,
+) -> Result<Json<Option<crate::drafts::Draft>>, ApiError> {
+    Ok(Json(crate::drafts::get(&state.db, number, agent.id).await?))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct DraftChange {
+    mode: crate::drafts::DraftMode,
+    /// The text so far; empty removes the draft.
+    body: String,
+}
+
+/// Saves the signed-in agent's draft on the ticket. Sending a reply or a note clears it.
+#[utoipa::path(put, path = "/api/tickets/{number}/draft", tag = "tickets",
+    params(("number" = i64, Path, description = "The ticket's number")),
+    request_body = DraftChange,
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn save_draft(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(number): Path<i64>,
+    Json(change): Json<DraftChange>,
+) -> Result<StatusCode, ApiError> {
+    crate::drafts::save(&state.db, number, agent.id, change.mode, &change.body).await?;
     Ok(StatusCode::NO_CONTENT)
 }

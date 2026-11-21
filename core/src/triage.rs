@@ -7,12 +7,16 @@ use uuid::Uuid;
 use crate::error::{Error, Result, rule};
 
 /// The message's sender and subject, locked, if it is still waiting in the inbox.
-async fn lock_waiting(
-    tx: &mut Transaction<'_, Postgres>,
-    message: Uuid,
-) -> Result<(String, String)> {
-    let row: Option<(String, String, bool)> = sqlx::query_as(
-        "SELECT from_address, subject, ticket_id IS NULL AND discarded_at IS NULL
+/// A message waiting in the inbox: sender's address and name, and subject.
+struct Waiting {
+    from: String,
+    from_name: Option<String>,
+    subject: String,
+}
+
+async fn lock_waiting(tx: &mut Transaction<'_, Postgres>, message: Uuid) -> Result<Waiting> {
+    let row: Option<(String, Option<String>, String, bool)> = sqlx::query_as(
+        "SELECT from_address, from_name, subject, ticket_id IS NULL AND discarded_at IS NULL
          FROM messages WHERE id = $1 AND direction = 'inbound' FOR UPDATE",
     )
     .bind(message)
@@ -20,8 +24,12 @@ async fn lock_waiting(
     .await?;
     match row {
         None => Err(Error::NotFound("message")),
-        Some((_, _, false)) => rule("the message is no longer in the inbox"),
-        Some((from, subject, true)) => Ok((from, subject)),
+        Some((_, _, _, false)) => rule("the message is no longer in the inbox"),
+        Some((from, from_name, subject, true)) => Ok(Waiting {
+            from,
+            from_name: from_name.filter(|n| !n.trim().is_empty()),
+            subject,
+        }),
     }
 }
 
@@ -30,7 +38,11 @@ async fn lock_waiting(
 /// Returns the new ticket's number.
 pub async fn open_ticket(db: &PgPool, message: Uuid, customer: Uuid) -> Result<i64> {
     let mut tx = db.begin().await?;
-    let (from, subject) = lock_waiting(&mut tx, message).await?;
+    let Waiting {
+        from,
+        from_name,
+        subject,
+    } = lock_waiting(&mut tx, message).await?;
 
     let offboarded: Option<bool> =
         sqlx::query_scalar("SELECT offboarded_at IS NOT NULL FROM customers WHERE id = $1")
@@ -52,7 +64,15 @@ pub async fn open_ticket(db: &PgPool, message: Uuid, customer: Uuid) -> Result<i
         .fetch_optional(&mut *tx)
         .await?;
         match existing {
-            Some((id, of, _)) if of == customer => Some(id),
+            Some((id, of, _)) if of == customer => {
+                // Learn the requester's name from the message when it was not known yet.
+                sqlx::query("UPDATE requesters SET name = $2 WHERE id = $1 AND name IS NULL")
+                    .bind(id)
+                    .bind(&from_name)
+                    .execute(&mut *tx)
+                    .await?;
+                Some(id)
+            }
             Some((_, _, other)) => {
                 return rule(format!(
                     "the sender is already a requester of {other}, and a requester belongs to one customer"
@@ -60,12 +80,15 @@ pub async fn open_ticket(db: &PgPool, message: Uuid, customer: Uuid) -> Result<i
             }
             None => {
                 let id = Uuid::new_v4();
-                sqlx::query("INSERT INTO requesters (id, customer_id, email) VALUES ($1, $2, $3)")
-                    .bind(id)
-                    .bind(customer)
-                    .bind(&from)
-                    .execute(&mut *tx)
-                    .await?;
+                sqlx::query(
+                    "INSERT INTO requesters (id, customer_id, email, name) VALUES ($1, $2, $3, $4)",
+                )
+                .bind(id)
+                .bind(customer)
+                .bind(&from)
+                .bind(&from_name)
+                .execute(&mut *tx)
+                .await?;
                 Some(id)
             }
         }
@@ -165,6 +188,23 @@ mod tests {
         assert_eq!((customer, email.as_str()), (c, "new.person@mail.test"));
         // The message has left the inbox.
         assert!(matches!(discard(&db, m).await, Err(Error::Rule(_))));
+    }
+
+    #[sqlx::test]
+    async fn the_sender_s_name_is_kept(db: PgPool) {
+        let c = testing::customer(&db, "Brightfield").await;
+        let m = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO messages (id, direction, from_address, from_name, subject, body_text)
+             VALUES ($1, 'inbound', 'lena.moro@mail.test', 'Lena Moro', 'VPN', '...')",
+        )
+        .bind(m)
+        .execute(&db)
+        .await
+        .unwrap();
+        let n = open_ticket(&db, m, c).await.unwrap();
+        let ticket = crate::tickets::detail(&db, n).await.unwrap();
+        assert_eq!(ticket.requester.unwrap().name.as_deref(), Some("Lena Moro"));
     }
 
     #[sqlx::test]
