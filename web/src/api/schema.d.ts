@@ -281,6 +281,11 @@ export interface components {
             is_help_desk: boolean;
             name: string;
         };
+        /**
+         * @description Whether the help desk received a message or sent it.
+         * @enum {string}
+         */
+        Direction: "inbound" | "outbound";
         Health: {
             status: string;
         };
@@ -300,8 +305,7 @@ export interface components {
             body_text: string;
             /** Format: date-time */
             created_at: string;
-            /** @description "inbound" or "outbound". */
-            direction: string;
+            direction: components["schemas"]["Direction"];
             from_address: string;
             from_name?: string | null;
             /** Format: uuid */

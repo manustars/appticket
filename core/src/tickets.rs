@@ -229,11 +229,19 @@ pub enum TimelineEntry {
     Note(NoteEntry),
 }
 
+/// Whether the help desk received a message or sent it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema, sqlx::Type)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "text", rename_all = "lowercase")]
+pub enum Direction {
+    Inbound,
+    Outbound,
+}
+
 #[derive(Serialize, ToSchema, sqlx::FromRow)]
 pub struct MessageEntry {
     pub id: Uuid,
-    /// "inbound" or "outbound".
-    pub direction: String,
+    pub direction: Direction,
     pub from_address: String,
     pub from_name: Option<String>,
     pub to_address: Option<String>,
@@ -442,7 +450,7 @@ mod tests {
             .timeline
             .iter()
             .map(|e| match e {
-                TimelineEntry::Message(m) if m.direction == "inbound" => "in",
+                TimelineEntry::Message(m) if m.direction == Direction::Inbound => "in",
                 TimelineEntry::Message(_) => "out",
                 TimelineEntry::Note(_) => "note",
             })

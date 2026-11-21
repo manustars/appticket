@@ -102,8 +102,27 @@ impl IntoResponse for ApiError {
                 )
             }
         };
-        (status, Json(Problem { error })).into_response()
+        (
+            status,
+            Json(Problem {
+                error: sentence(&error),
+            }),
+        )
+            .into_response()
     }
+}
+
+/// Shown to agents as is: capitalised and ending with a full stop.
+fn sentence(text: &str) -> String {
+    let mut chars = text.trim().chars();
+    let mut out: String = match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => return String::new(),
+    };
+    if !out.ends_with(['.', '!', '?']) {
+        out.push('.');
+    }
+    out
 }
 
 /// Why a request failed, in words an agent can read.

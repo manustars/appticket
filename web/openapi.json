@@ -800,6 +800,14 @@
           }
         }
       },
+      "Direction": {
+        "type": "string",
+        "description": "Whether the help desk received a message or sent it.",
+        "enum": [
+          "inbound",
+          "outbound"
+        ]
+      },
       "Health": {
         "type": "object",
         "required": [
@@ -872,8 +880,7 @@
             "format": "date-time"
           },
           "direction": {
-            "type": "string",
-            "description": "\"inbound\" or \"outbound\"."
+            "$ref": "#/components/schemas/Direction"
           },
           "from_address": {
             "type": "string"

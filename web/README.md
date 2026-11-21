@@ -5,7 +5,7 @@ API.
 
 ```sh
 npm install
-npm run dev     # dev server; /api is proxied to the core at http://127.0.0.1:8080
+npm run dev     # dev server; /api is proxied to the core at $HD_CORE_URL (default http://127.0.0.1:8080)
 npm run build   # type-check and build into dist/
 npm run lint
 ```

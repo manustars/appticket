@@ -5,11 +5,19 @@
   --muted: #5d6675;
   --line: #dfe3e8;
   --accent: #2f5fd0;
+  --on-accent: #ffffff;
   --danger: #b42318;
   --open: #2f5fd0;
   --waiting: #a15c00;
   --resolved: #2e7d32;
   --closed: #6b7280;
+  /* Notes are internal: everything about them is tinted, so they never pass for a reply. */
+  --note-bg: #fff6d6;
+  --note-line: #e3c25a;
+  --note-ink: #7a5300;
+  --note-button: #8a5a00;
+  --note-button-text: #ffffff;
+  --reply-bg: #eef3ff;
   font: 15px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   color: var(--text);
   background: var(--bg);
@@ -23,11 +31,18 @@
     --muted: #9aa3af;
     --line: #2d333c;
     --accent: #7aa2ff;
+    --on-accent: #14171c;
     --danger: #ff8a80;
     --open: #7aa2ff;
     --waiting: #f0b35a;
     --resolved: #7bc67e;
     --closed: #9aa3af;
+    --note-bg: #2c2615;
+    --note-line: #6e5b23;
+    --note-ink: #f0c96a;
+    --note-button: #f0c96a;
+    --note-button-text: #14171c;
+    --reply-bg: #1a2336;
   }
 }
 
@@ -44,11 +59,11 @@ button {
   padding: 0.4rem 0.8rem;
   cursor: pointer;
 }
-button[type='submit'] { background: var(--accent); border-color: var(--accent); color: #fff; }
+button[type='submit'] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 button:disabled { opacity: 0.6; cursor: default; }
 button.quiet { border-color: transparent; background: transparent; color: var(--muted); }
 
-input {
+input, select, textarea {
   font: inherit;
   width: 100%;
   margin-top: 0.25rem;
@@ -58,6 +73,20 @@ input {
   background: var(--bg);
   color: var(--text);
 }
+select { width: auto; margin-top: 0; padding: 0.3rem 0.5rem; }
+textarea { display: block; margin-top: 0; resize: vertical; }
+a { color: var(--accent); }
+button.danger { color: var(--danger); }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.muted { color: var(--muted); }
 
 .center { min-height: 100vh; display: grid; place-items: center; padding: 1rem; }
 .sign-in {
@@ -112,3 +141,120 @@ td:nth-child(2) { white-space: normal; }
 .inbox .from { display: flex; justify-content: space-between; gap: 1rem; color: var(--muted); font-size: 0.9rem; }
 .inbox .subject { font-weight: 600; margin-top: 0.2rem; }
 .inbox .body { margin: 0.4rem 0 0; white-space: pre-wrap; color: var(--text); }
+
+.tickets tbody tr { cursor: pointer; }
+.tickets tbody tr:hover { background: var(--bg); }
+.tickets td a { color: inherit; text-decoration: none; }
+.tickets td a:hover, .tickets td a:focus-visible { text-decoration: underline; }
+
+.done { margin: 0 0 0.6rem; }
+.inbox .actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.7rem; }
+.inbox .actions button.current { border-color: var(--accent); color: var(--accent); }
+.inbox .action-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--line);
+}
+.inbox .action-form label { color: var(--muted); font-size: 0.9rem; }
+.inbox .action-form input { width: 8rem; margin-top: 0; }
+.inbox .error { margin-top: 0.5rem; }
+
+.ticket { max-width: 56rem; margin: 0 auto; display: grid; gap: 0.9rem; }
+.ticket h1 { margin: 0; }
+.ticket h1 .number { font-weight: 400; }
+.back { justify-self: start; text-decoration: none; font-size: 0.9rem; }
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 2rem;
+  margin: 0;
+  padding: 0.8rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.facts dt { color: var(--muted); font-size: 0.8rem; }
+.facts dd { margin: 0.15rem 0 0; }
+select.state { font-weight: 500; }
+
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
+.entry {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 8px;
+  padding: 0.7rem 1rem;
+}
+.entry.inbound { border-left-color: var(--line); }
+.entry.outbound { border-left-color: var(--accent); }
+.entry.note { background: var(--note-bg); border-color: var(--note-line); border-style: dashed; border-left-style: solid; }
+.entry-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem 0.6rem; font-size: 0.9rem; }
+.entry-head .when { margin-left: auto; font-size: 0.85rem; }
+.entry .subject { font-weight: 600; margin-top: 0.2rem; }
+.entry .body { margin: 0.4rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.entry .error { margin-top: 0.4rem; font-size: 0.9rem; }
+.tag {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.entry.outbound .tag { color: var(--accent); }
+.tag.note-tag { color: var(--note-ink); }
+.status { font-size: 0.8rem; padding: 0 0.45em; border-radius: 999px; border: 1px solid currentColor; }
+.status.queued { color: var(--waiting); }
+.status.sent { color: var(--resolved); }
+
+.closed-notice {
+  margin: 0;
+  padding: 0.8rem 1rem;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+}
+
+/* The composer's mode must be impossible to miss: colour, border, hint and button all change. */
+.composer {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.8rem 1rem 1rem;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  background: var(--reply-bg);
+}
+.composer.note { border-color: var(--note-line); border-style: dashed; background: var(--note-bg); }
+.composer .modes { display: flex; gap: 0.4rem; margin: 0; padding: 0; border: 0; }
+.composer .modes label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  cursor: pointer;
+  font-weight: 500;
+}
+.composer .modes label:has(input:disabled) { opacity: 0.5; cursor: default; }
+.composer .modes label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.composer .modes input { width: auto; margin: 0; accent-color: var(--accent); }
+.composer.reply .modes label.current { border-color: var(--accent); color: var(--accent); }
+.composer.note .modes label.current { border-color: var(--note-line); color: var(--note-ink); }
+.composer.note .modes input { accent-color: var(--note-button); }
+.composer .mode-hint { margin: 0; font-size: 0.9rem; }
+.composer.reply .mode-hint { color: var(--accent); }
+.composer.note .mode-hint { color: var(--note-ink); }
+.composer textarea { background: var(--surface); }
+.composer-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.6rem; }
+.composer-foot label { color: var(--muted); font-size: 0.9rem; margin-right: auto; }
+.composer.note button[type='submit'] {
+  background: var(--note-button);
+  border-color: var(--note-button);
+  color: var(--note-button-text);
+}
