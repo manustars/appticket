@@ -32,6 +32,8 @@ export function ProposalWhat({ proposal: p }: { proposal: Proposal }) {
       return <>{t('proposals.priority', { priority: t(`priority.${c.priority}`) })}</>
     case 'assets':
       return <>{t('proposals.assets', { assets: p.assets.map((a) => `${a.name} (${a.kind})`).join(', ') })}</>
+    case 'services':
+      return <>{t('proposals.services', { services: p.services.map((s) => s.name).join(', ') })}</>
     case 'reply':
       return (
         <>

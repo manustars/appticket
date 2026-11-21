@@ -83,11 +83,18 @@ export async function choose(locale: Locale): Promise<Loaded | null> {
 
 /**
  * The locale dates and numbers are formatted in: the browser's own tag for the UI's language, so
- * that an agent with en-GB gets British dates, else the UI's language itself.
+ * that an agent with en-GB or en-US gets their own dates, else a default variant of the language.
  */
 export function formattingLocale(locale: Locale): string {
-  return browserTags().find((tag) => primary(tag) === locale) ?? locale
+  return browserTags().find((tag) => primary(tag) === locale) ?? defaultFormatting[locale] ?? locale
 }
+
+/**
+ * How a language formats dates when the browser does not say which variant the agent uses. Plain
+ * "en" would be US style (month first, 12-hour); day first and 24-hour is the likelier reading for
+ * an agent whose browser speaks another language.
+ */
+const defaultFormatting: Partial<Record<Locale, string>> = { en: 'en-GB' }
 
 /** Makes the document say which language it is in. */
 export function applyLocale({ locale, catalog }: Loaded) {

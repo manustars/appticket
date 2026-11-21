@@ -110,6 +110,9 @@ export interface Messages {
   "composer.then": { plural: false; placeholders: never; tags: never }
   "composer.sendReply": { plural: false; placeholders: "email"; tags: never }
   "composer.addNote": { plural: false; placeholders: never; tags: never }
+  "composer.draftSaving": { plural: false; placeholders: never; tags: never }
+  "composer.draftSaved": { plural: false; placeholders: never; tags: never }
+  "composer.draftNotSaved": { plural: false; placeholders: "error"; tags: never }
   "move.to": { plural: false; placeholders: never; tags: never }
   "move.requesterBelongs": { plural: false; placeholders: "customer" | "email"; tags: never }
   "move.requesterToo": { plural: false; placeholders: never; tags: never }
@@ -252,6 +255,7 @@ export interface Messages {
   "proposals.discardMessage": { plural: false; placeholders: never; tags: never }
   "proposals.priority": { plural: false; placeholders: "priority"; tags: never }
   "proposals.assets": { plural: false; placeholders: "assets"; tags: never }
+  "proposals.services": { plural: false; placeholders: "services"; tags: never }
   "proposals.reply": { plural: false; placeholders: never; tags: never }
   "proposals.replaceDraft": { plural: false; placeholders: "addon"; tags: never }
   "proposals.draftReady": { plural: false; placeholders: "addon"; tags: "strong" }

@@ -8,6 +8,8 @@ export type Asset = Schemas['Asset']
 export type CustomerDetail = Schemas['CustomerDetail']
 export type CustomerEntry = Schemas['CustomerEntry']
 export type CustomerSummary = Schemas['CustomerSummary']
+export type Draft = Schemas['Draft']
+export type DraftMode = Schemas['DraftMode']
 export type InboxMessage = Schemas['InboxMessage']
 export type Moved = Schemas['Moved']
 export type Priority = Schemas['Priority']
@@ -32,9 +34,10 @@ export class Refused extends Error {
   }
 }
 
-async function call(method: string, path: string, body?: unknown): Promise<Response> {
+async function call(method: string, path: string, body?: unknown, keepalive = false): Promise<Response> {
   const response = await fetch(path, {
     method,
+    keepalive,
     credentials: 'same-origin',
     headers: body === undefined ? {} : { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -146,6 +149,20 @@ export async function addNote(number: number, body: string): Promise<void> {
 export async function reply(number: number, body: string, then?: TicketState): Promise<void> {
   const request: Schemas['NewReply'] = { body, then }
   await call('POST', `${ticketPath(number)}/replies`, request)
+}
+
+/** The signed-in agent's unsent draft on the ticket, or null. */
+export function getDraft(number: number): Promise<Draft | null> {
+  return json('GET', `${ticketPath(number)}/draft`)
+}
+
+/**
+ * Saves the signed-in agent's draft; an empty body removes it. With `keepalive` the request
+ * outlives the page, for saving while it is being left.
+ */
+export async function saveDraft(number: number, mode: DraftMode, body: string, keepalive = false): Promise<void> {
+  const request: Schemas['DraftChange'] = { mode, body }
+  await call('PUT', `${ticketPath(number)}/draft`, request, keepalive)
 }
 
 export async function setPriority(number: number, priority: Priority): Promise<void> {

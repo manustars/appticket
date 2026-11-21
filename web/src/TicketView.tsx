@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
   addNote,
+  getDraft,
   getTicket,
   listAgents,
   listCustomers,
@@ -22,6 +23,7 @@ import {
 } from './api/client'
 import { useI18n } from './i18n/context'
 import { addonName } from './addon'
+import { useDraftKeeper, type SaveState } from './drafts'
 import { TicketProposals } from './Proposals'
 import { TicketAssets, TicketFamily, TicketServices } from './TicketLinks'
 import { useLoad } from './useAction'
@@ -59,7 +61,13 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
   const [chosen, setChosen] = useState<Mode | null>(null)
   // The add-on whose accepted draft is in the composer, unsent.
   const [draftFrom, setDraftFrom] = useState<string | null>(null)
-  const composerText = useRef<HTMLTextAreaElement>(null)
+  // Asks the composer to come into view with the focus; bumped when a draft is put into it.
+  const [focusAsked, setFocusAsked] = useState(0)
+  // The composer's text is kept on the core as the agent's draft.
+  const keeper = useDraftKeeper(number, onSignedOut)
+  const { known } = keeper
+  // Set once the agent types or picks a mode: a draft loaded after that does not overwrite it.
+  const touched = useRef(false)
 
   const fail = useCallback((error: unknown, show: (error: unknown) => void) => {
     if (error instanceof Unauthorized) onSignedOut()
@@ -87,6 +95,22 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
       clearInterval(timer)
     }
   }, [load])
+
+  useEffect(() => {
+    // The agent's unsent text, from when they last left this ticket.
+    let gone = false
+    getDraft(number).then((saved) => {
+      if (gone || touched.current) return
+      if (saved) {
+        setDraft(saved.body)
+        setChosen(saved.mode)
+        known({ mode: saved.mode, body: saved.body })
+      } else {
+        known({ mode: 'reply', body: '' })
+      }
+    }, (error) => fail(error, setActionError))
+    return () => { gone = true }
+  }, [number, fail, known])
 
   useEffect(() => {
     listAgents().then(setAgents, (error) => fail(error, setActionError))
@@ -121,10 +145,11 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
     setDraft(body)
     setChosen('reply')
     setDraftFrom(addon)
-    requestAnimationFrame(() => {
-      composerText.current?.scrollIntoView({ block: 'center' })
-      composerText.current?.focus()
-    })
+    // Accepting saved it as this agent's draft; saving it again, after any save still on its way,
+    // makes sure an older text typed before cannot land last.
+    keeper.changed({ mode: 'reply', body })
+    keeper.flush()
+    setFocusAsked((n) => n + 1)
   }
 
   function changeState(state: TicketState) {
@@ -243,13 +268,23 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
       {closed && (
         <p className="closed-notice">{t('ticket.closedNotice')}</p>
       )}
-      <Composer ticket={ticket} body={draft} chosen={chosen} draftFrom={draftFrom} textarea={composerText}
+      <Composer ticket={ticket} body={draft} chosen={chosen} draftFrom={draftFrom} focusAsked={focusAsked}
+        saveState={keeper.saveState}
         onBody={(body) => {
+          touched.current = true
           setDraft(body)
           if (!body.trim()) setDraftFrom(null)
+          keeper.changed({ mode: composerMode(ticket, chosen), body })
         }}
-        onChoose={setChosen}
-        onDone={() => {
+        onChoose={(mode) => {
+          touched.current = true
+          setChosen(mode)
+          keeper.changed({ mode: composerMode(ticket, mode), body: draft })
+        }}
+        onLeave={keeper.flush}
+        onDone={(mode) => {
+          // Sending cleared the draft on the core.
+          known({ mode, body: '' })
           setDraftFrom(null)
           void load()
           onChanged()
@@ -309,17 +344,32 @@ const strong = (inner: ReactNode) => <strong>{inner}</strong>
 // confirmation.
 const thenStates: TicketState[] = ['open', 'waiting', 'resolved']
 
-function Composer({ ticket, body, chosen: picked, draftFrom, textarea, onBody, onChoose, onDone, onSignedOut }: {
+/** What the composer writes: the agent's pick when a reply is possible, else a note. */
+function composerMode(ticket: TicketDetail, picked: Mode | null): Mode {
+  const canReply = Boolean(ticket.requester) && ticket.state !== 'closed'
+  return canReply ? picked ?? 'reply' : 'note'
+}
+
+/** The tallest the composer grows before it scrolls, in px. */
+const composerMaxHeight = () => Math.min(window.innerHeight * 0.6, 520)
+
+function Composer({ ticket, body, chosen: picked, draftFrom, focusAsked, saveState, onBody, onChoose, onLeave, onDone, onSignedOut }: {
   ticket: TicketDetail
   body: string
   /** The mode the agent picked; null for the default. The poll never changes it. */
   chosen: Mode | null
   /** The add-on whose accepted draft reply is in the composer, not sent yet. */
   draftFrom: string | null
-  textarea: RefObject<HTMLTextAreaElement | null>
+  /** Changes when the composer should come into view with the focus. */
+  focusAsked: number
+  /** Whether the text is saved as the agent's draft. */
+  saveState: SaveState
   onBody: (body: string) => void
   onChoose: (mode: Mode) => void
-  onDone: () => void
+  /** The composer lost the focus: save the draft now. */
+  onLeave: () => void
+  /** Sent; `mode` is what was sent. */
+  onDone: (mode: Mode) => void
   onSignedOut: () => void
 }) {
   const { t, rich, errorText } = useI18n()
@@ -336,6 +386,23 @@ function Composer({ ticket, body, chosen: picked, draftFrom, textarea, onBody, o
   const canReply = requester !== null && requester !== undefined && !closed
   const mode: Mode = canReply ? chosen : 'note'
 
+  const textarea = useRef<HTMLTextAreaElement>(null)
+
+  // The text area grows with what is in it, so that a long draft shows whole, up to a limit.
+  useLayoutEffect(() => {
+    const area = textarea.current
+    if (!area) return
+    area.style.height = 'auto'
+    const borders = area.offsetHeight - area.clientHeight
+    area.style.height = `${Math.min(area.scrollHeight + borders, composerMaxHeight())}px`
+  }, [body, mode])
+
+  useEffect(() => {
+    if (!focusAsked) return
+    textarea.current?.scrollIntoView({ block: 'center' })
+    textarea.current?.focus()
+  }, [focusAsked])
+
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (busy || !body.trim()) return
@@ -346,7 +413,7 @@ function Composer({ ticket, body, chosen: picked, draftFrom, textarea, onBody, o
       else await addNote(ticket.number, body)
       setBody('')
       setThen('waiting')
-      onDone()
+      onDone(mode)
     } catch (e) {
       if (e instanceof Unauthorized) onSignedOut()
       else setError(e)
@@ -389,7 +456,7 @@ function Composer({ ticket, body, chosen: picked, draftFrom, textarea, onBody, o
       )}
       <textarea ref={textarea} id={`${id}-body`} rows={5} value={body} aria-describedby={`${id}-hint`}
         placeholder={mode === 'reply' ? t('composer.replyPlaceholder') : t('composer.notePlaceholder')}
-        onChange={(e) => setBody(e.target.value)} />
+        onChange={(e) => setBody(e.target.value)} onBlur={onLeave} />
       {error !== null && <p className="error" role="alert">{errorText(error)}</p>}
       <div className="composer-foot">
         {mode === 'reply' && (
@@ -399,6 +466,13 @@ function Composer({ ticket, body, chosen: picked, draftFrom, textarea, onBody, o
               {thenStates.map((s) => <option key={s} value={s}>{t(`state.${s}`)}</option>)}
             </select>
           </label>
+        )}
+        {saveState?.kind === 'saving' && <span className="draft-status">{t('composer.draftSaving')}</span>}
+        {saveState?.kind === 'saved' && <span className="draft-status">{t('composer.draftSaved')}</span>}
+        {saveState?.kind === 'failed' && (
+          <span className="draft-status error" role="alert">
+            {t('composer.draftNotSaved', { error: errorText(saveState.error) })}
+          </span>
         )}
         <button type="submit" disabled={busy || !body.trim()}>
           {mode === 'reply' && requester ? t('composer.sendReply', { email: requester.email }) : t('composer.addNote')}

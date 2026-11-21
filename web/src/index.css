@@ -479,3 +479,9 @@ select.priority.urgent { color: var(--danger); border-color: var(--danger); back
   font-size: 0.9rem;
 }
 .inbox .inbox-proposal li.proposal { padding: 0; border: 0; border-radius: 0; background: none; }
+
+/* The composer grows with its text up to a limit (set by the code), then scrolls. */
+.composer textarea { overflow-y: auto; min-height: 7.5rem; }
+.composer-foot .draft-status { margin-left: auto; color: var(--muted); font-size: 0.85rem; }
+.composer-foot .draft-status.error { color: var(--danger); }
+.composer-foot:has(.draft-status) label { margin-right: 0; }

@@ -112,6 +112,9 @@
   "composer.then": "Then set the ticket to",
   "composer.sendReply": "Send reply to {email}",
   "composer.addNote": "Add internal note",
+  "composer.draftSaving": "Saving the draft…",
+  "composer.draftSaved": "Draft saved",
+  "composer.draftNotSaved": "The draft could not be saved: {error}",
   "move.to": "Move this ticket to",
   "move.requesterBelongs": "The requester {email} belongs to {customer}.",
   "move.requesterToo": "The requester was assigned to the wrong customer: move them too",
@@ -269,6 +272,7 @@
   "proposals.discardMessage": "Discard the message",
   "proposals.priority": "Set the priority to {priority}",
   "proposals.assets": "Link the assets: {assets}",
+  "proposals.services": "Link the services: {services}",
   "proposals.reply": "A draft reply to the requester:",
   "proposals.replaceDraft": "Replace what you have written in the composer with the draft from {addon}?",
   "proposals.draftReady": "The draft from {addon} is below. <strong>Nothing has been sent yet</strong>: read it, change it if needed, then send it yourself."
