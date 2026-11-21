@@ -10,32 +10,35 @@ import {
   type InboxMessage,
   type TicketSummary,
 } from './api/client'
-import { formatTime, stateLabels } from './format'
+import { useI18n } from './i18n/context'
+import { LanguageSwitcher } from './i18n/LanguageSwitcher'
 import { Inbox } from './Inbox'
 import { go, inboxHref, ticketHref, ticketsHref, useRoute } from './route'
 import { TicketView } from './TicketView'
 
 function App() {
   // undefined: still asking the core; null: nobody signed in.
+  const { t } = useI18n()
   const [agent, setAgent] = useState<Agent | null | undefined>(undefined)
-  const [error, setError] = useState<string | null>(null)
+  const [unreachable, setUnreachable] = useState(false)
 
   useEffect(() => {
-    currentAgent().then(setAgent, () => setError('The core is not reachable.'))
+    currentAgent().then(setAgent, () => setUnreachable(true))
   }, [])
 
   const signedOut = useCallback(() => setAgent(null), [])
 
-  if (error) return <main className="center"><p className="error">{error}</p></main>
+  if (unreachable) return <main className="center"><p className="error">{t('error.unreachable')}</p></main>
   if (agent === undefined) return null
   if (agent === null) return <SignIn onSignedIn={setAgent} />
   return <Desk agent={agent} onSignedOut={signedOut} />
 }
 
 function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
+  const { t } = useI18n()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [failed, setFailed] = useState<string | null>(null)
+  const [failed, setFailed] = useState<'wrong' | 'unreachable' | null>(null)
   const [busy, setBusy] = useState(false)
 
   async function submit(event: FormEvent) {
@@ -47,10 +50,10 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
         const agent = await currentAgent()
         if (agent) onSignedIn(agent)
       } else {
-        setFailed('Wrong e-mail or password.')
+        setFailed('wrong')
       }
     } catch {
-      setFailed('The core is not reachable.')
+      setFailed('unreachable')
     } finally {
       setBusy(false)
     }
@@ -59,39 +62,45 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
   return (
     <main className="center">
       <form className="sign-in" onSubmit={submit}>
-        <h1>Help desk</h1>
+        <h1>{t('app.title')}</h1>
         <label>
-          E-mail
+          {t('signIn.email')}
           <input type="email" autoComplete="username" required value={email}
             onChange={(e) => setEmail(e.target.value)} />
         </label>
         <label>
-          Password
+          {t('signIn.password')}
           <input type="password" autoComplete="current-password" required value={password}
             onChange={(e) => setPassword(e.target.value)} />
         </label>
-        {failed && <p className="error" role="alert">{failed}</p>}
-        <button type="submit" disabled={busy}>Sign in</button>
+        {failed && (
+          <p className="error" role="alert">
+            {failed === 'wrong' ? t('signIn.wrong') : t('error.unreachable')}
+          </p>
+        )}
+        <button type="submit" disabled={busy}>{t('signIn.submit')}</button>
+        <LanguageSwitcher />
       </form>
     </main>
   )
 }
 
 function Desk({ agent, onSignedOut }: { agent: Agent; onSignedOut: () => void }) {
+  const { t, formatNumber } = useI18n()
   const route = useRoute()
   const [tickets, setTickets] = useState<TicketSummary[] | null>(null)
   const [inbox, setInbox] = useState<InboxMessage[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
       const [t, i] = await Promise.all([listTickets(), listInbox()])
       setTickets(t)
       setInbox(i)
-      setError(null)
+      setLoadFailed(false)
     } catch (e) {
       if (e instanceof Unauthorized) onSignedOut()
-      else setError('Could not load from the core.')
+      else setLoadFailed(true)
     }
   }, [onSignedOut])
 
@@ -115,17 +124,18 @@ function Desk({ agent, onSignedOut }: { agent: Agent; onSignedOut: () => void })
       <header>
         <nav>
           <button className={route.view === 'inbox' ? '' : 'current'} onClick={() => go(ticketsHref)}>
-            Tickets {tickets && <span className="count">{tickets.length}</span>}
+            {t('desk.tickets')} {tickets && <span className="count">{formatNumber(tickets.length)}</span>}
           </button>
           <button className={route.view === 'inbox' ? 'current' : ''} onClick={() => go(inboxHref)}>
-            Inbox {inbox && <span className="count">{inbox.length}</span>}
+            {t('desk.inbox')} {inbox && <span className="count">{formatNumber(inbox.length)}</span>}
           </button>
         </nav>
         <span className="who">{agent.name}</span>
-        <button className="quiet" onClick={leave}>Sign out</button>
+        <LanguageSwitcher />
+        <button className="quiet" onClick={leave}>{t('desk.signOut')}</button>
       </header>
       <main>
-        {error && <p className="error" role="alert">{error}</p>}
+        {loadFailed && <p className="error" role="alert">{t('error.loadFailed')}</p>}
         {route.view === 'ticket' ? (
           <TicketView key={route.number} number={route.number} onChanged={refresh}
             onSignedOut={onSignedOut} />
@@ -140,27 +150,29 @@ function Desk({ agent, onSignedOut }: { agent: Agent; onSignedOut: () => void })
 }
 
 function Tickets({ tickets }: { tickets: TicketSummary[] | null }) {
+  const { t, formatTime } = useI18n()
   if (tickets === null) return null
-  if (tickets.length === 0) return <p className="empty">No tickets yet.</p>
+  if (tickets.length === 0) return <p className="empty">{t('tickets.empty')}</p>
   return (
     <table className="tickets">
       <thead>
         <tr>
-          <th>#</th><th>Title</th><th>Customer</th><th>Requester</th><th>Assignee</th><th>State</th>
-          <th>Updated</th>
+          <th>{t('tickets.number')}</th><th>{t('tickets.title')}</th><th>{t('tickets.customer')}</th>
+          <th>{t('tickets.requester')}</th><th>{t('tickets.assignee')}</th><th>{t('tickets.state')}</th>
+          <th>{t('tickets.updated')}</th>
         </tr>
       </thead>
       <tbody>
-        {tickets.map((t) => (
+        {tickets.map((ticket) => (
           // The title is the link; the rest of the row is a larger target for the mouse.
-          <tr key={t.id} onClick={() => go(ticketHref(t.number))}>
-            <td className="number">{t.number}</td>
-            <td><a href={ticketHref(t.number)}>{t.title}</a></td>
-            <td>{t.customer_name}</td>
-            <td>{t.requester_email ?? '—'}</td>
-            <td>{t.assignee_name ?? '—'}</td>
-            <td><span className={`state ${t.state}`}>{stateLabels[t.state]}</span></td>
-            <td className="when">{formatTime(t.updated_at)}</td>
+          <tr key={ticket.id} onClick={() => go(ticketHref(ticket.number))}>
+            <td className="number">{ticket.number}</td>
+            <td><a href={ticketHref(ticket.number)}>{ticket.title}</a></td>
+            <td>{ticket.customer_name}</td>
+            <td>{ticket.requester_email ?? '—'}</td>
+            <td>{ticket.assignee_name ?? '—'}</td>
+            <td><span className={`state ${ticket.state}`}>{t(`state.${ticket.state}`)}</span></td>
+            <td className="when">{formatTime(ticket.updated_at)}</td>
           </tr>
         ))}
       </tbody>

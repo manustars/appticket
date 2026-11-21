@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
   addNote,
   getTicket,
@@ -15,7 +15,7 @@ import {
   type TicketState,
   type TimelineEntry,
 } from './api/client'
-import { errorText, formatTime, stateLabels } from './format'
+import { useI18n } from './i18n/context'
 import { ticketsHref } from './route'
 
 const states: TicketState[] = ['open', 'waiting', 'resolved', 'closed']
@@ -28,19 +28,22 @@ interface Props {
 }
 
 export function TicketView({ number, onChanged, onSignedOut }: Props) {
+  const { t, formatTime, errorText } = useI18n()
   const [ticket, setTicket] = useState<TicketDetail | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
+  // Failures are kept as they came and put into words when shown, so they follow the language.
+  const [loadError, setLoadError] = useState<unknown>(null)
   const [agents, setAgents] = useState<AgentEntry[]>([])
-  const [actionError, setActionError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<unknown>(null)
   const [busy, setBusy] = useState(false)
   const [moving, setMoving] = useState(false)
-  const [notice, setNotice] = useState<string | null>(null)
+  // How many tickets the last move took along.
+  const [moved, setMoved] = useState<number | null>(null)
   // Only the latest load may update the view: a slow poll must not overwrite a newer answer.
   const latest = useRef(0)
 
-  const fail = useCallback((error: unknown, show: (text: string) => void) => {
+  const fail = useCallback((error: unknown, show: (error: unknown) => void) => {
     if (error instanceof Unauthorized) onSignedOut()
-    else show(errorText(error))
+    else show(error)
   }, [onSignedOut])
 
   const load = useCallback(async () => {
@@ -87,17 +90,15 @@ export function TicketView({ number, onChanged, onSignedOut }: Props) {
   }
 
   function changeState(state: TicketState) {
-    if (state === 'closed' && !window.confirm(
-      `Close ticket #${number}? Closing is final: the ticket cannot be reopened, and a new message ` +
-      'from the requester will open a new ticket.')) return
+    if (state === 'closed' && !window.confirm(t('ticket.confirmClose', { number }))) return
     void change(() => setState(number, state))
   }
 
   if (!ticket) {
     return (
       <div className="ticket">
-        <a className="back" href={ticketsHref}>← Tickets</a>
-        {loadError && <p className="error" role="alert">{loadError}</p>}
+        <a className="back" href={ticketsHref}>{t('ticket.back')}</a>
+        {loadError !== null && <p className="error" role="alert">{errorText(loadError)}</p>}
       </div>
     )
   }
@@ -106,45 +107,45 @@ export function TicketView({ number, onChanged, onSignedOut }: Props) {
   const requester = ticket.requester
   return (
     <div className="ticket">
-      <a className="back" href={ticketsHref}>← Tickets</a>
+      <a className="back" href={ticketsHref}>{t('ticket.back')}</a>
       <h1><span className="number">#{ticket.number}</span> {ticket.title}</h1>
-      {loadError && <p className="error" role="alert">{loadError}</p>}
+      {loadError !== null && <p className="error" role="alert">{errorText(loadError)}</p>}
 
       <dl className="facts">
         <div>
-          <dt>Customer</dt>
+          <dt>{t('ticket.customer')}</dt>
           <dd>
             {ticket.customer.name}{' '}
             {!closed && !moving && (
               <button type="button" className="link" disabled={busy} onClick={() => setMoving(true)}>
-                Change
+                {t('ticket.changeCustomer')}
               </button>
             )}
           </dd>
         </div>
         <div>
-          <dt>Requester</dt>
+          <dt>{t('ticket.requester')}</dt>
           <dd>
             {requester
               ? requester.name ? <>{requester.name} <span className="muted">&lt;{requester.email}&gt;</span></> : requester.email
-              : <span className="muted">None</span>}
+              : <span className="muted">{t('ticket.noRequester')}</span>}
           </dd>
         </div>
         <div>
-          <dt><label htmlFor="ticket-state">State</label></dt>
+          <dt><label htmlFor="ticket-state">{t('ticket.state')}</label></dt>
           <dd>
             <select id="ticket-state" className={`state ${ticket.state}`} value={ticket.state}
               disabled={closed || busy} onChange={(e) => changeState(e.target.value as TicketState)}>
-              {states.map((s) => <option key={s} value={s}>{stateLabels[s]}</option>)}
+              {states.map((s) => <option key={s} value={s}>{t(`state.${s}`)}</option>)}
             </select>
           </dd>
         </div>
         <div>
-          <dt><label htmlFor="ticket-assignee">Assignee</label></dt>
+          <dt><label htmlFor="ticket-assignee">{t('ticket.assignee')}</label></dt>
           <dd>
             <select id="ticket-assignee" value={ticket.assignee?.id ?? ''} disabled={closed || busy}
               onChange={(e) => void change(() => setAssignee(number, e.target.value || null))}>
-              <option value="">Unassigned</option>
+              <option value="">{t('ticket.unassigned')}</option>
               {/* The current assignee stays visible even before the agents list arrives. */}
               {ticket.assignee && !agents.some((a) => a.id === ticket.assignee?.id) && (
                 <option value={ticket.assignee.id}>{ticket.assignee.name}</option>
@@ -153,34 +154,35 @@ export function TicketView({ number, onChanged, onSignedOut }: Props) {
             </select>
           </dd>
         </div>
-        <div><dt>Opened</dt><dd className="when">{formatTime(ticket.created_at)}</dd></div>
+        <div><dt>{t('ticket.opened')}</dt><dd className="when">{formatTime(ticket.created_at)}</dd></div>
       </dl>
       {moving && (
         <MoveCustomer ticket={ticket} busy={busy} onCancel={() => setMoving(false)}
           onMove={async (customerId, requesterMove) => {
-            let moved = 0
+            let count = 0
             const ok = await change(async () => {
-              moved = await moveTicket(number, customerId, requesterMove)
+              count = await moveTicket(number, customerId, requesterMove)
             })
             if (ok) {
               setMoving(false)
-              setNotice(moved > 1 ? `Moved ${moved} tickets of this requester.` : 'Ticket moved.')
+              setMoved(count)
             }
           }} />
       )}
-      {notice && <p className="done" role="status">{notice}</p>}
-      {actionError && <p className="error" role="alert">{actionError}</p>}
+      {moved !== null && (
+        <p className="done" role="status">
+          {moved > 1 ? t('ticket.movedWithRequester', { count: moved }) : t('ticket.moved')}
+        </p>
+      )}
+      {actionError !== null && <p className="error" role="alert">{errorText(actionError)}</p>}
 
       <ol className="timeline">
         {ticket.timeline.map((entry) => <Entry key={`${entry.kind}-${entry.id}`} entry={entry} />)}
-        {ticket.timeline.length === 0 && <li className="empty">Nothing written on this ticket yet.</li>}
+        {ticket.timeline.length === 0 && <li className="empty">{t('ticket.emptyTimeline')}</li>}
       </ol>
 
       {closed && (
-        <p className="closed-notice">
-          This ticket is closed, which is final. A new message from the requester opens a new ticket.
-          Agents can still add internal notes.
-        </p>
+        <p className="closed-notice">{t('ticket.closedNotice')}</p>
       )}
       <Composer ticket={ticket} onDone={() => { void load(); onChanged() }} onSignedOut={onSignedOut} />
     </div>
@@ -188,11 +190,12 @@ export function TicketView({ number, onChanged, onSignedOut }: Props) {
 }
 
 function Entry({ entry }: { entry: TimelineEntry }) {
+  const { t, formatTime } = useI18n()
   if (entry.kind === 'note') {
     return (
       <li className="entry note">
         <div className="entry-head">
-          <span className="tag note-tag">Internal note</span>
+          <span className="tag note-tag">{t('entry.note')}</span>
           <span className="who">{entry.author_name}</span>
           <time className="when" dateTime={entry.created_at}>{formatTime(entry.created_at)}</time>
         </div>
@@ -205,32 +208,33 @@ function Entry({ entry }: { entry: TimelineEntry }) {
   return (
     <li className={`entry message ${outbound ? 'outbound' : 'inbound'}`}>
       <div className="entry-head">
-        <span className="tag">{outbound ? 'Outgoing message' : 'Incoming message'}</span>
+        <span className="tag">{outbound ? t('entry.outgoing') : t('entry.incoming')}</span>
         <span className="who">
-          {outbound ? <>{entry.author_name ?? sender} <span className="muted">to {entry.to_address ?? '—'}</span></> : sender}
+          {outbound ? <>{entry.author_name ?? sender} <span className="muted">{t('entry.to', { address: entry.to_address ?? '—' })}</span></> : sender}
         </span>
         {outbound && (entry.sent_at
-          ? <span className="status sent">Sent {formatTime(entry.sent_at)}</span>
+          ? <span className="status sent">{t('entry.sent', { time: formatTime(entry.sent_at) })}</span>
           : entry.gave_up
-            ? <span className="status failed">Not sent</span>
-            : <span className="status queued">Queued</span>)}
+            ? <span className="status failed">{t('entry.notSent')}</span>
+            : <span className="status queued">{t('entry.queued')}</span>)}
         <time className="when" dateTime={entry.created_at}>{formatTime(entry.created_at)}</time>
       </div>
       {entry.subject && <div className="subject">{entry.subject}</div>}
       <p className="body">{entry.body_text}</p>
       {outbound && !entry.sent_at && entry.gave_up && (
         <p className="error" role="alert">
-          This message was not sent: the help desk stopped trying. Last error: {entry.last_error ?? 'unknown'}
+          {t('entry.gaveUp', { error: entry.last_error ?? t('entry.unknownError') })}
         </p>
       )}
       {outbound && !entry.sent_at && !entry.gave_up && entry.last_error && (
-        <p className="error">Not sent yet, will try again: {entry.last_error}</p>
+        <p className="error">{t('entry.retrying', { error: entry.last_error })}</p>
       )}
     </li>
   )
 }
 
 type Mode = 'reply' | 'note'
+const strong = (inner: ReactNode) => <strong>{inner}</strong>
 // Closed is left out on purpose: closing is final and goes through the state control and its
 // confirmation.
 const thenStates: TicketState[] = ['open', 'waiting', 'resolved']
@@ -240,13 +244,14 @@ function Composer({ ticket, onDone, onSignedOut }: {
   onDone: () => void
   onSignedOut: () => void
 }) {
+  const { t, rich, errorText } = useI18n()
   const requester = ticket.requester
   // Chosen once per ticket; the poll never changes it.
   const [chosen, setChosen] = useState<Mode>(requester ? 'reply' : 'note')
   const [body, setBody] = useState('')
   const [then, setThen] = useState<TicketState>('waiting')
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<unknown>(null)
   const id = useId()
   // Without a requester there is nobody to reply to, and a closed ticket gets no more replies.
   const closed = ticket.state === 'closed'
@@ -266,7 +271,7 @@ function Composer({ ticket, onDone, onSignedOut }: {
       onDone()
     } catch (e) {
       if (e instanceof Unauthorized) onSignedOut()
-      else setError(errorText(e))
+      else setError(e)
     } finally {
       setBusy(false)
     }
@@ -275,45 +280,45 @@ function Composer({ ticket, onDone, onSignedOut }: {
   return (
     <form className={`composer ${mode}`} onSubmit={submit}>
       <fieldset className="modes">
-        <legend className="visually-hidden">What you are writing</legend>
+        <legend className="visually-hidden">{t('composer.modes')}</legend>
         <label className={mode === 'reply' ? 'current' : ''}>
           <input type="radio" name={`${id}-mode`} value="reply" checked={mode === 'reply'}
             disabled={!canReply} onChange={() => setChosen('reply')} />
-          Reply to requester
+          {t('composer.reply')}
         </label>
         <label className={mode === 'note' ? 'current' : ''}>
           <input type="radio" name={`${id}-mode`} value="note" checked={mode === 'note'}
             onChange={() => setChosen('note')} />
-          Internal note
+          {t('composer.note')}
         </label>
       </fieldset>
       <p className="mode-hint" id={`${id}-hint`}>
         {mode === 'reply' && requester
-          ? <>Sent by e-mail to <strong>{requester.email}</strong>.</>
+          ? rich('composer.hintReply', { email: requester.email, strong })
           : closed
-            ? <>The ticket is closed, so it gets no more replies. Only agents see a note.</>
+            ? t('composer.hintClosed')
             : requester
-              ? <>Only agents see a note. It is <strong>never sent</strong> to the requester.</>
-              : <>This ticket has no requester, so there is nobody to reply to. Only agents see a note.</>}
+              ? rich('composer.hintNote', { strong })
+              : t('composer.hintNoRequester')}
       </p>
       <label className="visually-hidden" htmlFor={`${id}-body`}>
-        {mode === 'reply' ? 'Reply to the requester' : 'Internal note'}
+        {mode === 'reply' ? t('composer.replyLabel') : t('composer.noteLabel')}
       </label>
       <textarea id={`${id}-body`} rows={5} value={body} aria-describedby={`${id}-hint`}
-        placeholder={mode === 'reply' ? 'Write to the requester…' : 'Write a note for the agents…'}
+        placeholder={mode === 'reply' ? t('composer.replyPlaceholder') : t('composer.notePlaceholder')}
         onChange={(e) => setBody(e.target.value)} />
-      {error && <p className="error" role="alert">{error}</p>}
+      {error !== null && <p className="error" role="alert">{errorText(error)}</p>}
       <div className="composer-foot">
         {mode === 'reply' && (
           <label>
-            Then set the ticket to{' '}
+            {t('composer.then')}{' '}
             <select value={then} onChange={(e) => setThen(e.target.value as TicketState)}>
-              {thenStates.map((s) => <option key={s} value={s}>{stateLabels[s]}</option>)}
+              {thenStates.map((s) => <option key={s} value={s}>{t(`state.${s}`)}</option>)}
             </select>
           </label>
         )}
         <button type="submit" disabled={busy || !body.trim()}>
-          {mode === 'reply' && requester ? `Send reply to ${requester.email}` : 'Add internal note'}
+          {mode === 'reply' && requester ? t('composer.sendReply', { email: requester.email }) : t('composer.addNote')}
         </button>
       </div>
     </form>
@@ -327,16 +332,17 @@ function MoveCustomer({ ticket, busy, onCancel, onMove }: {
   onCancel: () => void
   onMove: (customerId: string, requester: 'move' | 'remove') => Promise<void>
 }) {
+  const { t, errorText } = useI18n()
   const [customers, setCustomers] = useState<CustomerEntry[] | null>(null)
   const [customerId, setCustomerId] = useState('')
   const [requesterMove, setRequesterMove] = useState<'move' | 'remove'>('move')
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<unknown>(null)
   const id = useId()
   const requester = ticket.requester
   const others = requester ? requester.ticket_count - 1 : 0
 
   useEffect(() => {
-    listCustomers().then(setCustomers, (e) => setError(errorText(e)))
+    listCustomers().then(setCustomers, setError)
   }, [])
 
   function submit(event: FormEvent) {
@@ -346,33 +352,34 @@ function MoveCustomer({ ticket, busy, onCancel, onMove }: {
 
   return (
     <form className="move" onSubmit={submit}>
-      <label htmlFor={`${id}-customer`}>Move this ticket to</label>
+      <label htmlFor={`${id}-customer`}>{t('move.to')}</label>
       <select id={`${id}-customer`} value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
-        <option value="">Choose a customer…</option>
+        <option value="">{t('customer.choose')}</option>
         {customers?.filter((c) => c.id !== ticket.customer.id).map((c) => (
-          <option key={c.id} value={c.id}>{c.name}{c.is_help_desk ? ' (help desk)' : ''}</option>
+          <option key={c.id} value={c.id}>{c.is_help_desk ? t('customer.helpDesk', { name: c.name }) : c.name}</option>
         ))}
       </select>
       {requester && (
         <fieldset>
-          <legend>The requester {requester.email} belongs to {ticket.customer.name}.</legend>
+          <legend>{t('move.requesterBelongs', { email: requester.email, customer: ticket.customer.name })}</legend>
           <label>
             <input type="radio" name={`${id}-requester`} checked={requesterMove === 'move'}
               onChange={() => setRequesterMove('move')} />
-            The requester was assigned to the wrong customer: move them too
-            {others > 0 && <>, with their {others} other ticket{others === 1 ? '' : 's'}</>}
+            {others > 0
+              ? t('move.requesterTooWithTickets', { count: others })
+              : t('move.requesterToo')}
           </label>
           <label>
             <input type="radio" name={`${id}-requester`} checked={requesterMove === 'remove'}
               onChange={() => setRequesterMove('remove')} />
-            Keep the requester with {ticket.customer.name} and remove them from this ticket
+            {t('move.requesterStays', { customer: ticket.customer.name })}
           </label>
         </fieldset>
       )}
-      {error && <p className="error" role="alert">{error}</p>}
+      {error !== null && <p className="error" role="alert">{errorText(error)}</p>}
       <div className="move-foot">
-        <button type="button" onClick={onCancel}>Cancel</button>
-        <button type="submit" disabled={busy || !customerId}>Move ticket</button>
+        <button type="button" onClick={onCancel}>{t('move.cancel')}</button>
+        <button type="submit" disabled={busy || !customerId}>{t('move.submit')}</button>
       </div>
     </form>
   )

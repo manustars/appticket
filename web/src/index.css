@@ -123,6 +123,8 @@ button.danger { color: var(--danger); }
   text-align: center;
 }
 .who { color: var(--muted); }
+select.language { font-size: 0.85rem; color: var(--muted); }
+.sign-in select.language { justify-self: end; }
 .desk main { padding: 1rem; overflow-x: auto; }
 
 table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); }
