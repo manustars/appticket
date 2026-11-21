@@ -110,6 +110,21 @@ fn assert_schema_output(seen: &Seen) {
     assert_eq!(format["json_schema"]["name"], "triage");
     assert_eq!(format["json_schema"]["strict"], true);
     assert_eq!(format["json_schema"]["schema"], prompts::triage_schema());
+    assert_instructions(seen);
+}
+
+/// JSON mode, with the schema only in the instructions.
+fn assert_json_mode(seen: &Seen) {
+    assert_eq!(
+        seen.body["response_format"],
+        json!({"type": "json_object"}),
+        "{}",
+        seen.body
+    );
+    assert_instructions(seen);
+}
+
+fn assert_instructions(seen: &Seen) {
     assert_eq!(seen.body["messages"][0]["role"], "system");
     assert_eq!(seen.body["messages"][1]["role"], "user");
     // Also in the instructions, for servers that ignore `response_format`.
@@ -167,12 +182,21 @@ async fn gemini() {
         header(&seen, "authorization"),
         Some("Bearer provider-test-key")
     );
-    assert_schema_output(&seen);
+    assert_json_mode(&seen);
 }
 
 #[tokio::test]
 async fn azure_openai() {
-    let seen = ask(
+    // Without a version: the v1 API, with the deployment as the model.
+    let v1 = ask("azure-openai", "triage-deployment", "", &[KEY]).await;
+    assert_eq!(v1.uri, "/openai/v1/chat/completions");
+    assert_eq!(v1.body["model"], "triage-deployment");
+    assert_eq!(header(&v1, "api-key"), Some("provider-test-key"));
+    assert_eq!(header(&v1, "authorization"), None);
+    assert_schema_output(&v1);
+
+    // With a dated version: the deployments path.
+    let dated = ask(
         "azure-openai",
         "triage-deployment",
         "",
@@ -180,23 +204,11 @@ async fn azure_openai() {
     )
     .await;
     assert_eq!(
-        seen.uri,
+        dated.uri,
         "/openai/deployments/triage-deployment/chat/completions?api-version=2024-10-21"
     );
-    assert_eq!(header(&seen, "api-key"), Some("provider-test-key"));
-    assert_eq!(header(&seen, "authorization"), None);
-    assert_schema_output(&seen);
-
-    let v1 = ask(
-        "azure-openai",
-        "triage-deployment",
-        "",
-        &[KEY, ("HD_ASSISTANT_AZURE_API_VERSION", "v1")],
-    )
-    .await;
-    assert_eq!(v1.uri, "/openai/v1/chat/completions");
-    assert_eq!(v1.body["model"], "triage-deployment");
-    assert_eq!(header(&v1, "api-key"), Some("provider-test-key"));
+    assert_eq!(header(&dated, "api-key"), Some("provider-test-key"));
+    assert_schema_output(&dated);
 }
 
 #[tokio::test]
@@ -205,7 +217,7 @@ async fn ollama() {
     assert_eq!(seen.uri, "/v1/chat/completions");
     assert_eq!(header(&seen, "authorization"), None, "no key, no header");
     assert_eq!(seen.body["model"], "local-test");
-    assert_schema_output(&seen);
+    assert_json_mode(&seen);
 }
 
 #[tokio::test]

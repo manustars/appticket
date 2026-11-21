@@ -56,7 +56,7 @@ Environment variables, also read from a `.env` file in the working directory or 
 | `HD_ASSISTANT_MODEL_URL` | the provider's | The service's base URL; required for `azure-openai` and `openai-compatible`. |
 | `HD_ASSISTANT_API_KEY` | | The service's key; required by the hosted providers. |
 | `HD_ASSISTANT_MODEL_EFFORT` | `medium` | `anthropic` only: how much the model thinks before answering (`low` to `max`); set it empty to send none, for models that do not take it. |
-| `HD_ASSISTANT_AZURE_API_VERSION` | required for `azure-openai` | `v1` for Azure's v1 API (its current GA), or a dated `api-version`, `2024-08-01-preview` or later for structured outputs. |
+| `HD_ASSISTANT_AZURE_API_VERSION` | the v1 API | `azure-openai` only: a dated `api-version` (`2024-08-01-preview` or later, for structured outputs) to use the deployments path instead of Azure's v1 API. |
 | `HD_ASSISTANT_LOG` | `info` | A `tracing` filter. |
 
 There is no default provider or model: whoever installs the Assistant chooses both, since it
@@ -69,21 +69,25 @@ until both are set, and lists the providers it knows.
 |---|---|---|---|---|
 | `anthropic` | Claude API | `https://api.anthropic.com` | required, sent as `x-api-key` | yes (structured outputs) |
 | `openai` | OpenAI API | `https://api.openai.com/v1` | required, `Authorization: Bearer` | yes (`json_schema`, strict) |
-| `mistral` | Mistral AI | `https://api.mistral.ai/v1` | required, `Authorization: Bearer` | yes (`json_schema`) |
-| `gemini` | Gemini API, OpenAI-compatible endpoint | `https://generativelanguage.googleapis.com/v1beta/openai` | required, `Authorization: Bearer` | yes (`json_schema`) |
+| `mistral` | Mistral AI | `https://api.mistral.ai/v1` | required, `Authorization: Bearer` | yes (`json_schema`, strict) |
+| `gemini` | Gemini API, OpenAI-compatible endpoint | `https://generativelanguage.googleapis.com/v1beta/openai` | required, `Authorization: Bearer` | no: JSON mode (`json_object`) |
 | `azure-openai` | Azure OpenAI | required: `https://<resource>.openai.azure.com` | required, sent as `api-key` | yes (`json_schema`, strict) |
-| `ollama` | Ollama | `http://127.0.0.1:11434` | none | yes (`json_schema`) |
+| `ollama` | Ollama | `http://127.0.0.1:11434` | none | no: JSON mode (`json_object`) |
 | `openai-compatible` | any server with OpenAI chat completions (vLLM, llama.cpp…) | required: its base URL, such as `http://127.0.0.1:8000/v1` (an address alone means `/v1`) | optional, `Authorization: Bearer` | no: JSON mode (`json_object`) |
 
 Requests go to `<url>/v1/messages` for `anthropic`, to `<url>/v1/chat/completions` for `ollama`, to
-`<url>/openai/v1/chat/completions` (version `v1`, with the deployment as the model) or
-`<url>/openai/deployments/<deployment>/chat/completions?api-version=<version>` for
-`azure-openai`, and to `<url>/chat/completions` for the others. Use a model that supports
-structured output: some providers accept the schema only on recent models, and some versions of
-Gemini's compatibility layer and of Ollama have been reported to ignore it. So for every
-chat-completions provider the schema is also written into the instructions, and whatever the
-provider the answer is validated before anything is proposed: a model that does not follow the
-schema produces no proposal rather than a wrong one.
+`<url>/openai/v1/chat/completions` (Azure's v1 API, with the deployment as the model) or, with a
+dated version, `<url>/openai/deployments/<deployment>/chat/completions?api-version=<version>` for
+`azure-openai`, and to `<url>/chat/completions` for the others.
+
+Where a provider documents JSON Schema output on chat completions (OpenAI, Mistral, Azure) the
+answer is held to the schema; it then works only on models that support structured output.
+Gemini's compatibility layer shows structured output only through SDK helpers and ignores
+parameters it does not know, and Ollama does not document the JSON Schema form on its
+OpenAI-compatible endpoint, so those two get JSON mode. For every chat-completions provider the
+schema is also written into the instructions, and whatever the provider the answer is validated
+before anything is proposed: a model that does not follow the schema produces no proposal rather
+than a wrong one.
 
 With `anthropic`, on the models that support it, a request declined by the API's safety
 classifiers is retried server-side on a fallback model (`fallbacks: "default"`).

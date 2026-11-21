@@ -118,9 +118,14 @@ impl Provider {
 
     pub fn json_output(self) -> JsonOutput {
         match self {
-            // An unknown server may not support JSON Schema output.
-            Provider::OpenAiCompatible => JsonOutput::Object,
-            _ => JsonOutput::Schema,
+            // Documented with `response_format: {type: "json_schema", ...}` on chat completions.
+            Provider::OpenAi | Provider::Mistral | Provider::AzureOpenAi => JsonOutput::Schema,
+            // Gemini's compatibility layer shows structured output only through SDK helpers and
+            // ignores parameters it does not know; Ollama lists `response_format` without
+            // documenting the `json_schema` form; an unknown server may support neither.
+            Provider::Gemini | Provider::Ollama | Provider::OpenAiCompatible => JsonOutput::Object,
+            // Claude has its own structured outputs (`output_config.format`).
+            Provider::Anthropic => JsonOutput::Schema,
         }
     }
 }
@@ -151,7 +156,8 @@ pub struct ModelSettings {
     pub api_key: Option<String>,
     /// Claude API only; `None` leaves it to the model's default.
     pub effort: Option<String>,
-    /// Azure OpenAI only: `v1` for the v1 API, or a dated `api-version`.
+    /// Azure OpenAI only: a dated `api-version` for the deployments path; `None` or `v1` for
+    /// the v1 API.
     pub azure_api_version: Option<String>,
 }
 
@@ -260,11 +266,10 @@ impl Config {
         if api_key.is_none() && provider.needs_key() {
             bail!("set HD_ASSISTANT_API_KEY to the {provider} API key");
         }
+        // Azure: the v1 API unless a dated version is asked for (structured outputs need
+        // 2024-08-01-preview or later).
         let azure_api_version = match provider {
-            Provider::AzureOpenAi => Some(get("HD_ASSISTANT_AZURE_API_VERSION").context(
-                "set HD_ASSISTANT_AZURE_API_VERSION to v1 (the v1 API) or to a dated API \
-                 version, 2024-08-01-preview or later for structured outputs",
-            )?),
+            Provider::AzureOpenAi => get("HD_ASSISTANT_AZURE_API_VERSION"),
             _ => None,
         };
         let model = ModelSettings {
@@ -427,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn azure_needs_its_resource_and_an_api_version() {
+    fn azure_needs_its_resource_and_uses_the_v1_api_unless_dated() {
         let base = [
             ("HD_ASSISTANT_MODEL_PROVIDER", "azure-openai"),
             ("HD_ASSISTANT_MODEL", "triage-deployment"),
@@ -436,7 +441,10 @@ mod tests {
         assert!(error(&with(&base)).contains("openai.azure.com"));
         let mut vars = with(&base);
         vars.push(("HD_ASSISTANT_MODEL_URL", "https://desk.openai.azure.com/"));
-        assert!(error(&vars).contains("set HD_ASSISTANT_AZURE_API_VERSION"));
+        assert_eq!(
+            config(&vars).unwrap().model.endpoint(),
+            "https://desk.openai.azure.com/openai/v1/chat/completions"
+        );
         vars.push(("HD_ASSISTANT_AZURE_API_VERSION", "2024-10-21"));
         assert_eq!(
             config(&vars).unwrap().model.endpoint(),

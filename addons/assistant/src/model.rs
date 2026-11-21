@@ -227,8 +227,10 @@ impl Model {
 fn chat_text(response: &Value) -> Result<String, ModelError> {
     let choice = &response["choices"][0];
     match choice["finish_reason"].as_str() {
-        Some("length") => return Err(ModelError::Truncated),
+        // `model_length` is Mistral's: the model's context ran out.
+        Some("length" | "model_length") => return Err(ModelError::Truncated),
         Some("content_filter") => return Err(ModelError::Refused),
+        Some("error") => return Err(ModelError::Invalid("the model stopped on an error".into())),
         _ => {}
     }
     let message = &choice["message"];
@@ -359,6 +361,10 @@ mod tests {
         );
         assert_eq!(
             answer("length", json!({ "content": "{\"a\":" })),
+            Err(ModelError::Truncated)
+        );
+        assert_eq!(
+            answer("model_length", json!({ "content": "{\"a\":" })),
             Err(ModelError::Truncated)
         );
     }
