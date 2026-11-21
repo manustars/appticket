@@ -57,11 +57,11 @@ server accepts every recipient, so replies sent locally never leave it.
 ## First run
 
 ```sh
-cargo run -- migrate
-cargo run -- customer add "Northgate Studio" --help-desk --domain northgate.test
-cargo run -- customer add "Brightfield" --domain brightfield.test
-HD_AGENT_PASSWORD=dev-password cargo run -- agent add marco@northgate.test --name "Marco Lenti"
-cargo run -- serve
+cargo run -p hd-core -- migrate
+cargo run -p hd-core -- customer add "Northgate Studio" --help-desk --domain northgate.test
+cargo run -p hd-core -- customer add "Brightfield" --domain brightfield.test
+HD_AGENT_PASSWORD=dev-password cargo run -p hd-core -- agent add marco@northgate.test --name "Marco Lenti"
+cargo run -p hd-core -- serve
 ```
 
 In another terminal, the UI:
@@ -82,6 +82,24 @@ curl smtp://127.0.0.1:55025 --mail-from ada@brightfield.test --mail-rcpt helpdes
 Within `HD_IMAP_POLL_SECONDS` the core reads it: a sender whose domain belongs to a customer opens a
 ticket, any other sender lands in the inbox.
 
+## The Assistant
+
+The Assistant is an add-on (`addons/assistant`, details in its README). To try it locally:
+
+```sh
+cargo run -p hd-core -- addon add assistant --url http://127.0.0.1:8090   --event message.received --event ticket.opened   --scope directory:read --scope tickets:read --scope proposals:write
+# copy the printed token and event secret into .env:
+#   HD_ASSISTANT_CORE_URL=http://127.0.0.1:8080
+#   HD_ASSISTANT_TOKEN=…
+#   HD_ASSISTANT_EVENT_SECRET=…
+#   HD_ASSISTANT_API_KEY=…        # a Claude API key: customers' mail goes to that service
+cargo run -p hd-assistant
+```
+
+With the Claude API it uses `claude-opus-5-5` unless `HD_ASSISTANT_MODEL` says otherwise, and every
+message costs a model call. `HD_ASSISTANT_MODEL_PROVIDER=openai-compatible` with
+`HD_ASSISTANT_MODEL_URL` points it at a model on your own machine instead (for example Ollama).
+
 ## Tests
 
 ```sh
@@ -91,7 +109,7 @@ cargo test -- --ignored       # tests that also need the test mail server (TLS r
 
 ## API specification
 
-`cargo run -- openapi` prints the OpenAPI specification without touching the database; the running
+`cargo run -p hd-core -- openapi` prints the OpenAPI specification without touching the database; the running
 core also serves it at `/api/openapi.json`.
 
 `npm run api` (in `web/`) regenerates `web/openapi.json` and the TypeScript types in

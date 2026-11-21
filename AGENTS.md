@@ -26,6 +26,9 @@
 - **Core and add-ons talk JSON over HTTP:** events stored by the core and delivered with retries,
   actions through the core's API, reads with a short timeout; no message broker
   ([ADR 0005](docs/adr/0005-add-on-communication.md)).
+- **Add-ons** live in `addons/` (the Assistant: [ADR 0006](docs/adr/0006-assistant.md)) and are
+  built on the Rust SDK in `sdk/rust`; their contract with the core is `sdk/README.md`. The
+  workspace has several binaries: run the core with `cargo run -p hd-core -- …`.
 - **Local development** runs PostgreSQL and a test mail server (GreenMail) in containers with
   Podman. Agents sign in with e-mail and password managed by the core; OIDC comes later.
 

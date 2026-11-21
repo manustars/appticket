@@ -43,7 +43,7 @@ jobs:
       # Includes the tests that need the test mail server.
       - run: cargo test --locked -- --include-ignored
       - name: The UI's copy of the API specification is current
-        run: cargo run -q --locked -- openapi | diff -u web/openapi.json -
+        run: cargo run -q --locked -p hd-core -- openapi | diff -u web/openapi.json -
 
   web:
     runs-on: ubuntu-latest
