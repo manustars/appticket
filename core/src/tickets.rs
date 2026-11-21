@@ -181,15 +181,24 @@ pub enum RequesterMove {
     Remove,
 }
 
+/// What a move did.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Moved {
+    /// How many tickets changed customer.
+    pub moved: i64,
+    /// How many asset and service links were removed because they did not fit the new customer.
+    pub unlinked: i64,
+}
+
 /// Moves the ticket to another customer. A requester of the old customer either moves along,
-/// taking all of their tickets (closed ones too), or leaves this ticket. Returns how many tickets
-/// changed customer.
+/// taking all of their tickets (closed ones too), or leaves this ticket. Links that do not fit the
+/// new customer are removed.
 pub async fn move_to_customer(
     db: &PgPool,
     number: i64,
     customer: Uuid,
     requester: RequesterMove,
-) -> Result<i64> {
+) -> Result<Moved> {
     let mut tx = db.begin().await?;
     let (ticket_id, state) = lock(&mut tx, number).await?;
     not_closed(state)?;
@@ -211,6 +220,17 @@ pub async fn move_to_customer(
         Some(true) => return rule("the customer is offboarded and gets no tickets"),
         Some(false) => {}
     }
+
+    let affected: Vec<Uuid> = match (requester_id, requester) {
+        (Some(requester_id), RequesterMove::Move) => {
+            sqlx::query_scalar("SELECT id FROM tickets WHERE requester_id = $1")
+                .bind(requester_id)
+                .fetch_all(&mut *tx)
+                .await?
+        }
+        _ => vec![ticket_id],
+    };
+    let unlinked = crate::catalog::unlink_for_move(&mut tx, &affected, customer).await?;
 
     let moved = match (requester_id, requester) {
         (Some(requester_id), RequesterMove::Move) => {
@@ -244,7 +264,7 @@ pub async fn move_to_customer(
         }
     };
     tx.commit().await?;
-    Ok(moved)
+    Ok(Moved { moved, unlinked })
 }
 
 /// "Re: <title> [#<number>]", without stacking "Re:".
@@ -276,6 +296,10 @@ pub struct TicketDetail {
     pub customer: Party,
     pub requester: Option<Requester>,
     pub assignee: Option<Party>,
+    /// Assets of the ticket's customer the ticket is about.
+    pub assets: Vec<crate::catalog::LinkedAsset>,
+    /// Services of the help desk the ticket is about.
+    pub services: Vec<crate::catalog::LinkedService>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -410,6 +434,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
         )
         .collect();
     timeline.sort_by_key(|(at, _)| *at);
+    let (assets, services) = crate::catalog::ticket_links(db, row.id).await?;
 
     Ok(TicketDetail {
         id: row.id,
@@ -430,6 +455,8 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
             id,
             name: row.assignee_name.unwrap_or_default(),
         }),
+        assets,
+        services,
         created_at: row.created_at,
         updated_at: row.updated_at,
         timeline: timeline.into_iter().map(|(_, entry)| entry).collect(),
@@ -563,7 +590,7 @@ mod tests {
         let moved = move_to_customer(&db, first, harbor, RequesterMove::Move)
             .await
             .unwrap();
-        assert_eq!(moved, 2);
+        assert_eq!(moved.moved, 2);
         let customer_of = |n: i64| {
             let db = db.clone();
             async move {
@@ -598,7 +625,8 @@ mod tests {
         assert_eq!(
             move_to_customer(&db, first, harbor, RequesterMove::Remove)
                 .await
-                .unwrap(),
+                .unwrap()
+                .moved,
             1
         );
         let ticket = detail(&db, first).await.unwrap();

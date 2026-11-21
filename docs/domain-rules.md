@@ -54,6 +54,11 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
 - An asset belongs to exactly one customer.
 - A service is linked explicitly to the customers that use it, and optionally to the assets it runs
   on, which can belong to any customer.
+- Assets and services are retired, never deleted: a retired one stays on the tickets that refer to
+  it but gets no new links.
+- A customer stops using a service only once none of its tickets refers to the service; the help
+  desk's own organization never stops.
+- The links of a closed ticket do not change.
 
 ## Assistant
 

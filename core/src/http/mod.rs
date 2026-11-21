@@ -20,6 +20,7 @@ use uuid::Uuid;
 use crate::auth::{self, SESSION_COOKIE, SESSION_DAYS, SignedIn};
 use crate::outbound::Sender;
 
+mod catalog;
 mod customers;
 mod directory;
 mod inbox;
@@ -65,6 +66,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(inbox::routes())
         .merge(directory::routes())
         .merge(customers::routes())
+        .merge(catalog::routes())
 }
 
 pub fn router(state: AppState) -> Router {

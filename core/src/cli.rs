@@ -38,6 +38,11 @@ pub async fn customer(db: &PgPool, command: CustomerCommand) -> anyhow::Result<(
                 .execute(&mut *tx)
                 .await
                 .context("adding the customer (is there already a help desk customer?)")?;
+            if help_desk {
+                crate::catalog::help_desk_uses_every_service(&mut tx, id)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+            }
             for domain in &domains {
                 sqlx::query("INSERT INTO customer_domains (domain, customer_id) VALUES ($1, $2)")
                     .bind(domain.trim().to_lowercase())

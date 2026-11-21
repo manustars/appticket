@@ -7,6 +7,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 
 mod auth;
+mod catalog;
 mod cli;
 mod customers;
 mod error;

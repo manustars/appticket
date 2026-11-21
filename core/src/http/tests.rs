@@ -147,3 +147,51 @@ async fn the_api_refuses_requests_without_a_session(db: PgPool) {
     let (status, _) = api.call("GET", "/api/tickets", None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+#[sqlx::test]
+async fn assets_and_services_are_linked_through_the_api(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let n = testing::ticket(&db, brightfield, None, "a@brightfield.test").await;
+
+    let (status, created) = api
+        .call(
+            "POST",
+            &format!("/api/customers/{brightfield}/assets"),
+            Some(serde_json::json!({"kind": "computer", "name": "PC-0042"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let asset = created["id"].as_str().unwrap().to_owned();
+    let (_, service) = api
+        .call(
+            "POST",
+            "/api/services",
+            Some(serde_json::json!({"name": "Hosted mail"})),
+        )
+        .await;
+    let service = service["id"].as_str().unwrap().to_owned();
+
+    let (status, refused) = api
+        .call("PUT", &format!("/api/tickets/{n}/services/{service}"), None)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        refused["error"],
+        "The ticket's customer does not use this service."
+    );
+    for (method, uri) in [
+        (
+            "PUT",
+            format!("/api/services/{service}/customers/{brightfield}"),
+        ),
+        ("PUT", format!("/api/tickets/{n}/services/{service}")),
+        ("PUT", format!("/api/tickets/{n}/assets/{asset}")),
+    ] {
+        let (status, json) = api.call(method, &uri, None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{method} {uri}: {json}");
+    }
+    let ticket = api.get(&format!("/api/tickets/{n}")).await;
+    assert_eq!(ticket["assets"][0]["name"], "PC-0042");
+    assert_eq!(ticket["services"][0]["name"], "Hosted mail");
+}

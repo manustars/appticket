@@ -21,6 +21,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Changes an asset's kind and name. */
+        put: operations["update_asset"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/{id}/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retires an asset: it stays on its tickets but gets no new links. */
+        post: operations["retire_asset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/customers": {
         parameters: {
             query?: never;
@@ -68,6 +102,24 @@ export interface paths {
         /** Renames a customer. */
         put: operations["rename"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customers/{id}/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The customer's assets, active ones first. */
+        get: operations["customer_assets"];
+        put?: never;
+        /** Adds an asset the customer owns. */
+        post: operations["create_asset"];
         delete?: never;
         options?: never;
         head?: never;
@@ -136,6 +188,23 @@ export interface paths {
         put?: never;
         /** Registers a requester with the customer. */
         post: operations["add_requester"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customers/{id}/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The services the customer uses. */
+        get: operations["customer_services"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -227,6 +296,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every service the help desk provides, active ones first. */
+        get: operations["list_services"];
+        put?: never;
+        /** Adds a service; the help desk's own organization uses it from the start. */
+        post: operations["create_service"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A service with the customers that use it and the assets it runs on. */
+        get: operations["get_service"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{id}/assets/{asset}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Records that the service runs on the asset. */
+        put: operations["runs_on"];
+        post?: never;
+        /** Records that the service no longer runs on the asset. */
+        delete: operations["stops_running_on"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{id}/customers/{customer}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** The customer starts using the service. */
+        put: operations["use_service"];
+        post?: never;
+        /** The customer stops using the service (refused while its tickets refer to it). */
+        delete: operations["stop_using_service"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/session": {
         parameters: {
             query?: never;
@@ -275,6 +415,24 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tickets/{number}/assets/{asset}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Links an asset of the ticket's customer to the ticket. */
+        put: operations["link_ticket_asset"];
+        post?: never;
+        /** Unlinks an asset from the ticket. */
+        delete: operations["unlink_ticket_asset"];
         options?: never;
         head?: never;
         patch?: never;
@@ -348,6 +506,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tickets/{number}/services/{service}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Links a service the ticket's customer uses to the ticket. */
+        put: operations["link_ticket_service"];
+        post?: never;
+        /** Unlinks a service from the ticket. */
+        delete: operations["unlink_ticket_service"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tickets/{number}/state": {
         parameters: {
             query?: never;
@@ -381,6 +557,25 @@ export interface components {
             id: string;
             name: string;
         };
+        Asset: {
+            /** Format: uuid */
+            customer_id: string;
+            customer_name: string;
+            /** Format: uuid */
+            id: string;
+            /** @description What sort of thing it is: computer, printer, application, licence… */
+            kind: string;
+            name: string;
+            /** Format: date-time */
+            retired_at?: string | null;
+            /** @description The add-on it came from, when an add-on supplies it. */
+            source_addon?: string | null;
+        };
+        AssetFields: {
+            /** @description What sort of thing it is: computer, printer, application, licence… */
+            kind: string;
+            name: string;
+        };
         AssigneeChange: {
             /**
              * Format: uuid
@@ -394,6 +589,10 @@ export interface components {
              * @description The number of the ticket the message belongs to.
              */
             ticket_number: number;
+        };
+        Created: {
+            /** Format: uuid */
+            id: string;
         };
         CreatedCustomer: {
             /** Format: uuid */
@@ -419,6 +618,12 @@ export interface components {
             /** Format: uuid */
             id: string;
             /** @description Whether this is the help desk's own organization. */
+            is_help_desk: boolean;
+            name: string;
+        };
+        CustomerRef: {
+            /** Format: uuid */
+            id: string;
             is_help_desk: boolean;
             name: string;
         };
@@ -457,6 +662,17 @@ export interface components {
             received_at: string;
             subject: string;
         };
+        LinkedAsset: {
+            /** Format: uuid */
+            id: string;
+            kind: string;
+            name: string;
+        };
+        LinkedService: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
         MessageEntry: {
             /** @description The agent who wrote an outbound message. */
             author_name?: string | null;
@@ -480,12 +696,18 @@ export interface components {
             subject: string;
             to_address?: string | null;
         };
-        MovedTickets: {
+        /** @description What a move did. */
+        Moved: {
             /**
              * Format: int64
              * @description How many tickets changed customer.
              */
             moved: number;
+            /**
+             * Format: int64
+             * @description How many asset and service links were removed because they did not fit the new customer.
+             */
+            unlinked: number;
         };
         NewCustomer: {
             /** @description Mail domains of the customer's requesters, e.g. `brightfield.test`. */
@@ -505,6 +727,10 @@ export interface components {
         NewRequester: {
             email: string;
             name?: string | null;
+        };
+        NewService: {
+            description?: string;
+            name: string;
         };
         NoteEntry: {
             author_name: string;
@@ -561,6 +787,24 @@ export interface components {
          * @enum {string}
          */
         RequesterMove: "move" | "remove";
+        Service: {
+            /**
+             * Format: int64
+             * @description How many customers use it, the help desk's own organization included.
+             */
+            customers: number;
+            description: string;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: date-time */
+            retired_at?: string | null;
+        };
+        ServiceDetail: components["schemas"]["Service"] & {
+            /** @description The assets the service runs on. */
+            runs_on: components["schemas"]["Asset"][];
+            used_by: components["schemas"]["CustomerRef"][];
+        };
         SignInRequest: {
             email: string;
             password: string;
@@ -570,6 +814,8 @@ export interface components {
         };
         /** @description A ticket with everything written on it. */
         TicketDetail: {
+            /** @description Assets of the ticket's customer the ticket is about. */
+            assets: components["schemas"]["LinkedAsset"][];
             assignee?: components["schemas"]["Party"] | null;
             /** Format: date-time */
             created_at: string;
@@ -579,6 +825,8 @@ export interface components {
             /** Format: int64 */
             number: number;
             requester?: components["schemas"]["Requester"] | null;
+            /** @description Services of the help desk the ticket is about. */
+            services: components["schemas"]["LinkedService"][];
             state: components["schemas"]["TicketState"];
             /** @description Messages and notes, oldest first. */
             timeline: components["schemas"]["TimelineEntry"][];
@@ -638,6 +886,98 @@ export interface operations {
                 };
             };
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    update_asset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The asset */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssetFields"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    retire_asset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The asset */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -799,6 +1139,86 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    customer_assets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Asset"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_asset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssetFields"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Created"];
+                };
             };
             401: {
                 headers: {
@@ -1006,6 +1426,36 @@ export interface operations {
             };
         };
     };
+    customer_services: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Service"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     health: {
         parameters: {
             query?: never;
@@ -1202,6 +1652,278 @@ export interface operations {
             };
         };
     };
+    list_services: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Service"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_service: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewService"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Created"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_service: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceDetail"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    runs_on: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service */
+                id: string;
+                /** @description The asset */
+                asset: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    stops_running_on: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service */
+                id: string;
+                /** @description The asset */
+                asset: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    use_service: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service */
+                id: string;
+                /** @description The customer */
+                customer: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    stop_using_service: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service */
+                id: string;
+                /** @description The customer */
+                customer: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     current_session: {
         parameters: {
             query?: never;
@@ -1360,6 +2082,98 @@ export interface operations {
             };
         };
     };
+    link_ticket_asset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's number */
+                number: number;
+                /** @description The asset */
+                asset: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    unlink_ticket_asset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's number */
+                number: number;
+                /** @description The asset */
+                asset: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     set_assignee: {
         parameters: {
             query?: never;
@@ -1429,7 +2243,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MovedTickets"];
+                    "application/json": components["schemas"]["Moved"];
                 };
             };
             401: {
@@ -1523,6 +2337,98 @@ export interface operations {
         };
         responses: {
             202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    link_ticket_service: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's number */
+                number: number;
+                /** @description The service */
+                service: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    unlink_ticket_service: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's number */
+                number: number;
+                /** @description The service */
+                service: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };

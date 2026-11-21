@@ -1,0 +1,271 @@
+//! Assets, services, and the links between them and tickets.
+
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
+use uuid::Uuid;
+
+use super::{ApiError, AppState, Problem};
+use crate::auth::SignedIn;
+use crate::catalog::{self, Asset, Service, ServiceDetail};
+
+pub fn routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(customer_assets, create_asset))
+        .routes(routes!(customer_services))
+        .routes(routes!(update_asset))
+        .routes(routes!(retire_asset))
+        .routes(routes!(list_services, create_service))
+        .routes(routes!(get_service))
+        .routes(routes!(use_service, stop_using_service))
+        .routes(routes!(runs_on, stops_running_on))
+        .routes(routes!(link_ticket_asset, unlink_ticket_asset))
+        .routes(routes!(link_ticket_service, unlink_ticket_service))
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct Created {
+    id: Uuid,
+}
+
+/// The customer's assets, active ones first.
+#[utoipa::path(get, path = "/api/customers/{id}/assets", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The customer")),
+    responses((status = OK, body = Vec<Asset>), (status = UNAUTHORIZED, body = Problem)))]
+async fn customer_assets(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<Asset>>, ApiError> {
+    Ok(Json(catalog::assets_of(&state.db, id).await?))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct AssetFields {
+    /// What sort of thing it is: computer, printer, application, licence…
+    kind: String,
+    name: String,
+}
+
+/// Adds an asset the customer owns.
+#[utoipa::path(post, path = "/api/customers/{id}/assets", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The customer")), request_body = AssetFields,
+    responses((status = CREATED, body = Created), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn create_asset(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(id): Path<Uuid>,
+    Json(fields): Json<AssetFields>,
+) -> Result<(StatusCode, Json<Created>), ApiError> {
+    let id = catalog::create_asset(&state.db, id, &fields.kind, &fields.name).await?;
+    Ok((StatusCode::CREATED, Json(Created { id })))
+}
+
+/// The services the customer uses.
+#[utoipa::path(get, path = "/api/customers/{id}/services", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The customer")),
+    responses((status = OK, body = Vec<Service>), (status = UNAUTHORIZED, body = Problem)))]
+async fn customer_services(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<Service>>, ApiError> {
+    Ok(Json(catalog::services_of(&state.db, id).await?))
+}
+
+/// Changes an asset's kind and name.
+#[utoipa::path(put, path = "/api/assets/{id}", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The asset")), request_body = AssetFields,
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn update_asset(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(id): Path<Uuid>,
+    Json(fields): Json<AssetFields>,
+) -> Result<StatusCode, ApiError> {
+    catalog::update_asset(&state.db, id, &fields.kind, &fields.name).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Retires an asset: it stays on its tickets but gets no new links.
+#[utoipa::path(post, path = "/api/assets/{id}/retire", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The asset")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn retire_asset(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    catalog::retire_asset(&state.db, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Every service the help desk provides, active ones first.
+#[utoipa::path(get, path = "/api/services", tag = "catalog",
+    responses((status = OK, body = Vec<Service>), (status = UNAUTHORIZED, body = Problem)))]
+async fn list_services(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+) -> Result<Json<Vec<Service>>, ApiError> {
+    Ok(Json(catalog::services(&state.db).await?))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct NewService {
+    name: String,
+    #[serde(default)]
+    description: String,
+}
+
+/// Adds a service; the help desk's own organization uses it from the start.
+#[utoipa::path(post, path = "/api/services", tag = "catalog", request_body = NewService,
+    responses((status = CREATED, body = Created), (status = CONFLICT, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn create_service(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Json(new): Json<NewService>,
+) -> Result<(StatusCode, Json<Created>), ApiError> {
+    let id = catalog::create_service(&state.db, &new.name, &new.description).await?;
+    Ok((StatusCode::CREATED, Json(Created { id })))
+}
+
+/// A service with the customers that use it and the assets it runs on.
+#[utoipa::path(get, path = "/api/services/{id}", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The service")),
+    responses((status = OK, body = ServiceDetail), (status = NOT_FOUND, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn get_service(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ServiceDetail>, ApiError> {
+    Ok(Json(catalog::service_detail(&state.db, id).await?))
+}
+
+/// The customer starts using the service.
+#[utoipa::path(put, path = "/api/services/{id}/customers/{customer}", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The service"),
+        ("customer" = Uuid, Path, description = "The customer")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn use_service(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path((id, customer)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    catalog::use_service(&state.db, id, customer).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The customer stops using the service (refused while its tickets refer to it).
+#[utoipa::path(delete, path = "/api/services/{id}/customers/{customer}", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The service"),
+        ("customer" = Uuid, Path, description = "The customer")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn stop_using_service(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path((id, customer)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    catalog::stop_using_service(&state.db, id, customer).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Records that the service runs on the asset.
+#[utoipa::path(put, path = "/api/services/{id}/assets/{asset}", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The service"),
+        ("asset" = Uuid, Path, description = "The asset")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn runs_on(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path((id, asset)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    catalog::runs_on(&state.db, id, asset, true).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Records that the service no longer runs on the asset.
+#[utoipa::path(delete, path = "/api/services/{id}/assets/{asset}", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The service"),
+        ("asset" = Uuid, Path, description = "The asset")),
+    responses((status = NO_CONTENT), (status = UNAUTHORIZED, body = Problem)))]
+async fn stops_running_on(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path((id, asset)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    catalog::runs_on(&state.db, id, asset, false).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Links an asset of the ticket's customer to the ticket.
+#[utoipa::path(put, path = "/api/tickets/{number}/assets/{asset}", tag = "tickets",
+    params(("number" = i64, Path, description = "The ticket's number"),
+        ("asset" = Uuid, Path, description = "The asset")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn link_ticket_asset(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path((number, asset)): Path<(i64, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    catalog::link_asset(&state.db, number, asset, true).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Unlinks an asset from the ticket.
+#[utoipa::path(delete, path = "/api/tickets/{number}/assets/{asset}", tag = "tickets",
+    params(("number" = i64, Path, description = "The ticket's number"),
+        ("asset" = Uuid, Path, description = "The asset")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn unlink_ticket_asset(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path((number, asset)): Path<(i64, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    catalog::link_asset(&state.db, number, asset, false).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Links a service the ticket's customer uses to the ticket.
+#[utoipa::path(put, path = "/api/tickets/{number}/services/{service}", tag = "tickets",
+    params(("number" = i64, Path, description = "The ticket's number"),
+        ("service" = Uuid, Path, description = "The service")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn link_ticket_service(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path((number, service)): Path<(i64, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    catalog::link_service(&state.db, number, service, true).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Unlinks a service from the ticket.
+#[utoipa::path(delete, path = "/api/tickets/{number}/services/{service}", tag = "tickets",
+    params(("number" = i64, Path, description = "The ticket's number"),
+        ("service" = Uuid, Path, description = "The service")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn unlink_ticket_service(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path((number, service)): Path<(i64, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    catalog::link_service(&state.db, number, service, false).await?;
+    Ok(StatusCode::NO_CONTENT)
+}

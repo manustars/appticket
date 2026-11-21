@@ -42,6 +42,118 @@
         }
       }
     },
+    "/api/assets/{id}": {
+      "put": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Changes an asset's kind and name.",
+        "operationId": "update_asset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The asset",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetFields"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/assets/{id}/retire": {
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Retires an asset: it stays on its tickets but gets no new links.",
+        "operationId": "retire_asset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The asset",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/customers": {
       "get": {
         "tags": [
@@ -231,6 +343,117 @@
         },
         "responses": {
           "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customers/{id}/assets": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "The customer's assets, active ones first.",
+        "operationId": "customer_assets",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Asset"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Adds an asset the customer owns.",
+        "operationId": "create_asset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetFields"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Created"
+                }
+              }
+            }
+          },
           "401": {
             "content": {
               "application/json": {
@@ -493,6 +716,50 @@
         }
       }
     },
+    "/api/customers/{id}/services": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "The services the customer uses.",
+        "operationId": "customer_services",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Service"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/health": {
       "get": {
         "tags": [
@@ -735,6 +1002,356 @@
         }
       }
     },
+    "/api/services": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Every service the help desk provides, active ones first.",
+        "operationId": "list_services",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Service"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Adds a service; the help desk's own organization uses it from the start.",
+        "operationId": "create_service",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewService"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Created"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/services/{id}": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "A service with the customers that use it and the assets it runs on.",
+        "operationId": "get_service",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The service",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/services/{id}/assets/{asset}": {
+      "put": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Records that the service runs on the asset.",
+        "operationId": "runs_on",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The service",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "asset",
+            "in": "path",
+            "description": "The asset",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Records that the service no longer runs on the asset.",
+        "operationId": "stops_running_on",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The service",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "asset",
+            "in": "path",
+            "description": "The asset",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/services/{id}/customers/{customer}": {
+      "put": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "The customer starts using the service.",
+        "operationId": "use_service",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The service",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "customer",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "The customer stops using the service (refused while its tickets refer to it).",
+        "operationId": "stop_using_service",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The service",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "customer",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/session": {
       "get": {
         "tags": [
@@ -933,6 +1550,126 @@
         }
       }
     },
+    "/api/tickets/{number}/assets/{asset}": {
+      "put": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Links an asset of the ticket's customer to the ticket.",
+        "operationId": "link_ticket_asset",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "asset",
+            "in": "path",
+            "description": "The asset",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Unlinks an asset from the ticket.",
+        "operationId": "unlink_ticket_asset",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "asset",
+            "in": "path",
+            "description": "The asset",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tickets/{number}/assignee": {
       "put": {
         "tags": [
@@ -1028,7 +1765,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MovedTickets"
+                  "$ref": "#/components/schemas/Moved"
                 }
               }
             }
@@ -1185,6 +1922,126 @@
         }
       }
     },
+    "/api/tickets/{number}/services/{service}": {
+      "put": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Links a service the ticket's customer uses to the ticket.",
+        "operationId": "link_ticket_service",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "service",
+            "in": "path",
+            "description": "The service",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Unlinks a service from the ticket.",
+        "operationId": "unlink_ticket_service",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "service",
+            "in": "path",
+            "description": "The service",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tickets/{number}/state": {
       "put": {
         "tags": [
@@ -1289,6 +2146,66 @@
           }
         }
       },
+      "Asset": {
+        "type": "object",
+        "required": [
+          "id",
+          "customer_id",
+          "customer_name",
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customer_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "description": "What sort of thing it is: computer, printer, application, licence…"
+          },
+          "name": {
+            "type": "string"
+          },
+          "retired_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "source_addon": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The add-on it came from, when an add-on supplies it."
+          }
+        }
+      },
+      "AssetFields": {
+        "type": "object",
+        "required": [
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "What sort of thing it is: computer, printer, application, licence…"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "AssigneeChange": {
         "type": "object",
         "properties": {
@@ -1312,6 +2229,18 @@
             "type": "integer",
             "format": "int64",
             "description": "The number of the ticket the message belongs to."
+          }
+        }
+      },
+      "Created": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -1392,6 +2321,26 @@
           "is_help_desk": {
             "type": "boolean",
             "description": "Whether this is the help desk's own organization."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CustomerRef": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "is_help_desk"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_help_desk": {
+            "type": "boolean"
           },
           "name": {
             "type": "string"
@@ -1498,6 +2447,42 @@
           }
         }
       },
+      "LinkedAsset": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "LinkedService": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "MessageEntry": {
         "type": "object",
         "required": [
@@ -1570,16 +2555,23 @@
           }
         }
       },
-      "MovedTickets": {
+      "Moved": {
         "type": "object",
+        "description": "What a move did.",
         "required": [
-          "moved"
+          "moved",
+          "unlinked"
         ],
         "properties": {
           "moved": {
             "type": "integer",
             "format": "int64",
             "description": "How many tickets changed customer."
+          },
+          "unlinked": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many asset and service links were removed because they did not fit the new customer."
           }
         }
       },
@@ -1659,6 +2651,20 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "NewService": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -1814,6 +2820,68 @@
           "remove"
         ]
       },
+      "Service": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "customers"
+        ],
+        "properties": {
+          "customers": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many customers use it, the help desk's own organization included."
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "retired_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "ServiceDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Service"
+          },
+          {
+            "type": "object",
+            "required": [
+              "used_by",
+              "runs_on"
+            ],
+            "properties": {
+              "runs_on": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Asset"
+                },
+                "description": "The assets the service runs on."
+              },
+              "used_by": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CustomerRef"
+                }
+              }
+            }
+          }
+        ]
+      },
       "SignInRequest": {
         "type": "object",
         "required": [
@@ -1849,11 +2917,20 @@
           "title",
           "state",
           "customer",
+          "assets",
+          "services",
           "created_at",
           "updated_at",
           "timeline"
         ],
         "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkedAsset"
+            },
+            "description": "Assets of the ticket's customer the ticket is about."
+          },
           "assignee": {
             "oneOf": [
               {
@@ -1888,6 +2965,13 @@
                 "type": "null"
               }
             ]
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkedService"
+            },
+            "description": "Services of the help desk the ticket is about."
           },
           "state": {
             "$ref": "#/components/schemas/TicketState"
