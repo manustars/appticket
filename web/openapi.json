@@ -74,6 +74,425 @@
         }
       }
     },
+    "/api/customers/all": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Every customer, offboarded ones included (last), with counts.",
+        "operationId": "list_all",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CustomerSummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Adds a customer.",
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewCustomer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedCustomer"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customers/{id}": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "A customer with its domains and requesters.",
+        "operationId": "get_customer",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Renames a customer.",
+        "operationId": "rename",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Rename"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customers/{id}/domains": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Registers a mail domain: mail from it opens tickets for this customer.",
+        "operationId": "add_domain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewDomain"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customers/{id}/domains/{domain}": {
+      "delete": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Unregisters a mail domain. Requesters already registered from it stay.",
+        "operationId": "remove_domain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "domain",
+            "in": "path",
+            "description": "The mail domain",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customers/{id}/offboard": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Offboards a customer: no new tickets, its mail waits in the inbox, its history stays.",
+        "operationId": "offboard",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customers/{id}/requesters": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Registers a requester with the customer.",
+        "operationId": "add_requester",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRequester"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedRequester"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/health": {
       "get": {
         "tags": [
@@ -896,6 +1315,30 @@
           }
         }
       },
+      "CreatedCustomer": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "CreatedRequester": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "CustomerChange": {
         "type": "object",
         "required": [
@@ -912,6 +1355,27 @@
             "description": "When the ticket has a requester: move the requester (and all of their tickets) too, or\nremove the requester from this ticket."
           }
         }
+      },
+      "CustomerDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CustomerSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "requester_list"
+            ],
+            "properties": {
+              "requester_list": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/RequesterEntry"
+                }
+              }
+            }
+          }
+        ]
       },
       "CustomerEntry": {
         "type": "object",
@@ -931,6 +1395,52 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "CustomerSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "is_help_desk",
+          "domains",
+          "requesters",
+          "active_tickets"
+        ],
+        "properties": {
+          "active_tickets": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Tickets that are not closed."
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_help_desk": {
+            "type": "boolean",
+            "description": "Whether this is the help desk's own organization."
+          },
+          "name": {
+            "type": "string"
+          },
+          "offboarded_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "requesters": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -1073,6 +1583,35 @@
           }
         }
       },
+      "NewCustomer": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Mail domains of the customer's requesters, e.g. `brightfield.test`."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "NewDomain": {
+        "type": "object",
+        "required": [
+          "domain"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string"
+          }
+        }
+      },
       "NewNote": {
         "type": "object",
         "required": [
@@ -1102,6 +1641,23 @@
               {
                 "type": "null"
               }
+            ]
+          }
+        }
+      },
+      "NewRequester": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
             ]
           }
         }
@@ -1184,6 +1740,17 @@
           }
         }
       },
+      "Rename": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "Requester": {
         "type": "object",
         "required": [
@@ -1209,6 +1776,33 @@
             "type": "integer",
             "format": "int64",
             "description": "How many tickets the requester has, this one included."
+          }
+        }
+      },
+      "RequesterEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "tickets"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tickets": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },

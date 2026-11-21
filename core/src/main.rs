@@ -8,6 +8,7 @@ use tracing_subscriber::EnvFilter;
 
 mod auth;
 mod cli;
+mod customers;
 mod error;
 mod http;
 mod imap;

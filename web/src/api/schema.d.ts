@@ -38,6 +38,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/customers/all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every customer, offboarded ones included (last), with counts. */
+        get: operations["list_all"];
+        put?: never;
+        /** Adds a customer. */
+        post: operations["create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A customer with its domains and requesters. */
+        get: operations["get_customer"];
+        /** Renames a customer. */
+        put: operations["rename"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customers/{id}/domains": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Registers a mail domain: mail from it opens tickets for this customer. */
+        post: operations["add_domain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customers/{id}/domains/{domain}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Unregisters a mail domain. Requesters already registered from it stay. */
+        delete: operations["remove_domain"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customers/{id}/offboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Offboards a customer: no new tickets, its mail waits in the inbox, its history stays. */
+        post: operations["offboard"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customers/{id}/requesters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Registers a requester with the customer. */
+        post: operations["add_requester"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -291,6 +395,14 @@ export interface components {
              */
             ticket_number: number;
         };
+        CreatedCustomer: {
+            /** Format: uuid */
+            id: string;
+        };
+        CreatedRequester: {
+            /** Format: uuid */
+            id: string;
+        };
         CustomerChange: {
             /** Format: uuid */
             customer_id: string;
@@ -300,12 +412,32 @@ export interface components {
              */
             requester: components["schemas"]["RequesterMove"];
         };
+        CustomerDetail: components["schemas"]["CustomerSummary"] & {
+            requester_list: components["schemas"]["RequesterEntry"][];
+        };
         CustomerEntry: {
             /** Format: uuid */
             id: string;
             /** @description Whether this is the help desk's own organization. */
             is_help_desk: boolean;
             name: string;
+        };
+        CustomerSummary: {
+            /**
+             * Format: int64
+             * @description Tickets that are not closed.
+             */
+            active_tickets: number;
+            domains: string[];
+            /** Format: uuid */
+            id: string;
+            /** @description Whether this is the help desk's own organization. */
+            is_help_desk: boolean;
+            name: string;
+            /** Format: date-time */
+            offboarded_at?: string | null;
+            /** Format: int64 */
+            requesters: number;
         };
         /**
          * @description Whether the help desk received a message or sent it.
@@ -355,12 +487,24 @@ export interface components {
              */
             moved: number;
         };
+        NewCustomer: {
+            /** @description Mail domains of the customer's requesters, e.g. `brightfield.test`. */
+            domains?: string[];
+            name: string;
+        };
+        NewDomain: {
+            domain: string;
+        };
         NewNote: {
             body: string;
         };
         NewReply: {
             body: string;
             then?: components["schemas"]["TicketState"] | null;
+        };
+        NewRequester: {
+            email: string;
+            name?: string | null;
         };
         NoteEntry: {
             author_name: string;
@@ -390,6 +534,9 @@ export interface components {
         Problem: {
             error: string;
         };
+        Rename: {
+            name: string;
+        };
         Requester: {
             email: string;
             /** Format: uuid */
@@ -400,6 +547,14 @@ export interface components {
              * @description How many tickets the requester has, this one included.
              */
             ticket_count: number;
+        };
+        RequesterEntry: {
+            email: string;
+            /** Format: uuid */
+            id: string;
+            name?: string | null;
+            /** Format: int64 */
+            tickets: number;
         };
         /**
          * @description What happens to the ticket's requester when the ticket moves to another customer.
@@ -510,6 +665,338 @@ export interface operations {
                 };
             };
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_all: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerSummary"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewCustomer"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedCustomer"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_customer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerDetail"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    rename: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Rename"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    add_domain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewDomain"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    remove_domain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+                /** @description The mail domain */
+                domain: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    offboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    add_requester: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewRequester"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedRequester"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
