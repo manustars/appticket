@@ -51,6 +51,10 @@ A ticket of the help desk's own organization that tracks one failure affecting s
 and each customer's ticket attached to it.
 _Avoid_: Major incident, problem, master ticket
 
+**Priority**:
+How soon a ticket needs attention: low, normal, high or urgent.
+_Avoid_: Severity, urgency, importance
+
 **Assignee**:
 The one agent responsible for a ticket at a given time.
 _Avoid_: Owner, handler
@@ -95,5 +99,6 @@ The AI add-on that reads incoming messages and produces proposals.
 _Avoid_: AI agent, bot
 
 **Proposal**:
-A course of action the Assistant suggests, which takes effect only once an agent accepts it.
+A course of action the Assistant suggests on a message or a ticket, which takes effect only once an
+agent accepts it.
 _Avoid_: Suggestion, recommendation

@@ -26,6 +26,9 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
 
 ## Tickets
 
+- A ticket has a priority: low, normal (the default), high or urgent. Agents change it, except on
+  a closed ticket.
+
 - Every ticket belongs to exactly one customer; the requester is optional (planned work, monitoring
   alerts) and, when present, belongs to that customer.
 - Only a ticket with a requester can be replied to. A reply goes through the outbox and moves the
@@ -68,7 +71,14 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
 
 - It proposes on inbox messages (open a ticket for a customer, attach to a ticket, discard) and on
   tickets (assets involved, priority, a draft reply).
-- It never acts alone: every proposal waits for an agent to accept, edit or discard it.
+- It never acts alone: every proposal waits for an agent to accept, edit or discard it. An
+  accepted draft reply goes into the composer; the agent sends it.
+- A message or ticket has at most one open proposal of each kind; a newer one replaces it. A
+  proposal that no longer applies (the message left the inbox, the ticket was closed) cannot be
+  accepted.
+- Its language model is a setting: an external service by default, or one on the help desk's own
+  servers. Sending customers' mail to an external service is each help desk's data-protection
+  decision, and the configuration says so.
 
 ## Out of scope for now
 
