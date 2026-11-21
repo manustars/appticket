@@ -103,9 +103,11 @@ case "$mode" in
     check_file "commit $c message" "$tmp"
     git_q diff-tree --root --no-commit-id --name-only -r "$c" > "$tmp"
     check_file "commit $c paths" "$tmp"
-    # Added lines only: what this commit puts into history.
+    # Added lines only: what this commit puts into history. The diff's leading plus sign is removed,
+    # so that it does not join the text after it: a line that starts with an at sign followed by a
+    # file name would otherwise read as an e-mail address.
     git_q diff-tree --root --no-commit-id -p -U0 --no-color --no-renames -r "$c" \
-      | { grep -E '^\+' || true; } | { grep -vE '^\+\+\+ ' || true; } > "$tmp"
+      | { grep -E '^\+' || true; } | { grep -vE '^\+\+\+ ' || true; } | sed 's/^+//' > "$tmp"
     check_file "commit $c content" "$tmp"
     for who in "$(git log -1 --format=%ae "$c")" "$(git log -1 --format=%ce "$c")"; do
       case "$who" in
