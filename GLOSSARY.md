@@ -58,7 +58,11 @@ _Avoid_: Owner, handler
 **Message**:
 An e-mail the help desk receives or sends; once attached to a ticket, it is part of that ticket's
 conversation with its requester.
-_Avoid_: Mail, e-mail, reply
+_Avoid_: Mail, e-mail
+
+**Reply**:
+A message an agent writes to the requester of a ticket; it is sent through the outbox.
+_Avoid_: Answer, response
 
 **Outbox**:
 Where a reply an agent has written waits until it is sent to the requester.
