@@ -25,6 +25,8 @@ const BRIGHTFIELD: &str = "0e7b6a52-5d0f-4d5e-8a8e-3f2b1c0d9e8f";
 const NORTHGATE: &str = "1f8c7b63-6e10-4e6f-9b9f-4a3c2d1e0f90";
 const PC: &str = "5a1d0c3e-7b2f-4e6a-9c8d-1f0e2d3c4b5a";
 const PRINTER: &str = "6b2e1d4f-8c30-4f7b-8d9e-2a1f3e4d5c6b";
+const HOSTED_MAIL: &str = "8c9d0e1f-2a3b-4c5d-9e6f-7a8b9c0d1e2f";
+const BACKUP: &str = "9d0e1f2a-3b4c-4d5e-8f6a-7b8c9d0e1f2a";
 const MESSAGE: &str = "7b8c9d0e-1f2a-4b3c-8d5e-6f7a8b9c0d1e";
 
 fn uuid(s: &str) -> Uuid {
@@ -93,6 +95,18 @@ async fn fake_core(core: SharedCore) -> String {
              "retired_at": null}
         ]))
     }
+    async fn services(State(core): State<SharedCore>, Path(id): Path<Uuid>) -> Json<Value> {
+        core.lock().unwrap().calls.push(format!("services {id}"));
+        if id != uuid(BRIGHTFIELD) {
+            return Json(json!([]));
+        }
+        Json(json!([
+            {"id": HOSTED_MAIL, "name": "Posta ospitata", "description": "Caselle gestite",
+             "customers": 3, "retired_at": null},
+            {"id": BACKUP, "name": "Backup notturno", "description": "", "customers": 2,
+             "retired_at": null}
+        ]))
+    }
     async fn tickets(
         State(core): State<SharedCore>,
         Query(q): Query<HashMap<String, String>>,
@@ -140,6 +154,7 @@ async fn fake_core(core: SharedCore) -> String {
         .route("/api/addon/whoami", get(whoami))
         .route("/api/addon/customers", get(customers))
         .route("/api/addon/customers/{id}/assets", get(assets))
+        .route("/api/addon/customers/{id}/services", get(services))
         .route("/api/addon/tickets", get(tickets))
         .route("/api/addon/tickets/{number}", get(ticket))
         .route("/api/addon/proposals", post(propose))
@@ -598,6 +613,8 @@ fn ticket_answer(priority: Option<&str>, assets: &[&str], reply: Option<&str>) -
             "it": "La richiedente non può lavorare."},
         "assets": assets,
         "assets_rationale": {"en": "The message names PC-0042.", "it": "Il messaggio cita PC-0042."},
+        "services": [],
+        "services_rationale": {"en": "", "it": ""},
         "reply": reply,
         "reply_rationale": {"en": "Asks for the missing details.",
             "it": "Chiede i dettagli che mancano."}
@@ -945,4 +962,76 @@ async fn each_ticket_proposal_needs_its_own_english_rationale() {
     );
     // The draft reply itself is not touched: it stays in the requester's language.
     assert_eq!(made[1].content, Content::Reply { body: DRAFT.into() });
+}
+
+// ----- services -----
+
+#[tokio::test]
+async fn services_are_proposed_by_reference_and_checked() {
+    let w = world(Provider::Anthropic).await;
+    {
+        let mut core = w.core.lock().unwrap();
+        core.tickets
+            .insert(30, ticket_json(30, "open", true, &[], "requester"));
+        let mut linked = ticket_json(31, "open", true, &[], "requester");
+        linked["services"] = json!([{"id": HOSTED_MAIL, "name": "Posta ospitata"}]);
+        core.tickets.insert(31, linked);
+    }
+    let answer = |services: &[&str]| {
+        let mut a = ticket_answer(None, &[], None);
+        a["services"] = json!(services);
+        a["services_rationale"] =
+            json!({"en": "Mail does not arrive.", "it": "La posta non arriva."});
+        claude(a)
+    };
+
+    // A listed service: proposed, with its rationale in both languages.
+    w.answer(answer(&["S1"]));
+    let made = w
+        .process("ticket.opened", json!({"ticket_number": 30}))
+        .await;
+    assert_eq!(
+        made.iter().map(|p| p.content.clone()).collect::<Vec<_>>(),
+        [Content::Services {
+            service_ids: vec![uuid(HOSTED_MAIL)]
+        }]
+    );
+    assert_eq!(made[0].rationale.len(), 2);
+    assert_eq!(
+        w.posted()[0],
+        json!({"ticket_number": 30, "content": {"kind": "services", "service_ids": [HOSTED_MAIL]},
+            "rationale": {"en": "Mail does not arrive.", "it": "La posta non arriva."}})
+    );
+    let input = w.requests()[0].1["messages"][0]["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        input.contains("S1: \"Posta ospitata\" (Caselle gestite)"),
+        "{input}"
+    );
+    assert!(input.contains("S2: \"Backup notturno\"\n"));
+    assert!(input.contains("Services already linked: none"));
+
+    // A reference that was not listed: no services proposal at all.
+    w.answer(answer(&["S1", "S9"]));
+    assert!(
+        w.process("ticket.opened", json!({"ticket_number": 30}))
+            .await
+            .is_empty()
+    );
+
+    // Already linked: nothing to propose.
+    w.answer(answer(&["s1"]));
+    assert!(
+        w.process("ticket.opened", json!({"ticket_number": 31}))
+            .await
+            .is_empty()
+    );
+    let input = w.requests()[2].1["messages"][0]["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(input.contains("Services already linked: Posta ospitata"));
+    assert_eq!(w.posted().len(), 1);
 }

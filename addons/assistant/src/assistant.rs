@@ -7,11 +7,13 @@ use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 use hd_addon_sdk::api::{
-    Asset, Customer, Direction, Priority, Ticket, TicketState, TicketSummary, TimelineEntry,
+    Asset, Customer, Direction, Priority, Service, Ticket, TicketState, TicketSummary,
+    TimelineEntry,
 };
 use hd_addon_sdk::{Client, Content, Envelope, Event, MessageReceived, Rationale, Target, Triage};
 use serde::Deserialize;
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::model::{Model, ModelError, Task};
 use crate::prompts;
@@ -110,6 +112,10 @@ struct TicketAnswer {
     assets: Vec<String>,
     #[serde(default)]
     assets_rationale: Value,
+    #[serde(default)]
+    services: Vec<String>,
+    #[serde(default)]
+    services_rationale: Value,
     #[serde(default)]
     reply: Option<String>,
     #[serde(default)]
@@ -232,18 +238,21 @@ impl Assistant {
             return Ok(Vec::new());
         }
         let assets = self.core.customer_assets(ticket.customer.id).await?;
+        let services = self.core.customer_services(ticket.customer.id).await?;
         let languages = self.current_languages().await;
         let system = prompts::system(prompts::TICKET_SYSTEM, &languages);
         let task = Task {
             name: "ticket",
             system: &system,
-            input: prompts::ticket_input(&ticket, &assets),
+            input: prompts::ticket_input(&ticket, &assets, &services),
             schema: prompts::ticket_schema(&languages),
         };
         let Some(answer) = self.ask(task).await? else {
             return Ok(Vec::new());
         };
-        Ok(decide_ticket(answer, &ticket, &assets, &languages))
+        Ok(decide_ticket(
+            answer, &ticket, &assets, &services, &languages,
+        ))
     }
 }
 
@@ -381,11 +390,32 @@ fn decide_triage(
     })
 }
 
+/// The ids the model picked by reference from `ids` (shown as `reference(0)`, `reference(1)`…),
+/// each once and without those already `linked`. `None` when any reference was not shown: the
+/// model may have confused the list, so none of its picks is trusted.
+fn picked(
+    references: &[String],
+    ids: &[Uuid],
+    reference: fn(usize) -> String,
+    linked: &HashSet<Uuid>,
+) -> Option<Vec<Uuid>> {
+    let mut out = Vec::new();
+    for given in references {
+        let given = given.trim().to_ascii_uppercase();
+        let i = (0..ids.len()).find(|&i| reference(i) == given)?;
+        if !linked.contains(&ids[i]) && !out.contains(&ids[i]) {
+            out.push(ids[i]);
+        }
+    }
+    Some(out)
+}
+
 /// Keeps the parts of a ticket answer that are valid and would change something.
 fn decide_ticket(
     answer: Value,
     ticket: &Ticket,
     assets: &[Asset],
+    services: &[Service],
     languages: &[String],
 ) -> Vec<Proposed> {
     let answer: TicketAnswer = match serde_json::from_value(answer) {
@@ -416,22 +446,32 @@ fn decide_ticket(
         push(Content::Priority { priority }, &answer.priority_rationale);
     }
 
-    let mut ids = Vec::new();
-    let mut unknown = false;
-    for reference in &answer.assets {
-        let reference = reference.trim().to_ascii_uppercase();
-        match (0..assets.len()).find(|&i| prompts::asset_ref(i) == reference) {
-            Some(i) => ids.push(assets[i].id),
-            None => unknown = true,
+    let asset_ids: Vec<Uuid> = assets.iter().map(|a| a.id).collect();
+    let linked: HashSet<Uuid> = ticket.assets.iter().map(|a| a.id).collect();
+    match picked(&answer.assets, &asset_ids, prompts::asset_ref, &linked) {
+        None => tracing::warn!("no assets proposal: the answer names an asset that was not listed"),
+        Some(ids) if !ids.is_empty() => {
+            push(Content::Assets { asset_ids: ids }, &answer.assets_rationale)
         }
+        Some(_) => {}
     }
-    let linked: HashSet<_> = ticket.assets.iter().map(|a| a.id).collect();
-    let mut seen = HashSet::new();
-    ids.retain(|id| !linked.contains(id) && seen.insert(*id));
-    if unknown {
-        tracing::warn!("no assets proposal: the answer names an asset that was not listed");
-    } else if !ids.is_empty() {
-        push(Content::Assets { asset_ids: ids }, &answer.assets_rationale);
+
+    let service_ids: Vec<Uuid> = services.iter().map(|s| s.id).collect();
+    let linked: HashSet<Uuid> = ticket.services.iter().map(|s| s.id).collect();
+    match picked(
+        &answer.services,
+        &service_ids,
+        prompts::service_ref,
+        &linked,
+    ) {
+        None => {
+            tracing::warn!("no services proposal: the answer names a service that was not listed")
+        }
+        Some(ids) if !ids.is_empty() => push(
+            Content::Services { service_ids: ids },
+            &answer.services_rationale,
+        ),
+        Some(_) => {}
     }
 
     // A draft only answers a requester who wrote last; an agent may already have replied.

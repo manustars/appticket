@@ -10,16 +10,18 @@ the agent sends it.
 | Event | What it reads | What it may propose |
 |---|---|---|
 | `message.received`, message in the inbox | the sender, the customers with their mail domains, the sender's open tickets | **triage**: open a ticket for a customer, attach the message to one of the sender's tickets, or discard it (spam, newsletter, automatic reply) |
-| `message.received` on a ticket, and `ticket.opened` | the ticket's messages (not its internal notes), the customer's active assets | **priority**, **assets** involved, a **draft reply** in the language of the requester's latest message |
+| `message.received` on a ticket, and `ticket.opened` | the ticket's messages (not its internal notes), the customer's active assets and the services it uses | **priority**, **assets** and **services** involved, a **draft reply** in the language of the requester's latest message |
 
 The model's answer is checked before anything is proposed, and whatever does not pass is dropped:
 
-- a customer, asset or ticket the model was not shown;
+- a customer, asset, service or ticket the model was not shown (the model picks assets and
+  services by short references, A1 or S1; one unknown reference drops that whole proposal);
 - a ticket opened for a customer without words in the message that name it: the model must quote
   them, the quote must appear in the message and contain the customer's name or one of its mail
   domains (a domain that merely resembles a customer's is not enough);
 - an answer that is not the JSON asked for, that was cut off, or that the model declined to give;
-- anything that would change nothing: the priority the ticket already has, assets already linked;
+- anything that would change nothing: the priority the ticket already has, assets or services already
+  linked;
 - a draft reply when the ticket has no requester, or when the help desk wrote last.
 
 When the model is unsure it is asked to propose nothing, which is the answer agents prefer to a
@@ -110,7 +112,7 @@ HD_ASSISTANT_MODEL=<a model you have pulled>
 ## Privacy
 
 To make its proposals the Assistant sends the model the messages it reads: customers' mail, with
-senders' names and addresses, the customer's name and its assets (never internal notes). With any
+senders' names and addresses, the customer's name, its assets and services (never internal notes). With any
 hosted provider that means sending them to an external service. Whether a help desk may do that
 is its own data-protection decision; the Assistant logs a warning at startup unless the model
 service is on this machine: `ollama` or `openai-compatible` with a loopback address (Ollama's

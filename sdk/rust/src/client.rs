@@ -8,7 +8,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{Asset, Customer, Identity, Ticket, TicketSummary};
+use crate::api::{Asset, Customer, Identity, Service, Ticket, TicketSummary};
 use crate::proposals::{Content, Rationale, Target};
 
 /// Why a call to the core failed.
@@ -195,6 +195,12 @@ impl Client {
     /// A customer's active assets. Scope `directory:read`.
     pub async fn customer_assets(&self, customer: Uuid) -> Result<Vec<Asset>, Error> {
         self.get(&format!("/customers/{customer}/assets"), &[])
+            .await
+    }
+
+    /// The active services a customer uses. Scope `directory:read`.
+    pub async fn customer_services(&self, customer: Uuid) -> Result<Vec<Service>, Error> {
+        self.get(&format!("/customers/{customer}/services"), &[])
             .await
     }
 

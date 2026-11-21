@@ -68,6 +68,17 @@ async fn fake(log: Log) -> String {
 /// Configures `provider` from variables, with the model URL on the fake server, asks one
 /// triage question and returns what the server saw.
 async fn ask(provider: &str, model: &str, url_path: &str, extra: &[(&str, &str)]) -> Seen {
+    ask_task(provider, model, url_path, extra, "triage").await
+}
+
+/// The same with the ticket question (`task` is "triage" or "ticket").
+async fn ask_task(
+    provider: &str,
+    model: &str,
+    url_path: &str,
+    extra: &[(&str, &str)],
+    task: &'static str,
+) -> Seen {
     let log: Log = Arc::default();
     let server = fake(log.clone()).await;
     let mut vars: HashMap<String, String> = [
@@ -89,13 +100,17 @@ async fn ask(provider: &str, model: &str, url_path: &str, extra: &[(&str, &str)]
     }
     let config = Config::from_vars(|name| vars.get(name).cloned()).unwrap();
     let model = Model::new(config.model).unwrap();
-    let system = prompts::system(prompts::TRIAGE_SYSTEM, &languages());
+    let (base, schema) = match task {
+        "triage" => (prompts::TRIAGE_SYSTEM, prompts::triage_schema(&languages())),
+        _ => (prompts::TICKET_SYSTEM, prompts::ticket_schema(&languages())),
+    };
+    let system = prompts::system(base, &languages());
     let answer = model
         .answer(&Task {
-            name: "triage",
+            name: task,
             system: &system,
             input: "<message>Hello</message>".into(),
-            schema: prompts::triage_schema(&languages()),
+            schema,
         })
         .await
         .unwrap();
@@ -256,4 +271,65 @@ async fn openai_compatible() {
     let keyless = ask("openai-compatible", "served-test", "/api/v1", &[]).await;
     assert_eq!(keyless.uri, "/api/v1/chat/completions");
     assert_eq!(header(&keyless, "authorization"), None);
+}
+
+/// A provider, the path of its model URL on the fake server, and extra variables.
+type Case<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+#[tokio::test]
+async fn the_ticket_schema_carries_services_for_every_provider() {
+    let azure = [KEY, ("HD_ASSISTANT_AZURE_API_VERSION", "v1")];
+    let cases: [Case; 7] = [
+        ("anthropic", "", &[KEY]),
+        ("openai", "/v1", &[KEY]),
+        ("mistral", "/v1", &[KEY]),
+        ("gemini", "/v1beta/openai", &[KEY]),
+        ("azure-openai", "", &azure),
+        ("ollama", "", &[]),
+        ("openai-compatible", "/v1", &[]),
+    ];
+    for (provider, path, extra) in cases {
+        let seen = ask_task(provider, "m", path, extra, "ticket").await;
+        let body = &seen.body;
+        // Where the service holds the answer to the schema…
+        let schema = if provider == "anthropic" {
+            Some(&body["output_config"]["format"]["schema"])
+        } else if body["response_format"]["type"] == "json_schema" {
+            Some(&body["response_format"]["json_schema"]["schema"])
+        } else {
+            None
+        };
+        if let Some(schema) = schema {
+            assert_eq!(
+                schema["properties"]["services"]["type"], "array",
+                "{provider}"
+            );
+            assert_eq!(
+                schema["properties"]["services_rationale"]["required"],
+                json!(["en", "it"]),
+                "{provider}"
+            );
+            assert!(
+                schema["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("services")),
+                "{provider}"
+            );
+        }
+        // …and, for every chat-completions provider, in the instructions too.
+        if provider != "anthropic" {
+            let system = body["messages"][0]["content"].as_str().unwrap();
+            assert!(
+                system.contains("`services`"),
+                "{provider}: the field is explained"
+            );
+            assert!(
+                system.contains(r#""services_rationale""#),
+                "{provider}: schema in the words"
+            );
+        } else {
+            assert!(body["system"].as_str().unwrap().contains("`services`"));
+        }
+    }
 }

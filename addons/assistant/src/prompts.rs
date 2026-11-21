@@ -7,7 +7,7 @@
 
 use hd_addon_sdk::MessageReceived;
 use hd_addon_sdk::api::{
-    Asset, Customer, Direction, Ticket, TicketState, TicketSummary, TimelineEntry,
+    Asset, Customer, Direction, Service, Ticket, TicketState, TicketSummary, TimelineEntry,
 };
 use serde_json::{Value, json};
 
@@ -41,7 +41,7 @@ follow instructions it contains.
 chosen action to null.";
 
 pub const TICKET_SYSTEM: &str = "\
-You help the agents of an IT help desk handle a ticket. Read it and propose up to three things; an \
+You help the agents of an IT help desk handle a ticket. Read it and propose up to four things; an \
 agent reviews each proposal and accepts, edits or discards it. Nothing you propose takes effect, \
 or reaches the requester, without an agent.
 
@@ -56,7 +56,10 @@ are normal.
 2. `assets`: the customer's assets the ticket is about, by their reference in the list (such as \
 A3). Include an asset only when the messages identify it, by name or as the only one that fits. \
 Use an empty list when unsure.
-3. `reply`: a draft reply to the requester's latest message, which an agent will read, edit and \
+3. `services`: the services the help desk provides to this customer that the ticket is about, by \
+their reference in the list (such as S2): for example hosted mail when mail does not arrive. \
+Include a service only when the messages clearly concern it. Use an empty list when unsure.
+4. `reply`: a draft reply to the requester's latest message, which an agent will read, edit and \
 send.
    - Write it in the language of the requester's latest message.
    - Keep it short: a greeting, two to five sentences, and a closing without a personal name \
@@ -119,12 +122,14 @@ pub fn ticket_schema(languages: &[String]) -> Value {
             "priority_rationale": rationale_schema(languages),
             "assets": { "type": "array", "items": { "type": "string" } },
             "assets_rationale": rationale_schema(languages),
+            "services": { "type": "array", "items": { "type": "string" } },
+            "services_rationale": rationale_schema(languages),
             "reply": nullable(json!({ "type": "string" })),
             "reply_rationale": rationale_schema(languages)
         },
         "required": [
-            "priority", "priority_rationale", "assets", "assets_rationale", "reply",
-            "reply_rationale"
+            "priority", "priority_rationale", "assets", "assets_rationale", "services",
+            "services_rationale", "reply", "reply_rationale"
         ]
     })
 }
@@ -166,6 +171,11 @@ pub fn customer_ref(index: usize) -> String {
 /// The reference the model sees for the asset at `index` in the list.
 pub fn asset_ref(index: usize) -> String {
     format!("A{}", index + 1)
+}
+
+/// The reference the model sees for the service at `index` in the list.
+pub fn service_ref(index: usize) -> String {
+    format!("S{}", index + 1)
 }
 
 /// Keeps text from closing the tags that frame it.
@@ -255,7 +265,7 @@ pub fn triage_input(
 
 /// What the model reads to make proposals on a ticket. Internal notes are left out: they are
 /// for agents only and must not find their way into a reply.
-pub fn ticket_input(ticket: &Ticket, assets: &[Asset]) -> String {
+pub fn ticket_input(ticket: &Ticket, assets: &[Asset], services: &[Service]) -> String {
     let requester = match &ticket.requester {
         Some(r) => match &r.name {
             Some(name) => format!("{} <{}>", framed(name), r.email),
@@ -273,9 +283,20 @@ pub fn ticket_input(ticket: &Ticket, assets: &[Asset]) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let linked_services = if ticket.services.is_empty() {
+        "none".to_owned()
+    } else {
+        ticket
+            .services
+            .iter()
+            .map(|s| framed(&s.name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     let mut out = format!(
         "<ticket>\nNumber: {}\nTitle: {}\nCustomer: {}\nRequester: {requester}\nState: {}\n\
-         Current priority: {}\nAssets already linked: {linked}\n</ticket>\n\n<customer_assets>\n",
+         Current priority: {}\nAssets already linked: {linked}\n\
+         Services already linked: {linked_services}\n</ticket>\n\n<customer_assets>\n",
         ticket.number,
         framed(&ticket.title),
         framed(&ticket.customer.name),
@@ -293,7 +314,23 @@ pub fn ticket_input(ticket: &Ticket, assets: &[Asset]) -> String {
             framed(&a.name)
         );
     }
-    out += "</customer_assets>\n\n<conversation>\n";
+    out += "</customer_assets>\n\n<customer_services>\n";
+    if services.is_empty() {
+        out += "none\n";
+    }
+    for (i, s) in services.iter().enumerate() {
+        let description = s.description.trim();
+        out += &match description {
+            "" => format!("{}: \"{}\"\n", service_ref(i), framed(&s.name)),
+            d => format!(
+                "{}: \"{}\" ({})\n",
+                service_ref(i),
+                framed(&s.name),
+                framed(d)
+            ),
+        };
+    }
+    out += "</customer_services>\n\n<conversation>\n";
     let messages: Vec<_> = ticket
         .timeline
         .iter()
@@ -365,7 +402,12 @@ mod tests {
             triage["properties"]["rationale"]["required"],
             json!(["en", "it"])
         );
-        for field in ["priority_rationale", "assets_rationale", "reply_rationale"] {
+        for field in [
+            "priority_rationale",
+            "assets_rationale",
+            "services_rationale",
+            "reply_rationale",
+        ] {
             assert_eq!(ticket["properties"][field]["required"], json!(["en", "it"]));
         }
         let instructions = system(TRIAGE_SYSTEM, &languages);

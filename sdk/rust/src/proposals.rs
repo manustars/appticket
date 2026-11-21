@@ -18,6 +18,8 @@ pub enum Content {
     Priority { priority: Priority },
     /// Active assets of the ticket's customer the ticket is about (at least one).
     Assets { asset_ids: Vec<Uuid> },
+    /// Active services the ticket's customer uses that the ticket is about (at least one).
+    Services { service_ids: Vec<Uuid> },
     /// A draft reply to the requester; an accepted draft goes into the agent's composer and is
     /// never sent by itself.
     Reply { body: String },
@@ -42,6 +44,7 @@ impl Content {
             Content::Triage(_) => "triage",
             Content::Priority { .. } => "priority",
             Content::Assets { .. } => "assets",
+            Content::Services { .. } => "services",
             Content::Reply { .. } => "reply",
         }
     }
@@ -97,6 +100,12 @@ mod tests {
                     asset_ids: vec![customer],
                 },
                 json!({"kind": "assets", "asset_ids": [customer]}),
+            ),
+            (
+                Content::Services {
+                    service_ids: vec![customer],
+                },
+                json!({"kind": "services", "service_ids": [customer]}),
             ),
             (
                 Content::Reply {

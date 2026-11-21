@@ -39,6 +39,15 @@ pub struct Asset {
     pub name: String,
 }
 
+/// An active service a customer uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Service {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+}
+
 /// A ticket's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -97,6 +106,9 @@ pub struct Ticket {
     /// Assets already linked to the ticket.
     #[serde(default)]
     pub assets: Vec<LinkedAsset>,
+    /// Services already linked to the ticket.
+    #[serde(default)]
+    pub services: Vec<LinkedService>,
     /// Messages and notes, oldest first.
     #[serde(default)]
     pub timeline: Vec<TimelineEntry>,
@@ -122,6 +134,12 @@ pub struct Requester {
 pub struct LinkedAsset {
     pub id: Uuid,
     pub kind: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkedService {
+    pub id: Uuid,
     pub name: String,
 }
 
