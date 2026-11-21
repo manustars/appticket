@@ -132,7 +132,7 @@ export async function moveTicket(
   requester: Schemas['RequesterMove'],
 ): Promise<number> {
   const request: Schemas['CustomerChange'] = { customer_id: customerId, requester }
-  return (await json<Schemas['MovedTickets']>('PUT', `${ticketPath(number)}/customer`, request)).moved
+  return (await json<Schemas['Moved']>('PUT', `${ticketPath(number)}/customer`, request)).moved
 }
 
 /** Opens a ticket for `customerId` from an inbox message; returns the new ticket's number. */
