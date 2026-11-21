@@ -3,11 +3,14 @@ import {
   addNote,
   getTicket,
   listAgents,
+  listCustomers,
+  moveTicket,
   reply,
   setAssignee,
   setState,
   Unauthorized,
   type AgentEntry,
+  type CustomerEntry,
   type TicketDetail,
   type TicketState,
   type TimelineEntry,
@@ -30,6 +33,8 @@ export function TicketView({ number, onChanged, onSignedOut }: Props) {
   const [agents, setAgents] = useState<AgentEntry[]>([])
   const [actionError, setActionError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [moving, setMoving] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
   // Only the latest load may update the view: a slow poll must not overwrite a newer answer.
   const latest = useRef(0)
 
@@ -106,7 +111,17 @@ export function TicketView({ number, onChanged, onSignedOut }: Props) {
       {loadError && <p className="error" role="alert">{loadError}</p>}
 
       <dl className="facts">
-        <div><dt>Customer</dt><dd>{ticket.customer.name}</dd></div>
+        <div>
+          <dt>Customer</dt>
+          <dd>
+            {ticket.customer.name}{' '}
+            {!closed && !moving && (
+              <button type="button" className="link" disabled={busy} onClick={() => setMoving(true)}>
+                Change
+              </button>
+            )}
+          </dd>
+        </div>
         <div>
           <dt>Requester</dt>
           <dd>
@@ -140,6 +155,20 @@ export function TicketView({ number, onChanged, onSignedOut }: Props) {
         </div>
         <div><dt>Opened</dt><dd className="when">{formatTime(ticket.created_at)}</dd></div>
       </dl>
+      {moving && (
+        <MoveCustomer ticket={ticket} busy={busy} onCancel={() => setMoving(false)}
+          onMove={async (customerId, requesterMove) => {
+            let moved = 0
+            const ok = await change(async () => {
+              moved = await moveTicket(number, customerId, requesterMove)
+            })
+            if (ok) {
+              setMoving(false)
+              setNotice(moved > 1 ? `Moved ${moved} tickets of this requester.` : 'Ticket moved.')
+            }
+          }} />
+      )}
+      {notice && <p className="done" role="status">{notice}</p>}
       {actionError && <p className="error" role="alert">{actionError}</p>}
 
       <ol className="timeline">
@@ -147,13 +176,13 @@ export function TicketView({ number, onChanged, onSignedOut }: Props) {
         {ticket.timeline.length === 0 && <li className="empty">Nothing written on this ticket yet.</li>}
       </ol>
 
-      {closed ? (
+      {closed && (
         <p className="closed-notice">
           This ticket is closed, which is final. A new message from the requester opens a new ticket.
+          Agents can still add internal notes.
         </p>
-      ) : (
-        <Composer ticket={ticket} onDone={() => { void load(); onChanged() }} onSignedOut={onSignedOut} />
       )}
+      <Composer ticket={ticket} onDone={() => { void load(); onChanged() }} onSignedOut={onSignedOut} />
     </div>
   )
 }
@@ -219,8 +248,10 @@ function Composer({ ticket, onDone, onSignedOut }: {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const id = useId()
-  // Without a requester there is nobody to reply to.
-  const mode: Mode = requester ? chosen : 'note'
+  // Without a requester there is nobody to reply to, and a closed ticket gets no more replies.
+  const closed = ticket.state === 'closed'
+  const canReply = requester !== null && requester !== undefined && !closed
+  const mode: Mode = canReply ? chosen : 'note'
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -247,7 +278,7 @@ function Composer({ ticket, onDone, onSignedOut }: {
         <legend className="visually-hidden">What you are writing</legend>
         <label className={mode === 'reply' ? 'current' : ''}>
           <input type="radio" name={`${id}-mode`} value="reply" checked={mode === 'reply'}
-            disabled={!requester} onChange={() => setChosen('reply')} />
+            disabled={!canReply} onChange={() => setChosen('reply')} />
           Reply to requester
         </label>
         <label className={mode === 'note' ? 'current' : ''}>
@@ -259,9 +290,11 @@ function Composer({ ticket, onDone, onSignedOut }: {
       <p className="mode-hint" id={`${id}-hint`}>
         {mode === 'reply' && requester
           ? <>Sent by e-mail to <strong>{requester.email}</strong>.</>
-          : requester
-            ? <>Only agents see a note. It is <strong>never sent</strong> to the requester.</>
-            : <>This ticket has no requester, so there is nobody to reply to. Only agents see a note.</>}
+          : closed
+            ? <>The ticket is closed, so it gets no more replies. Only agents see a note.</>
+            : requester
+              ? <>Only agents see a note. It is <strong>never sent</strong> to the requester.</>
+              : <>This ticket has no requester, so there is nobody to reply to. Only agents see a note.</>}
       </p>
       <label className="visually-hidden" htmlFor={`${id}-body`}>
         {mode === 'reply' ? 'Reply to the requester' : 'Internal note'}
@@ -282,6 +315,64 @@ function Composer({ ticket, onDone, onSignedOut }: {
         <button type="submit" disabled={busy || !body.trim()}>
           {mode === 'reply' && requester ? `Send reply to ${requester.email}` : 'Add internal note'}
         </button>
+      </div>
+    </form>
+  )
+}
+
+/** Moves the ticket to the right customer, and says what happens to the requester. */
+function MoveCustomer({ ticket, busy, onCancel, onMove }: {
+  ticket: TicketDetail
+  busy: boolean
+  onCancel: () => void
+  onMove: (customerId: string, requester: 'move' | 'remove') => Promise<void>
+}) {
+  const [customers, setCustomers] = useState<CustomerEntry[] | null>(null)
+  const [customerId, setCustomerId] = useState('')
+  const [requesterMove, setRequesterMove] = useState<'move' | 'remove'>('move')
+  const [error, setError] = useState<string | null>(null)
+  const id = useId()
+  const requester = ticket.requester
+  const others = requester ? requester.ticket_count - 1 : 0
+
+  useEffect(() => {
+    listCustomers().then(setCustomers, (e) => setError(errorText(e)))
+  }, [])
+
+  function submit(event: FormEvent) {
+    event.preventDefault()
+    if (customerId) void onMove(customerId, requesterMove)
+  }
+
+  return (
+    <form className="move" onSubmit={submit}>
+      <label htmlFor={`${id}-customer`}>Move this ticket to</label>
+      <select id={`${id}-customer`} value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+        <option value="">Choose a customer…</option>
+        {customers?.filter((c) => c.id !== ticket.customer.id).map((c) => (
+          <option key={c.id} value={c.id}>{c.name}{c.is_help_desk ? ' (help desk)' : ''}</option>
+        ))}
+      </select>
+      {requester && (
+        <fieldset>
+          <legend>The requester {requester.email} belongs to {ticket.customer.name}.</legend>
+          <label>
+            <input type="radio" name={`${id}-requester`} checked={requesterMove === 'move'}
+              onChange={() => setRequesterMove('move')} />
+            The requester was assigned to the wrong customer: move them too
+            {others > 0 && <>, with their {others} other ticket{others === 1 ? '' : 's'}</>}
+          </label>
+          <label>
+            <input type="radio" name={`${id}-requester`} checked={requesterMove === 'remove'}
+              onChange={() => setRequesterMove('remove')} />
+            Keep the requester with {ticket.customer.name} and remove them from this ticket
+          </label>
+        </fieldset>
+      )}
+      {error && <p className="error" role="alert">{error}</p>}
+      <div className="move-foot">
+        <button type="button" onClick={onCancel}>Cancel</button>
+        <button type="submit" disabled={busy || !customerId}>Move ticket</button>
       </div>
     </form>
   )

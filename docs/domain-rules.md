@@ -36,9 +36,11 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
   uses, at any time.
 - A ticket's states are open, waiting, resolved (a reply from the requester reopens it) and closed
   (final; a new message opens a new ticket).
-- A ticket can be moved to another customer. Linked assets and services that do not fit the new
-  customer are unlinked after a warning, and the agent either moves the requester too or removes the
-  requester from the ticket. No ticket is ever left breaking the rules above.
+- A ticket that is not closed can be moved to another customer. Linked assets and services that do
+  not fit the new customer are unlinked after a warning, and the agent either moves the requester
+  too or removes the requester from the ticket. Moving the requester means the requester was
+  identified with the wrong customer, so all of the requester's tickets move with them, closed ones
+  included. No ticket is ever left breaking the rules above.
 - A parent ticket belongs to the help desk's own organization; its children keep their own customer
   and requester. Resolving the parent lets an agent resolve every child with one message to each
   requester. This is the only link between tickets of different customers.

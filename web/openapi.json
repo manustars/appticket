@@ -527,6 +527,75 @@
         }
       }
     },
+    "/api/tickets/{number}/customer": {
+      "put": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Moves the ticket to another customer, for when it was assigned to the wrong one.",
+        "operationId": "move_ticket",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovedTickets"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tickets/{number}/notes": {
       "post": {
         "tags": [
@@ -779,6 +848,23 @@
           }
         }
       },
+      "CustomerChange": {
+        "type": "object",
+        "required": [
+          "customer_id",
+          "requester"
+        ],
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/RequesterMove",
+            "description": "When the ticket has a requester: move the requester (and all of their tickets) too, or\nremove the requester from this ticket."
+          }
+        }
+      },
       "CustomerEntry": {
         "type": "object",
         "required": [
@@ -926,6 +1012,19 @@
           }
         }
       },
+      "MovedTickets": {
+        "type": "object",
+        "required": [
+          "moved"
+        ],
+        "properties": {
+          "moved": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many tickets changed customer."
+          }
+        }
+      },
       "NewNote": {
         "type": "object",
         "required": [
@@ -1041,7 +1140,8 @@
         "type": "object",
         "required": [
           "id",
-          "email"
+          "email",
+          "ticket_count"
         ],
         "properties": {
           "email": {
@@ -1056,8 +1156,21 @@
               "string",
               "null"
             ]
+          },
+          "ticket_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many tickets the requester has, this one included."
           }
         }
+      },
+      "RequesterMove": {
+        "type": "string",
+        "description": "What happens to the ticket's requester when the ticket moves to another customer.",
+        "enum": [
+          "move",
+          "remove"
+        ]
       },
       "SignInRequest": {
         "type": "object",

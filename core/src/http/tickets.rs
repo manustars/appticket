@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::{ApiError, AppState, Problem};
 use crate::auth::SignedIn;
-use crate::tickets::{self, TicketDetail, TicketState};
+use crate::tickets::{self, RequesterMove, TicketDetail, TicketState};
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -21,6 +21,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(reply))
         .routes(routes!(set_state))
         .routes(routes!(set_assignee))
+        .routes(routes!(move_ticket))
 }
 
 #[derive(Serialize, ToSchema, sqlx::FromRow)]
@@ -171,4 +172,35 @@ async fn set_assignee(
 ) -> Result<StatusCode, ApiError> {
     tickets::assign(&state.db, number, change.agent_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct CustomerChange {
+    customer_id: Uuid,
+    /// When the ticket has a requester: move the requester (and all of their tickets) too, or
+    /// remove the requester from this ticket.
+    requester: RequesterMove,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct MovedTickets {
+    /// How many tickets changed customer.
+    moved: i64,
+}
+
+/// Moves the ticket to another customer, for when it was assigned to the wrong one.
+#[utoipa::path(put, path = "/api/tickets/{number}/customer", tag = "tickets",
+    params(("number" = i64, Path, description = "The ticket's number")),
+    request_body = CustomerChange,
+    responses((status = OK, body = MovedTickets), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn move_ticket(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(number): Path<i64>,
+    Json(change): Json<CustomerChange>,
+) -> Result<Json<MovedTickets>, ApiError> {
+    let moved =
+        tickets::move_to_customer(&state.db, number, change.customer_id, change.requester).await?;
+    Ok(Json(MovedTickets { moved }))
 }

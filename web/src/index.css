@@ -259,3 +259,20 @@ select.state { font-weight: 500; }
   border-color: var(--note-button);
   color: var(--note-button-text);
 }
+
+button.link { border: 0; background: none; padding: 0; color: var(--accent); font-size: 0.85rem; }
+.move {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.8rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+.move > label { color: var(--muted); font-size: 0.9rem; }
+.move select { justify-self: start; }
+.move fieldset { display: grid; gap: 0.4rem; margin: 0; padding: 0; border: 0; }
+.move legend { margin-bottom: 0.3rem; color: var(--muted); font-size: 0.9rem; }
+.move fieldset label { display: flex; gap: 0.5rem; align-items: baseline; }
+.move fieldset input { width: auto; margin: 0; }
+.move-foot { display: flex; justify-content: flex-end; gap: 0.5rem; }

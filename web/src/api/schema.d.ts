@@ -193,6 +193,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tickets/{number}/customer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Moves the ticket to another customer, for when it was assigned to the wrong one. */
+        put: operations["move_ticket"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tickets/{number}/notes": {
         parameters: {
             query?: never;
@@ -274,6 +291,15 @@ export interface components {
              */
             ticket_number: number;
         };
+        CustomerChange: {
+            /** Format: uuid */
+            customer_id: string;
+            /**
+             * @description When the ticket has a requester: move the requester (and all of their tickets) too, or
+             *     remove the requester from this ticket.
+             */
+            requester: components["schemas"]["RequesterMove"];
+        };
         CustomerEntry: {
             /** Format: uuid */
             id: string;
@@ -322,6 +348,13 @@ export interface components {
             subject: string;
             to_address?: string | null;
         };
+        MovedTickets: {
+            /**
+             * Format: int64
+             * @description How many tickets changed customer.
+             */
+            moved: number;
+        };
         NewNote: {
             body: string;
         };
@@ -362,7 +395,17 @@ export interface components {
             /** Format: uuid */
             id: string;
             name?: string | null;
+            /**
+             * Format: int64
+             * @description How many tickets the requester has, this one included.
+             */
+            ticket_count: number;
         };
+        /**
+         * @description What happens to the ticket's requester when the ticket moves to another customer.
+         * @enum {string}
+         */
+        RequesterMove: "move" | "remove";
         SignInRequest: {
             email: string;
             password: string;
@@ -831,6 +874,56 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    move_ticket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's number */
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomerChange"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MovedTickets"];
+                };
             };
             401: {
                 headers: {

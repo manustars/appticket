@@ -121,6 +121,20 @@ export async function setAssignee(number: number, agentId: string | null): Promi
   await call('PUT', `${ticketPath(number)}/assignee`, request)
 }
 
+/**
+ * Moves a ticket to another customer. With `requester` "move", the requester moves too and takes
+ * all of their tickets along; with "remove", the requester leaves this ticket. Returns how many
+ * tickets moved.
+ */
+export async function moveTicket(
+  number: number,
+  customerId: string,
+  requester: Schemas['RequesterMove'],
+): Promise<number> {
+  const request: Schemas['CustomerChange'] = { customer_id: customerId, requester }
+  return (await json<Schemas['MovedTickets']>('PUT', `${ticketPath(number)}/customer`, request)).moved
+}
+
 /** Opens a ticket for `customerId` from an inbox message; returns the new ticket's number. */
 export async function openTicketFromInbox(id: string, customerId: string): Promise<number> {
   const request: Schemas['OpenTicket'] = { customer_id: customerId }

@@ -170,6 +170,83 @@ pub async fn reply(
     Ok(id)
 }
 
+/// What happens to the ticket's requester when the ticket moves to another customer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RequesterMove {
+    /// The requester was identified with the wrong customer: the requester moves too, and all of
+    /// the requester's tickets with them.
+    Move,
+    /// The requester stays with the old customer and leaves this ticket.
+    Remove,
+}
+
+/// Moves the ticket to another customer. A requester of the old customer either moves along,
+/// taking all of their tickets (closed ones too), or leaves this ticket. Returns how many tickets
+/// changed customer.
+pub async fn move_to_customer(
+    db: &PgPool,
+    number: i64,
+    customer: Uuid,
+    requester: RequesterMove,
+) -> Result<i64> {
+    let mut tx = db.begin().await?;
+    let (ticket_id, state) = lock(&mut tx, number).await?;
+    not_closed(state)?;
+    let (current, requester_id): (Uuid, Option<Uuid>) =
+        sqlx::query_as("SELECT customer_id, requester_id FROM tickets WHERE id = $1")
+            .bind(ticket_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if current == customer {
+        return rule("the ticket already belongs to this customer");
+    }
+    let offboarded: Option<bool> =
+        sqlx::query_scalar("SELECT offboarded_at IS NOT NULL FROM customers WHERE id = $1")
+            .bind(customer)
+            .fetch_optional(&mut *tx)
+            .await?;
+    match offboarded {
+        None => return Err(Error::NotFound("customer")),
+        Some(true) => return rule("the customer is offboarded and gets no tickets"),
+        Some(false) => {}
+    }
+
+    let moved = match (requester_id, requester) {
+        (Some(requester_id), RequesterMove::Move) => {
+            // The foreign key cascades the new customer to every ticket of the requester.
+            sqlx::query("UPDATE requesters SET customer_id = $2 WHERE id = $1")
+                .bind(requester_id)
+                .bind(customer)
+                .execute(&mut *tx)
+                .await?;
+            let moved: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM tickets WHERE requester_id = $1")
+                    .bind(requester_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            sqlx::query("UPDATE tickets SET updated_at = now() WHERE requester_id = $1")
+                .bind(requester_id)
+                .execute(&mut *tx)
+                .await?;
+            moved
+        }
+        (Some(_), RequesterMove::Remove) | (None, _) => {
+            sqlx::query(
+                "UPDATE tickets SET customer_id = $2, requester_id = NULL, updated_at = now()
+                 WHERE id = $1",
+            )
+            .bind(ticket_id)
+            .bind(customer)
+            .execute(&mut *tx)
+            .await?;
+            1
+        }
+    };
+    tx.commit().await?;
+    Ok(moved)
+}
+
 /// "Re: <title> [#<number>]", without stacking "Re:".
 pub fn reply_subject(title: &str, number: i64) -> String {
     let bare = title
@@ -218,6 +295,8 @@ pub struct Requester {
     pub id: Uuid,
     pub email: String,
     pub name: Option<String>,
+    /// How many tickets the requester has, this one included.
+    pub ticket_count: i64,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -280,6 +359,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
         requester_id: Option<Uuid>,
         requester_email: Option<String>,
         requester_name: Option<String>,
+        requester_tickets: Option<i64>,
         assignee_id: Option<Uuid>,
         assignee_name: Option<String>,
         created_at: OffsetDateTime,
@@ -288,6 +368,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
     let row: Row = sqlx::query_as(
         "SELECT t.id, t.title, t.state, c.id AS customer_id, c.name AS customer_name,
                 r.id AS requester_id, r.email AS requester_email, r.name AS requester_name,
+                (SELECT count(*) FROM tickets o WHERE o.requester_id = r.id) AS requester_tickets,
                 a.id AS assignee_id, a.name AS assignee_name, t.created_at, t.updated_at
          FROM tickets t
          JOIN customers c ON c.id = t.customer_id
@@ -343,6 +424,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
             id,
             email: row.requester_email.unwrap_or_default(),
             name: row.requester_name,
+            ticket_count: row.requester_tickets.unwrap_or(1),
         }),
         assignee: row.assignee_id.map(|id| Party {
             id,
@@ -466,6 +548,67 @@ mod tests {
             Some("ada@brightfield.test")
         );
         assert!(matches!(detail(&db, 9999).await, Err(Error::NotFound(_))));
+    }
+
+    #[sqlx::test]
+    async fn moving_the_requester_takes_all_their_tickets(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let r = testing::requester(&db, brightfield, "luca.bassi@mail.test").await;
+        let first = testing::ticket(&db, brightfield, Some(r), "l1@mail.test").await;
+        let second = testing::ticket(&db, brightfield, Some(r), "l2@mail.test").await;
+        set_state(&db, second, TicketState::Closed).await.unwrap();
+        let other = testing::ticket(&db, brightfield, None, "o1@brightfield.test").await;
+
+        let moved = move_to_customer(&db, first, harbor, RequesterMove::Move)
+            .await
+            .unwrap();
+        assert_eq!(moved, 2);
+        let customer_of = |n: i64| {
+            let db = db.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>("SELECT customer_id FROM tickets WHERE number = $1")
+                    .bind(n)
+                    .fetch_one(&db)
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(customer_of(first).await, harbor);
+        assert_eq!(
+            customer_of(second).await,
+            harbor,
+            "closed tickets follow too"
+        );
+        assert_eq!(
+            customer_of(other).await,
+            brightfield,
+            "other requesters' tickets stay"
+        );
+    }
+
+    #[sqlx::test]
+    async fn removing_the_requester_moves_only_this_ticket(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let r = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let first = testing::ticket(&db, brightfield, Some(r), "a1@brightfield.test").await;
+        let second = testing::ticket(&db, brightfield, Some(r), "a2@brightfield.test").await;
+
+        assert_eq!(
+            move_to_customer(&db, first, harbor, RequesterMove::Remove)
+                .await
+                .unwrap(),
+            1
+        );
+        let ticket = detail(&db, first).await.unwrap();
+        assert_eq!(ticket.customer.id, harbor);
+        assert!(ticket.requester.is_none());
+        assert_eq!(detail(&db, second).await.unwrap().customer.id, brightfield);
+        assert!(matches!(
+            move_to_customer(&db, first, harbor, RequesterMove::Remove).await,
+            Err(Error::Rule(_))
+        ));
     }
 
     #[sqlx::test]
