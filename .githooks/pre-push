@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Scans the working tree, every pushed ref name and every commit that the push adds.
+set -euo pipefail
+scan="$(git rev-parse --show-toplevel)/scripts/scan-clean.sh"
+"$scan"
+zero=0000000000000000000000000000000000000000
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue
+  "$scan" --text "$local_ref"
+  "$scan" --text "$remote_ref"
+  if [ "$remote_sha" = "$zero" ]; then
+    commits=$(git rev-list "$local_sha" --not --remotes)
+  else
+    commits=$(git rev-list "$remote_sha..$local_sha")
+  fi
+  for c in $commits; do "$scan" --commit "$c"; done
+done

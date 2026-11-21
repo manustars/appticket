@@ -1,0 +1,37 @@
+# Local development services: run with `podman compose up -d` (or `docker compose up -d`).
+name: hd-dev
+
+services:
+  db:
+    image: docker.io/library/postgres:18
+    environment:
+      POSTGRES_USER: hd
+      POSTGRES_PASSWORD: hd
+      POSTGRES_DB: hd
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hd -d hd"]
+      interval: 2s
+      retries: 30
+
+  # Test mail server: SMTP on host port 55025, IMAP on 55143, no TLS (the 3000s are often
+  # reserved by Windows). The help desk mailbox is
+  # helpdesk@helpdesk.test (login "helpdesk", password "helpdesk").
+  mail:
+    image: docker.io/greenmail/standalone:2.1.8
+    environment:
+      GREENMAIL_OPTS: >-
+        -Dgreenmail.setup.test.smtp -Dgreenmail.setup.test.imap
+        -Dgreenmail.hostname=0.0.0.0
+        -Dgreenmail.users=helpdesk:helpdesk@helpdesk.test
+        -Dgreenmail.users.login=local_part
+        -Dgreenmail.verbose
+    ports:
+      - "127.0.0.1:55025:3025"
+      - "127.0.0.1:55143:3143"
+
+volumes:
+  db-data:
