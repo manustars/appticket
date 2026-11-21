@@ -255,15 +255,22 @@ async fn world(provider: Provider) -> World {
     let model: SharedModel = Arc::default();
     let core_url = fake_core(core.clone()).await;
     let model_url = fake_model(model.clone()).await;
+    let anthropic = provider == Provider::Anthropic;
     let settings = ModelSettings {
         provider,
-        url: model_url,
-        model: match provider {
-            Provider::Anthropic => "claude-opus-5-5".into(),
-            Provider::OpenAiCompatible => "a-local-model".into(),
+        url: if anthropic {
+            model_url
+        } else {
+            format!("{model_url}/v1")
+        },
+        model: if anthropic {
+            "claude-opus-5-5".into()
+        } else {
+            "a-local-model".into()
         },
         api_key: Some("model-test-key".into()),
-        effort: (provider == Provider::Anthropic).then(|| "medium".into()),
+        effort: anthropic.then(|| "medium".into()),
+        azure_api_version: None,
     };
     let assistant = Assistant::new(
         Client::new(&core_url, TOKEN).unwrap(),

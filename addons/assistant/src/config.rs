@@ -1,59 +1,202 @@
 //! Settings, read from `HD_ASSISTANT_*` environment variables (and a `.env` file).
+//!
+//! There is no default model service: whoever installs the Assistant chooses the provider and
+//! the model, since sending customers' mail to a service is their decision (ADR 0006).
 
+use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
 use anyhow::{Context, bail};
 
-/// How the Assistant reaches its language model.
+/// A model service the Assistant knows how to call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
-    /// The Claude Messages API (`POST <url>/v1/messages`).
+    /// The Claude API (Messages API).
     Anthropic,
-    /// Any server exposing `POST <url>/v1/chat/completions`, such as Ollama, llama.cpp or vLLM.
+    /// The OpenAI API.
+    OpenAi,
+    /// Mistral AI's API.
+    Mistral,
+    /// Google's Gemini API, through its OpenAI-compatible endpoint.
+    Gemini,
+    /// A deployment on Azure OpenAI.
+    AzureOpenAi,
+    /// Ollama, usually on this machine.
+    Ollama,
+    /// Any other server speaking the OpenAI chat completions protocol (vLLM, llama.cpp…).
     OpenAiCompatible,
 }
 
-/// The default model on the Claude API.
-pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-opus-5-5";
-pub const DEFAULT_ANTHROPIC_URL: &str = "https://api.anthropic.com";
-/// Effort on the Claude API: how much the model thinks before answering.
-pub const DEFAULT_EFFORT: &str = "medium";
+/// How a provider's model is called.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Protocol {
+    /// `POST <url>/v1/messages` (Claude).
+    Messages,
+    /// OpenAI-style chat completions.
+    ChatCompletions,
+}
 
+/// How the API key travels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Auth {
+    /// `x-api-key: <key>` (Claude).
+    XApiKey,
+    /// `Authorization: Bearer <key>`, when a key is set.
+    Bearer,
+    /// `api-key: <key>` (Azure OpenAI).
+    ApiKeyHeader,
+}
+
+/// How the answer is held to the JSON the Assistant asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonOutput {
+    /// The service constrains the answer to the JSON Schema.
+    Schema,
+    /// The service only promises a JSON object; the schema goes in the instructions.
+    Object,
+}
+
+impl Provider {
+    pub const ALL: [Provider; 7] = [
+        Provider::Anthropic,
+        Provider::OpenAi,
+        Provider::Mistral,
+        Provider::Gemini,
+        Provider::AzureOpenAi,
+        Provider::Ollama,
+        Provider::OpenAiCompatible,
+    ];
+
+    /// The value of `HD_ASSISTANT_MODEL_PROVIDER`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Provider::Anthropic => "anthropic",
+            Provider::OpenAi => "openai",
+            Provider::Mistral => "mistral",
+            Provider::Gemini => "gemini",
+            Provider::AzureOpenAi => "azure-openai",
+            Provider::Ollama => "ollama",
+            Provider::OpenAiCompatible => "openai-compatible",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Provider> {
+        Provider::ALL.into_iter().find(|p| p.name() == name)
+    }
+
+    /// The base URL used when `HD_ASSISTANT_MODEL_URL` is not set; `None` when it must be.
+    pub fn default_url(self) -> Option<&'static str> {
+        match self {
+            Provider::Anthropic => Some("https://api.anthropic.com"),
+            Provider::OpenAi => Some("https://api.openai.com/v1"),
+            Provider::Mistral => Some("https://api.mistral.ai/v1"),
+            Provider::Gemini => Some("https://generativelanguage.googleapis.com/v1beta/openai"),
+            Provider::Ollama => Some("http://127.0.0.1:11434"),
+            Provider::AzureOpenAi | Provider::OpenAiCompatible => None,
+        }
+    }
+
+    pub fn protocol(self) -> Protocol {
+        match self {
+            Provider::Anthropic => Protocol::Messages,
+            _ => Protocol::ChatCompletions,
+        }
+    }
+
+    pub fn auth(self) -> Auth {
+        match self {
+            Provider::Anthropic => Auth::XApiKey,
+            Provider::AzureOpenAi => Auth::ApiKeyHeader,
+            _ => Auth::Bearer,
+        }
+    }
+
+    /// Whether `HD_ASSISTANT_API_KEY` is required.
+    pub fn needs_key(self) -> bool {
+        !matches!(self, Provider::Ollama | Provider::OpenAiCompatible)
+    }
+
+    pub fn json_output(self) -> JsonOutput {
+        match self {
+            // An unknown server may not support JSON Schema output.
+            Provider::OpenAiCompatible => JsonOutput::Object,
+            _ => JsonOutput::Schema,
+        }
+    }
+}
+
+impl fmt::Display for Provider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// The names `HD_ASSISTANT_MODEL_PROVIDER` takes, for error messages.
+fn provider_names() -> String {
+    Provider::ALL.map(Provider::name).join(", ")
+}
+
+/// Effort on the Claude API, how much the model thinks before answering, unless
+/// `HD_ASSISTANT_MODEL_EFFORT` says otherwise.
+pub const DEFAULT_EFFORT: &str = "medium";
 #[derive(Debug, Clone)]
 pub struct ModelSettings {
     pub provider: Provider,
-    /// Base URL, without `/v1`.
+    /// The base URL. For `anthropic` and `ollama`, the server without `/v1`; for Azure, the
+    /// resource (`https://<resource>.openai.azure.com`); otherwise the base the provider's
+    /// OpenAI client libraries take, ending in `/v1` or similar.
     pub url: String,
+    /// The model's id; on Azure, the deployment's name.
     pub model: String,
     pub api_key: Option<String>,
     /// Claude API only; `None` leaves it to the model's default.
     pub effort: Option<String>,
+    /// Azure OpenAI only: `v1` for the v1 API, or a dated `api-version`.
+    pub azure_api_version: Option<String>,
 }
 
 impl ModelSettings {
-    /// Whether customers' mail leaves the help desk's own network when the model reads it: true
-    /// for the Claude API and for any server that is not on this machine or a private network.
+    /// Whether customers' mail leaves the help desk when the model reads it: true for every
+    /// provider except Ollama and an OpenAI-compatible server on this machine.
     pub fn is_external(&self) -> bool {
-        if self.provider == Provider::Anthropic {
-            return true;
+        match self.provider {
+            Provider::Ollama => false,
+            Provider::OpenAiCompatible => !is_loopback(&self.url),
+            _ => true,
         }
-        let Ok(url) = url::Url::parse(&self.url) else {
-            return true;
-        };
-        match url.host() {
-            Some(url::Host::Domain(name)) => {
-                let name = name.to_ascii_lowercase();
-                !(name == "localhost" || name.ends_with(".localhost"))
-            }
-            Some(url::Host::Ipv4(ip)) => {
-                !(ip.is_loopback() || ip.is_private() || ip.is_link_local())
-            }
-            Some(url::Host::Ipv6(ip)) => {
-                let ip = IpAddr::V6(ip);
-                !(ip.is_loopback() || matches!(ip, IpAddr::V6(v6) if v6.is_unique_local()))
-            }
-            None => true,
+    }
+
+    /// Where a request goes.
+    pub fn endpoint(&self) -> String {
+        let url = &self.url;
+        match self.provider {
+            Provider::Anthropic => format!("{url}/v1/messages"),
+            Provider::Ollama => format!("{url}/v1/chat/completions"),
+            Provider::AzureOpenAi => match self.azure_api_version.as_deref().unwrap_or("v1") {
+                // The v1 API takes the deployment as the body's `model`, with no version.
+                "v1" => format!("{url}/openai/v1/chat/completions"),
+                version => format!(
+                    "{url}/openai/deployments/{}/chat/completions?api-version={version}",
+                    self.model
+                ),
+            },
+            _ => format!("{url}/chat/completions"),
         }
+    }
+}
+
+fn is_loopback(raw: &str) -> bool {
+    let Ok(url) = url::Url::parse(raw) else {
+        return false;
+    };
+    match url.host() {
+        Some(url::Host::Domain(name)) => {
+            let name = name.to_ascii_lowercase();
+            name == "localhost" || name.ends_with(".localhost")
+        }
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => IpAddr::V6(ip).is_loopback(),
+        None => false,
     }
 }
 
@@ -83,39 +226,65 @@ impl Config {
             .unwrap_or_else(|| "127.0.0.1:8090".into())
             .parse()
             .context("HD_ASSISTANT_LISTEN is not an address such as 127.0.0.1:8090")?;
-        let provider = match get("HD_ASSISTANT_MODEL_PROVIDER").as_deref() {
-            None | Some("anthropic") => Provider::Anthropic,
-            Some("openai-compatible") => Provider::OpenAiCompatible,
-            Some(other) => bail!(
-                "HD_ASSISTANT_MODEL_PROVIDER is {other:?}: use anthropic or openai-compatible"
+        let provider = match get("HD_ASSISTANT_MODEL_PROVIDER") {
+            None => bail!(
+                "set HD_ASSISTANT_MODEL_PROVIDER to the service that runs the model: one of {}",
+                provider_names()
             ),
+            Some(name) => Provider::parse(&name).with_context(|| {
+                format!(
+                    "HD_ASSISTANT_MODEL_PROVIDER is {name:?}: use one of {}",
+                    provider_names()
+                )
+            })?,
         };
-        let model = match provider {
-            Provider::Anthropic => ModelSettings {
-                provider,
-                url: get("HD_ASSISTANT_MODEL_URL").unwrap_or_else(|| DEFAULT_ANTHROPIC_URL.into()),
-                model: get("HD_ASSISTANT_MODEL").unwrap_or_else(|| DEFAULT_ANTHROPIC_MODEL.into()),
-                api_key: Some(required("HD_ASSISTANT_API_KEY")?),
-                effort: match var("HD_ASSISTANT_MODEL_EFFORT") {
-                    // Set but empty: send no effort, for models that do not take one.
-                    Some(v) if v.trim().is_empty() => None,
-                    Some(v) => Some(v.trim().to_owned()),
-                    None => Some(DEFAULT_EFFORT.into()),
-                },
-            },
-            Provider::OpenAiCompatible => ModelSettings {
-                provider,
-                url: required("HD_ASSISTANT_MODEL_URL")?,
-                model: required("HD_ASSISTANT_MODEL")?,
-                api_key: get("HD_ASSISTANT_API_KEY"),
-                effort: None,
-            },
+        let model = get("HD_ASSISTANT_MODEL").with_context(|| match provider {
+            Provider::AzureOpenAi => {
+                "set HD_ASSISTANT_MODEL to the name of the Azure deployment".into()
+            }
+            _ => format!("set HD_ASSISTANT_MODEL to the id of a model {provider} offers"),
+        })?;
+        let raw_url = match (get("HD_ASSISTANT_MODEL_URL"), provider.default_url()) {
+            (Some(url), _) => url,
+            (None, Some(default)) => default.to_owned(),
+            (None, None) => bail!(match provider {
+                Provider::AzureOpenAi =>
+                    "set HD_ASSISTANT_MODEL_URL to the Azure OpenAI resource, such as \
+                     https://<resource>.openai.azure.com",
+                _ =>
+                    "set HD_ASSISTANT_MODEL_URL to the server's base URL, such as \
+                      http://127.0.0.1:8000/v1",
+            }),
         };
-        let mut model = model;
-        model.url = base_url(&model.url)?;
+        let api_key = get("HD_ASSISTANT_API_KEY");
+        if api_key.is_none() && provider.needs_key() {
+            bail!("set HD_ASSISTANT_API_KEY to the {provider} API key");
+        }
+        let azure_api_version = match provider {
+            Provider::AzureOpenAi => Some(get("HD_ASSISTANT_AZURE_API_VERSION").context(
+                "set HD_ASSISTANT_AZURE_API_VERSION to v1 (the v1 API) or to a dated API \
+                 version, 2024-08-01-preview or later for structured outputs",
+            )?),
+            _ => None,
+        };
+        let model = ModelSettings {
+            provider,
+            url: model_url(provider, &raw_url)?,
+            model,
+            api_key,
+            effort: match (provider, var("HD_ASSISTANT_MODEL_EFFORT")) {
+                (Provider::Anthropic, None) => Some(DEFAULT_EFFORT.into()),
+                // Set but empty: send no effort, for models that do not take one.
+                (Provider::Anthropic, Some(v)) => {
+                    Some(v.trim().to_owned()).filter(|v| !v.is_empty())
+                }
+                _ => None,
+            },
+            azure_api_version,
+        };
         Ok(Config {
             listen,
-            core_url: base_url(&required("HD_ASSISTANT_CORE_URL")?)?,
+            core_url: checked_url(&required("HD_ASSISTANT_CORE_URL")?)?,
             token: required("HD_ASSISTANT_TOKEN")?,
             event_secret: required("HD_ASSISTANT_EVENT_SECRET")?,
             model,
@@ -129,14 +298,30 @@ impl Config {
     }
 }
 
-/// Checks an http(s) URL and drops a trailing `/` and `/v1`.
-fn base_url(raw: &str) -> anyhow::Result<String> {
+/// Checks an http(s) URL and drops a trailing `/`.
+fn checked_url(raw: &str) -> anyhow::Result<String> {
     let parsed = url::Url::parse(raw).with_context(|| format!("{raw:?} is not a URL"))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         bail!("{raw:?} must use http or https");
     }
-    let trimmed = raw.trim_end_matches('/');
-    Ok(trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_owned())
+    Ok(raw.trim_end_matches('/').to_owned())
+}
+
+/// The model URL in the form [`ModelSettings::endpoint`] expects.
+fn model_url(provider: Provider, raw: &str) -> anyhow::Result<String> {
+    let url = checked_url(raw)?;
+    Ok(match provider {
+        // These take the server's address; tolerate the `/v1` some guides add.
+        Provider::Anthropic | Provider::Ollama => {
+            url.strip_suffix("/v1").unwrap_or(&url).to_owned()
+        }
+        Provider::AzureOpenAi => url.strip_suffix("/openai").unwrap_or(&url).to_owned(),
+        // A server's address alone means the usual `/v1`.
+        Provider::OpenAiCompatible if url::Url::parse(&url)?.path() == "/" => {
+            format!("{url}/v1")
+        }
+        _ => url,
+    })
 }
 
 #[cfg(test)]
@@ -152,48 +337,156 @@ mod tests {
         Config::from_vars(|name| vars.get(name).cloned())
     }
 
-    const CORE: [(&str, &str); 3] = [
-        ("HD_ASSISTANT_CORE_URL", "http://127.0.0.1:8080/"),
-        ("HD_ASSISTANT_TOKEN", "t"),
-        ("HD_ASSISTANT_EVENT_SECRET", "s"),
-    ];
+    fn with(extra: &[(&'static str, &'static str)]) -> Vec<(&'static str, &'static str)> {
+        let mut vars = vec![
+            ("HD_ASSISTANT_CORE_URL", "http://127.0.0.1:8080/"),
+            ("HD_ASSISTANT_TOKEN", "t"),
+            ("HD_ASSISTANT_EVENT_SECRET", "s"),
+        ];
+        vars.extend_from_slice(extra);
+        vars
+    }
+
+    fn error(pairs: &[(&str, &str)]) -> String {
+        format!("{:#}", config(pairs).unwrap_err())
+    }
 
     #[test]
-    fn the_claude_api_is_the_default_and_needs_a_key() {
-        assert!(config(&CORE).is_err(), "no API key");
-        let mut vars = CORE.to_vec();
-        vars.push(("HD_ASSISTANT_API_KEY", "k"));
-        let c = config(&vars).unwrap();
+    fn there_is_no_default_provider_or_model() {
+        let missing = error(&with(&[]));
+        assert!(
+            missing.contains("set HD_ASSISTANT_MODEL_PROVIDER"),
+            "{missing}"
+        );
+        for name in [
+            "anthropic",
+            "openai",
+            "mistral",
+            "gemini",
+            "azure-openai",
+            "ollama",
+            "openai-compatible",
+        ] {
+            assert!(missing.contains(name), "{missing} lists {name}");
+        }
+        let unknown = error(&with(&[("HD_ASSISTANT_MODEL_PROVIDER", "carrier-pigeon")]));
+        assert!(unknown.contains("\"carrier-pigeon\"") && unknown.contains("azure-openai"));
+
+        let no_model = error(&with(&[
+            ("HD_ASSISTANT_MODEL_PROVIDER", "anthropic"),
+            ("HD_ASSISTANT_API_KEY", "k"),
+        ]));
+        assert!(no_model.contains("set HD_ASSISTANT_MODEL"), "{no_model}");
+        let ollama_no_model = error(&with(&[("HD_ASSISTANT_MODEL_PROVIDER", "ollama")]));
+        assert!(ollama_no_model.contains("set HD_ASSISTANT_MODEL"));
+    }
+
+    #[test]
+    fn hosted_providers_need_a_key_and_have_a_url() {
+        for (name, url) in [
+            ("anthropic", "https://api.anthropic.com"),
+            ("openai", "https://api.openai.com/v1"),
+            ("mistral", "https://api.mistral.ai/v1"),
+            (
+                "gemini",
+                "https://generativelanguage.googleapis.com/v1beta/openai",
+            ),
+        ] {
+            let base = [
+                ("HD_ASSISTANT_MODEL_PROVIDER", name),
+                ("HD_ASSISTANT_MODEL", "some-model"),
+            ];
+            let no_key = error(&with(&base));
+            assert!(
+                no_key.contains("set HD_ASSISTANT_API_KEY"),
+                "{name}: {no_key}"
+            );
+            let mut vars = with(&base);
+            vars.push(("HD_ASSISTANT_API_KEY", "k"));
+            let c = config(&vars).unwrap();
+            assert_eq!(c.model.url, url);
+            assert!(c.model.is_external(), "{name}");
+        }
+    }
+
+    #[test]
+    fn anthropic_keeps_its_effort_setting() {
+        let base = [
+            ("HD_ASSISTANT_MODEL_PROVIDER", "anthropic"),
+            ("HD_ASSISTANT_MODEL", "claude-opus-5-5"),
+            ("HD_ASSISTANT_API_KEY", "k"),
+        ];
+        let c = config(&with(&base)).unwrap();
         assert_eq!(c.listen.to_string(), "127.0.0.1:8090");
         assert_eq!(c.core_url, "http://127.0.0.1:8080");
-        assert_eq!(c.model.provider, Provider::Anthropic);
-        assert_eq!(c.model.model, DEFAULT_ANTHROPIC_MODEL);
         assert_eq!(c.model.effort.as_deref(), Some(DEFAULT_EFFORT));
-        assert!(c.model.is_external());
+        assert_eq!(c.model.endpoint(), "https://api.anthropic.com/v1/messages");
+        let mut none = with(&base);
+        none.push(("HD_ASSISTANT_MODEL_EFFORT", ""));
+        assert_eq!(config(&none).unwrap().model.effort, None);
     }
 
     #[test]
-    fn a_local_server_is_not_external() {
-        let mut vars = CORE.to_vec();
-        vars.extend([
-            ("HD_ASSISTANT_MODEL_PROVIDER", "openai-compatible"),
-            ("HD_ASSISTANT_MODEL_URL", "http://127.0.0.1:11434/v1/"),
+    fn azure_needs_its_resource_and_an_api_version() {
+        let base = [
+            ("HD_ASSISTANT_MODEL_PROVIDER", "azure-openai"),
+            ("HD_ASSISTANT_MODEL", "triage-deployment"),
+            ("HD_ASSISTANT_API_KEY", "k"),
+        ];
+        assert!(error(&with(&base)).contains("openai.azure.com"));
+        let mut vars = with(&base);
+        vars.push(("HD_ASSISTANT_MODEL_URL", "https://desk.openai.azure.com/"));
+        assert!(error(&vars).contains("set HD_ASSISTANT_AZURE_API_VERSION"));
+        vars.push(("HD_ASSISTANT_AZURE_API_VERSION", "2024-10-21"));
+        assert_eq!(
+            config(&vars).unwrap().model.endpoint(),
+            "https://desk.openai.azure.com/openai/deployments/triage-deployment/chat/completions?api-version=2024-10-21"
+        );
+        vars.push(("HD_ASSISTANT_AZURE_API_VERSION", "v1"));
+        assert_eq!(
+            config(&vars).unwrap().model.endpoint(),
+            "https://desk.openai.azure.com/openai/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn only_local_models_skip_the_privacy_warning() {
+        let ollama = config(&with(&[
+            ("HD_ASSISTANT_MODEL_PROVIDER", "ollama"),
             ("HD_ASSISTANT_MODEL", "a-local-model"),
-        ]);
-        let c = config(&vars).unwrap();
-        assert_eq!(c.model.url, "http://127.0.0.1:11434");
-        assert!(!c.model.is_external());
-        assert_eq!(c.model.api_key, None);
+        ]))
+        .unwrap();
+        assert_eq!(ollama.model.api_key, None);
+        assert_eq!(
+            ollama.model.endpoint(),
+            "http://127.0.0.1:11434/v1/chat/completions"
+        );
+        assert!(!ollama.model.is_external());
 
-        vars.push(("HD_ASSISTANT_MODEL_URL", "https://models.example.com"));
-        let remote = config(&vars).unwrap();
-        assert!(remote.model.is_external());
-    }
-
-    #[test]
-    fn unknown_providers_are_refused() {
-        let mut vars = CORE.to_vec();
-        vars.push(("HD_ASSISTANT_MODEL_PROVIDER", "carrier-pigeon"));
-        assert!(config(&vars).is_err());
+        let compatible = |url: &'static str| {
+            config(&with(&[
+                ("HD_ASSISTANT_MODEL_PROVIDER", "openai-compatible"),
+                ("HD_ASSISTANT_MODEL", "a-local-model"),
+                ("HD_ASSISTANT_MODEL_URL", url),
+            ]))
+            .unwrap()
+            .model
+        };
+        let local = compatible("http://127.0.0.1:8000");
+        assert_eq!(
+            local.endpoint(),
+            "http://127.0.0.1:8000/v1/chat/completions"
+        );
+        assert!(!local.is_external());
+        assert!(!compatible("http://localhost:8000/v1").is_external());
+        assert!(compatible("http://192.0.2.10:8000/v1").is_external());
+        assert!(compatible("https://models.example.com/v1").is_external());
+        assert!(
+            error(&with(&[
+                ("HD_ASSISTANT_MODEL_PROVIDER", "openai-compatible"),
+                ("HD_ASSISTANT_MODEL", "m"),
+            ]))
+            .contains("set HD_ASSISTANT_MODEL_URL")
+        );
     }
 }

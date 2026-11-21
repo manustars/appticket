@@ -88,17 +88,19 @@ The Assistant is an add-on (`addons/assistant`, details in its README). To try i
 
 ```sh
 cargo run -p hd-core -- addon add assistant --url http://127.0.0.1:8090   --event message.received --event ticket.opened   --scope directory:read --scope tickets:read --scope proposals:write
-# copy the printed token and event secret into .env:
+# copy the printed token and event secret into .env, and choose the model:
 #   HD_ASSISTANT_CORE_URL=http://127.0.0.1:8080
 #   HD_ASSISTANT_TOKEN=…
 #   HD_ASSISTANT_EVENT_SECRET=…
-#   HD_ASSISTANT_API_KEY=…        # a Claude API key: customers' mail goes to that service
+#   HD_ASSISTANT_MODEL_PROVIDER=…  # anthropic, openai, mistral, gemini, azure-openai, ollama or openai-compatible
+#   HD_ASSISTANT_MODEL=…           # a model of that provider
+#   HD_ASSISTANT_API_KEY=…         # for the hosted providers: customers' mail goes to that service
 cargo run -p hd-assistant
 ```
 
-With the Claude API it uses `claude-opus-5-5` unless `HD_ASSISTANT_MODEL` says otherwise, and every
-message costs a model call. `HD_ASSISTANT_MODEL_PROVIDER=openai-compatible` with
-`HD_ASSISTANT_MODEL_URL` points it at a model on your own machine instead (for example Ollama).
+There is no default provider or model; the Assistant does not start until both are set. Its
+README lists what each provider needs. With a hosted provider every message costs a model call;
+`HD_ASSISTANT_MODEL_PROVIDER=ollama` keeps the mail on this machine.
 
 ## Tests
 

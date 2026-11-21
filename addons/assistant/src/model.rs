@@ -1,12 +1,12 @@
-//! Asking the language model for one JSON answer, over the Claude Messages API or any server
-//! that speaks the OpenAI chat completions protocol.
+//! Asking the language model for one JSON answer, over the Claude Messages API or the OpenAI chat
+//! completions protocol, which the other providers speak.
 
 use std::fmt;
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::config::{ModelSettings, Provider};
+use crate::config::{Auth, JsonOutput, ModelSettings, Protocol};
 
 /// The Messages API version the requests are written for.
 const ANTHROPIC_VERSION: &str = "2026-10-21";
@@ -106,9 +106,9 @@ impl Model {
     pub async fn answer(&self, task: &Task<'_>) -> Result<Value, ModelError> {
         let mut attempt = 0;
         loop {
-            let outcome = match self.settings.provider {
-                Provider::Anthropic => self.anthropic(task).await,
-                Provider::OpenAiCompatible => self.openai_compatible(task).await,
+            let outcome = match self.settings.provider.protocol() {
+                Protocol::Messages => self.anthropic(task).await,
+                Protocol::ChatCompletions => self.chat_completions(task).await,
             };
             match outcome {
                 Err(Attempt::Busy { why, retry_after }) => {
@@ -171,7 +171,7 @@ impl Model {
         });
         let mut request = self
             .http
-            .post(format!("{}/v1/messages", s.url))
+            .post(s.endpoint())
             .header("x-api-key", s.api_key.as_deref().unwrap_or_default())
             .header("anthropic-version", ANTHROPIC_VERSION);
         if FALLBACK_MODELS.contains(&s.model.as_str()) {
@@ -182,13 +182,25 @@ impl Model {
         anthropic_text(&response).map_err(Attempt::Failed)
     }
 
-    async fn openai_compatible(&self, task: &Task<'_>) -> Result<String, Attempt> {
+    async fn chat_completions(&self, task: &Task<'_>) -> Result<String, Attempt> {
         let s = &self.settings;
+        let response_format = match s.provider.json_output() {
+            JsonOutput::Schema => json!({
+                "type": "json_schema",
+                "json_schema": { "name": task.name, "strict": true, "schema": task.schema },
+            }),
+            JsonOutput::Object => json!({ "type": "json_object" }),
+        };
+        // The schema also goes in the instructions: some servers (versions of Ollama, Gemini's
+        // compatibility layer) have been reported to ignore `response_format`, and a model that
+        // never sees the shape would never give a usable answer.
         let system = format!(
             "{}\n\nAnswer with a single JSON object that follows this JSON Schema, and nothing \
              else:\n{}",
             task.system, task.schema
         );
+        // No temperature or token limit: reasoning models refuse some of them, and the
+        // defaults suit short answers.
         let body = json!({
             "model": s.model,
             "stream": false,
@@ -196,24 +208,41 @@ impl Model {
                 { "role": "system", "content": system },
                 { "role": "user", "content": task.input },
             ],
-            "response_format": { "type": "json_object" },
+            "response_format": response_format,
         });
-        let mut request = self.http.post(format!("{}/v1/chat/completions", s.url));
+        let mut request = self.http.post(s.endpoint());
         if let Some(key) = &s.api_key {
-            request = request.bearer_auth(key);
+            request = match s.provider.auth() {
+                Auth::ApiKeyHeader => request.header("api-key", key),
+                Auth::XApiKey => request.header("x-api-key", key),
+                Auth::Bearer => request.bearer_auth(key),
+            };
         }
         let response = self.send(request.json(&body)).await?;
-        let choice = &response["choices"][0];
-        match choice["finish_reason"].as_str() {
-            Some("length") => return Err(Attempt::Failed(ModelError::Truncated)),
-            Some("content_filter") => return Err(Attempt::Failed(ModelError::Refused)),
-            _ => {}
-        }
-        choice["message"]["content"]
-            .as_str()
-            .map(str::to_owned)
-            .ok_or_else(|| Attempt::Failed(ModelError::Invalid("no message content".into())))
+        chat_text(&response).map_err(Attempt::Failed)
     }
+}
+
+/// The text of a chat completions response, after checking why it ended.
+fn chat_text(response: &Value) -> Result<String, ModelError> {
+    let choice = &response["choices"][0];
+    match choice["finish_reason"].as_str() {
+        Some("length") => return Err(ModelError::Truncated),
+        Some("content_filter") => return Err(ModelError::Refused),
+        _ => {}
+    }
+    let message = &choice["message"];
+    // With JSON Schema output, OpenAI reports a declined request in `refusal`.
+    if message["refusal"]
+        .as_str()
+        .is_some_and(|r| !r.trim().is_empty())
+    {
+        return Err(ModelError::Refused);
+    }
+    message["content"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| ModelError::Invalid("no message content".into()))
 }
 
 enum Attempt {
@@ -304,6 +333,32 @@ mod tests {
         );
         assert_eq!(
             anthropic_text(&json!({ "stop_reason": "max_tokens", "content": [] })),
+            Err(ModelError::Truncated)
+        );
+    }
+
+    #[test]
+    fn chat_completions_report_refusals_and_cut_answers() {
+        let answer = |finish: &str, message: Value| {
+            chat_text(&json!({ "choices": [{ "finish_reason": finish, "message": message }] }))
+        };
+        assert_eq!(
+            answer("stop", json!({ "content": "{}", "refusal": null })),
+            Ok("{}".into())
+        );
+        assert_eq!(
+            answer(
+                "stop",
+                json!({ "content": null, "refusal": "I can't help with that." })
+            ),
+            Err(ModelError::Refused)
+        );
+        assert_eq!(
+            answer("content_filter", json!({ "content": "" })),
+            Err(ModelError::Refused)
+        );
+        assert_eq!(
+            answer("length", json!({ "content": "{\"a\":" })),
             Err(ModelError::Truncated)
         );
     }

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use hd_addon_sdk::{Client, Verifier};
-use hd_assistant::config::{Config, Provider};
+use hd_assistant::config::Config;
 use hd_assistant::model::Model;
 use hd_assistant::{Assistant, server};
 use tracing_subscriber::EnvFilter;
@@ -19,16 +19,13 @@ async fn main() -> anyhow::Result<()> {
 
     let model = &config.model;
     if model.is_external() {
-        let service = match model.provider {
-            Provider::Anthropic => "the Claude API",
-            Provider::OpenAiCompatible => "an external model server",
-        };
         tracing::warn!(
+            provider = %model.provider,
             url = %model.url,
-            "customers' mail is sent to {service} for the Assistant to read it; sending it \
-             outside the help desk is a data-protection decision for the help desk to make \
-             (set HD_ASSISTANT_MODEL_PROVIDER=openai-compatible and HD_ASSISTANT_MODEL_URL to \
-             use a model on your own servers)"
+            "customers' mail is sent to a model service outside this machine for the \
+             Assistant to read it; sending it to a third party is a data-protection decision \
+             for the help desk to make (HD_ASSISTANT_MODEL_PROVIDER=ollama, or \
+             openai-compatible with a server on this machine, keeps it here)"
         );
     }
 

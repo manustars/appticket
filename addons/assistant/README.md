@@ -51,35 +51,58 @@ Environment variables, also read from a `.env` file in the working directory or 
 | `HD_ASSISTANT_CORE_URL` | required | The core's base URL, such as `https://helpdesk.example.com`. |
 | `HD_ASSISTANT_TOKEN` | required | The token printed by `hd addon add`. |
 | `HD_ASSISTANT_EVENT_SECRET` | required | The event secret printed by `hd addon add`. |
-| `HD_ASSISTANT_MODEL_PROVIDER` | `anthropic` | `anthropic` (the Claude API) or `openai-compatible` (any server with `/v1/chat/completions`, such as Ollama). |
-| `HD_ASSISTANT_MODEL` | `claude-opus-5-5` for `anthropic` | The model's id; required for `openai-compatible`. |
-| `HD_ASSISTANT_MODEL_URL` | `https://api.anthropic.com` for `anthropic` | The model server's base URL, with or without `/v1`; required for `openai-compatible`. |
-| `HD_ASSISTANT_API_KEY` | required for `anthropic` | The model service's key; optional for `openai-compatible`. |
-| `HD_ASSISTANT_MODEL_EFFORT` | `medium` | Claude API only: how much the model thinks before answering (`low` to `max`); set it empty to send none, for models that do not take it. |
+| `HD_ASSISTANT_MODEL_PROVIDER` | required | The service that runs the model; see the table below. |
+| `HD_ASSISTANT_MODEL` | required | The model's id as the provider names it; for `azure-openai`, the deployment's name. |
+| `HD_ASSISTANT_MODEL_URL` | the provider's | The service's base URL; required for `azure-openai` and `openai-compatible`. |
+| `HD_ASSISTANT_API_KEY` | | The service's key; required by the hosted providers. |
+| `HD_ASSISTANT_MODEL_EFFORT` | `medium` | `anthropic` only: how much the model thinks before answering (`low` to `max`); set it empty to send none, for models that do not take it. |
+| `HD_ASSISTANT_AZURE_API_VERSION` | required for `azure-openai` | `v1` for Azure's v1 API (its current GA), or a dated `api-version`, `2024-08-01-preview` or later for structured outputs. |
 | `HD_ASSISTANT_LOG` | `info` | A `tracing` filter. |
 
-With the Claude API, answers are constrained to a JSON schema (structured outputs), and on the
-models that support it a request declined by the API's safety classifiers is retried server-side
-on a fallback model (`fallbacks: "default"`). With an OpenAI-compatible server the schema is given
-in the instructions and the server is asked for a JSON object; the answer is validated in either
-case.
+There is no default provider or model: whoever installs the Assistant chooses both, since it
+decides where customers' mail goes and what each message costs. The Assistant refuses to start
+until both are set, and lists the providers it knows.
 
-For a model on the help desk's own machine, for example with Ollama:
+### Providers
+
+| `HD_ASSISTANT_MODEL_PROVIDER` | Service | `HD_ASSISTANT_MODEL_URL` (default) | Key | Answers held to the schema |
+|---|---|---|---|---|
+| `anthropic` | Claude API | `https://api.anthropic.com` | required, sent as `x-api-key` | yes (structured outputs) |
+| `openai` | OpenAI API | `https://api.openai.com/v1` | required, `Authorization: Bearer` | yes (`json_schema`, strict) |
+| `mistral` | Mistral AI | `https://api.mistral.ai/v1` | required, `Authorization: Bearer` | yes (`json_schema`) |
+| `gemini` | Gemini API, OpenAI-compatible endpoint | `https://generativelanguage.googleapis.com/v1beta/openai` | required, `Authorization: Bearer` | yes (`json_schema`) |
+| `azure-openai` | Azure OpenAI | required: `https://<resource>.openai.azure.com` | required, sent as `api-key` | yes (`json_schema`, strict) |
+| `ollama` | Ollama | `http://127.0.0.1:11434` | none | yes (`json_schema`) |
+| `openai-compatible` | any server with OpenAI chat completions (vLLM, llama.cpp…) | required: its base URL, such as `http://127.0.0.1:8000/v1` (an address alone means `/v1`) | optional, `Authorization: Bearer` | no: JSON mode (`json_object`) |
+
+Requests go to `<url>/v1/messages` for `anthropic`, to `<url>/v1/chat/completions` for `ollama`, to
+`<url>/openai/v1/chat/completions` (version `v1`, with the deployment as the model) or
+`<url>/openai/deployments/<deployment>/chat/completions?api-version=<version>` for
+`azure-openai`, and to `<url>/chat/completions` for the others. Use a model that supports
+structured output: some providers accept the schema only on recent models, and some versions of
+Gemini's compatibility layer and of Ollama have been reported to ignore it. So for every
+chat-completions provider the schema is also written into the instructions, and whatever the
+provider the answer is validated before anything is proposed: a model that does not follow the
+schema produces no proposal rather than a wrong one.
+
+With `anthropic`, on the models that support it, a request declined by the API's safety
+classifiers is retried server-side on a fallback model (`fallbacks: "default"`).
+
+For a model on the help desk's own machine with Ollama:
 
 ```sh
-HD_ASSISTANT_MODEL_PROVIDER=openai-compatible
-HD_ASSISTANT_MODEL_URL=http://127.0.0.1:11434
+HD_ASSISTANT_MODEL_PROVIDER=ollama
 HD_ASSISTANT_MODEL=<a model you have pulled>
 ```
 
 ## Privacy
 
 To make its proposals the Assistant sends the model the messages it reads: customers' mail, with
-senders' names and addresses, the customer's name and its assets. With the default provider that
-means sending them to the Claude API, an external service. Whether a help desk may do that is its
-own data-protection decision; the Assistant logs a warning at startup whenever its model is not on
-this machine or a private network. To keep the mail in house, run a model on your own servers and
-use the `openai-compatible` provider.
+senders' names and addresses, the customer's name and its assets (never internal notes). With any
+hosted provider that means sending them to an external service. Whether a help desk may do that
+is its own data-protection decision; the Assistant logs a warning at startup for every provider
+except `ollama` and an `openai-compatible` server on this machine (a loopback address). To keep
+the mail in house, run a model on your own servers.
 
 ## Delivery and duplicates
 
