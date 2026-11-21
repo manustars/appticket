@@ -340,7 +340,8 @@ export interface paths {
         };
         /** A service with the customers that use it and the assets it runs on. */
         get: operations["get_service"];
-        put?: never;
+        /** Renames a service or changes its description. */
+        put: operations["update_service"];
         post?: never;
         delete?: never;
         options?: never;
@@ -384,6 +385,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/services/{id}/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retires a service: it stays on its tickets but gets no new links or users. */
+        post: operations["retire_service"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/session": {
         parameters: {
             query?: never;
@@ -413,7 +431,8 @@ export interface paths {
         /** Tickets, most recently updated first (at most 200). */
         get: operations["list_tickets"];
         put?: never;
-        post?: never;
+        /** Opens a ticket by hand. */
+        post: operations["open_ticket"];
         delete?: never;
         options?: never;
         head?: never;
@@ -788,6 +807,18 @@ export interface components {
             description?: string;
             name: string;
         };
+        NewTicket: {
+            /** Format: uuid */
+            customer_id: string;
+            /** @description An internal note recording what was said, e.g. on the phone. */
+            note?: string | null;
+            /**
+             * @description The requester's address; a new one is registered with the customer. Omit it for planned
+             *     work without a requester.
+             */
+            requester_email?: string | null;
+            title: string;
+        };
         NoteEntry: {
             author_name: string;
             body: string;
@@ -899,6 +930,13 @@ export interface components {
         StateChange: {
             state: components["schemas"]["TicketState"];
         };
+        TicketCustomer: {
+            /** Format: uuid */
+            id: string;
+            /** @description Whether this is the help desk's own organization. */
+            is_help_desk: boolean;
+            name: string;
+        };
         /** @description A ticket with everything written on it. */
         TicketDetail: {
             /** @description Assets of the ticket's customer the ticket is about. */
@@ -908,7 +946,7 @@ export interface components {
             children: components["schemas"]["RelatedTicket"][];
             /** Format: date-time */
             created_at: string;
-            customer: components["schemas"]["Party"];
+            customer: components["schemas"]["TicketCustomer"];
             /** Format: uuid */
             id: string;
             /** Format: int64 */
@@ -1873,6 +1911,54 @@ export interface operations {
             };
         };
     };
+    update_service: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewService"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     runs_on: {
         parameters: {
             query?: never;
@@ -2041,6 +2127,50 @@ export interface operations {
             };
         };
     };
+    retire_service: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     current_session: {
         parameters: {
             query?: never;
@@ -2152,6 +2282,53 @@ export interface operations {
                 };
             };
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    open_ticket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewTicket"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenedTicket"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

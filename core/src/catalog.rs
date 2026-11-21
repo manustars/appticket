@@ -217,6 +217,52 @@ pub async fn create_service(db: &PgPool, name: &str, description: &str) -> Resul
     Ok(id)
 }
 
+pub async fn update_service(db: &PgPool, id: Uuid, name: &str, description: &str) -> Result<()> {
+    let name = text(name, "name")?;
+    let mut tx = db.begin().await?;
+    let taken: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM services WHERE name = $1 AND id <> $2)")
+            .bind(&name)
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if taken {
+        return rule(format!("there is already a service called {name}"));
+    }
+    let updated = sqlx::query("UPDATE services SET name = $2, description = $3 WHERE id = $1")
+        .bind(id)
+        .bind(&name)
+        .bind(description.trim())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if updated == 0 {
+        return Err(Error::NotFound("service"));
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Retires a service: it stays on the tickets that refer to it but gets no new links or users.
+pub async fn retire_service(db: &PgPool, id: Uuid) -> Result<()> {
+    let retired: Option<bool> =
+        sqlx::query_scalar("SELECT retired_at IS NOT NULL FROM services WHERE id = $1")
+            .bind(id)
+            .fetch_optional(db)
+            .await?;
+    match retired {
+        None => Err(Error::NotFound("service")),
+        Some(true) => rule("the service is already retired"),
+        Some(false) => {
+            sqlx::query("UPDATE services SET retired_at = now() WHERE id = $1")
+                .bind(id)
+                .execute(db)
+                .await?;
+            Ok(())
+        }
+    }
+}
+
 /// Makes the help desk's own organization a user of every service; run when it is created.
 pub async fn help_desk_uses_every_service(
     tx: &mut Transaction<'_, Postgres>,

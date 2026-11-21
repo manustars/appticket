@@ -1157,6 +1157,65 @@
             }
           }
         }
+      },
+      "put": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Renames a service or changes its description.",
+        "operationId": "update_service",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The service",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewService"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/services/{id}/assets/{asset}": {
@@ -1381,6 +1440,57 @@
         }
       }
     },
+    "/api/services/{id}/retire": {
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Retires a service: it stays on its tickets but gets no new links or users.",
+        "operationId": "retire_service",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The service",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/session": {
       "get": {
         "tags": [
@@ -1481,8 +1591,7 @@
             "description": "A customer's id.",
             "required": false,
             "schema": {
-              "type": "string",
-              "format": "uuid"
+              "type": "string"
             }
           },
           {
@@ -1518,6 +1627,61 @@
             }
           },
           "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Opens a ticket by hand.",
+        "operationId": "open_ticket",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewTicket"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenedTicket"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2894,6 +3058,36 @@
           }
         }
       },
+      "NewTicket": {
+        "type": "object",
+        "required": [
+          "customer_id",
+          "title"
+        ],
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An internal note recording what was said, e.g. on the phone."
+          },
+          "requester_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The requester's address; a new one is registered with the customer. Omit it for planned\nwork without a requester."
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
       "NoteEntry": {
         "type": "object",
         "required": [
@@ -3203,6 +3397,27 @@
           }
         }
       },
+      "TicketCustomer": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "is_help_desk"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_help_desk": {
+            "type": "boolean",
+            "description": "Whether this is the help desk's own organization."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "TicketDetail": {
         "type": "object",
         "description": "A ticket with everything written on it.",
@@ -3249,7 +3464,7 @@
             "format": "date-time"
           },
           "customer": {
-            "$ref": "#/components/schemas/Party"
+            "$ref": "#/components/schemas/TicketCustomer"
           },
           "id": {
             "type": "string",

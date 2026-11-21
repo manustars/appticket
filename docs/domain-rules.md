@@ -13,7 +13,9 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
 - The sender is identified first by address (a registered requester), then by domain (a domain
   registered on a customer, which creates a new requester of that customer); otherwise the sender
   is unidentified.
-- E-mail is the only automatic channel; an agent can also open a ticket by hand.
+- E-mail is the only automatic channel; an agent can also open a ticket by hand, for a customer,
+  with or without a requester (the same requester rules as for the inbox apply) and with an
+  optional internal note recording what was said.
 
 ## People
 

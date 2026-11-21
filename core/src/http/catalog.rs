@@ -21,7 +21,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(update_asset))
         .routes(routes!(retire_asset))
         .routes(routes!(list_services, create_service))
-        .routes(routes!(get_service))
+        .routes(routes!(get_service, update_service))
+        .routes(routes!(retire_service))
         .routes(routes!(use_service, stop_using_service))
         .routes(routes!(runs_on, stops_running_on))
         .routes(routes!(link_ticket_asset, unlink_ticket_asset))
@@ -267,5 +268,34 @@ async fn unlink_ticket_service(
     Path((number, service)): Path<(i64, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     catalog::link_service(&state.db, number, service, false).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Renames a service or changes its description.
+#[utoipa::path(put, path = "/api/services/{id}", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The service")), request_body = NewService,
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn update_service(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(id): Path<Uuid>,
+    Json(fields): Json<NewService>,
+) -> Result<StatusCode, ApiError> {
+    catalog::update_service(&state.db, id, &fields.name, &fields.description).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Retires a service: it stays on its tickets but gets no new links or users.
+#[utoipa::path(post, path = "/api/services/{id}/retire", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The service")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn retire_service(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    catalog::retire_service(&state.db, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

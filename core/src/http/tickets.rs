@@ -15,7 +15,7 @@ use crate::tickets::{self, Moved, RequesterMove, TicketDetail, TicketState};
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
-        .routes(routes!(list_tickets))
+        .routes(routes!(list_tickets, open_ticket))
         .routes(routes!(get_ticket))
         .routes(routes!(add_note))
         .routes(routes!(reply))
@@ -49,7 +49,7 @@ pub struct TicketFilter {
     /// `me` (the signed-in agent), `none` (unassigned) or an agent's id.
     assignee: Option<String>,
     /// A customer's id.
-    customer: Option<Uuid>,
+    customer: Option<String>,
     /// Text found in the title, the requester's address or the customer's name; `#12` or `12`
     /// also finds ticket 12.
     q: Option<String>,
@@ -88,6 +88,13 @@ async fn list_tickets(
             })?),
         ),
     };
+    let customer = match filter.customer.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(id) => Some(
+            Uuid::parse_str(id)
+                .map_err(|_| ApiError::BadRequest("customer must be a customer's id".into()))?,
+        ),
+    };
     let q = filter.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
     let number: Option<i64> = q.and_then(|q| q.trim_start_matches('#').parse().ok());
     let pattern = q.map(|q| {
@@ -118,7 +125,7 @@ async fn list_tickets(
     .bind(states)
     .bind(unassigned)
     .bind(assignee)
-    .bind(filter.customer)
+    .bind(customer)
     .bind(pattern)
     .bind(number)
     .fetch_all(&state.db)
@@ -329,4 +336,41 @@ async fn resolve_children(
         crate::parents::resolve_children(&state.db, sender, number, agent.id, &request.body)
             .await?,
     ))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct NewTicket {
+    customer_id: Uuid,
+    title: String,
+    /// The requester's address; a new one is registered with the customer. Omit it for planned
+    /// work without a requester.
+    requester_email: Option<String>,
+    /// An internal note recording what was said, e.g. on the phone.
+    note: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct OpenedTicket {
+    number: i64,
+}
+
+/// Opens a ticket by hand.
+#[utoipa::path(post, path = "/api/tickets", tag = "tickets", request_body = NewTicket,
+    responses((status = CREATED, body = OpenedTicket), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn open_ticket(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Json(new): Json<NewTicket>,
+) -> Result<(StatusCode, Json<OpenedTicket>), ApiError> {
+    let number = tickets::open(
+        &state.db,
+        new.customer_id,
+        &new.title,
+        new.requester_email.as_deref(),
+        new.note.as_deref(),
+        agent.id,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(OpenedTicket { number })))
 }

@@ -170,6 +170,94 @@ pub async fn reply(
     Ok(id)
 }
 
+/// Opens a ticket by hand, for example after a phone call (docs/domain-rules.md, "Incoming
+/// messages"). With a requester's address, that requester is used or, if new, registered with
+/// the customer; an address that is a requester of another customer is refused. The optional note
+/// records what was said. Returns the ticket's number.
+pub async fn open(
+    db: &PgPool,
+    customer: Uuid,
+    title: &str,
+    requester_email: Option<&str>,
+    note: Option<&str>,
+    author: Uuid,
+) -> Result<i64> {
+    let title = title.trim();
+    if title.is_empty() {
+        return rule("a ticket needs a title");
+    }
+    let mut tx = db.begin().await?;
+    let offboarded: Option<bool> =
+        sqlx::query_scalar("SELECT offboarded_at IS NOT NULL FROM customers WHERE id = $1")
+            .bind(customer)
+            .fetch_optional(&mut *tx)
+            .await?;
+    match offboarded {
+        None => return Err(Error::NotFound("customer")),
+        Some(true) => return rule("the customer is offboarded and gets no new tickets"),
+        Some(false) => {}
+    }
+    let requester = match requester_email.map(|e| e.trim().to_lowercase()) {
+        None => None,
+        Some(email) if email.is_empty() => None,
+        Some(email) => {
+            match email.rsplit_once('@') {
+                Some((local, domain)) if !local.is_empty() && domain.contains('.') => {}
+                _ => return rule(format!("{email:?} is not an e-mail address")),
+            }
+            let existing: Option<(Uuid, Uuid, String)> = sqlx::query_as(
+                "SELECT r.id, r.customer_id, c.name FROM requesters r
+                 JOIN customers c ON c.id = r.customer_id WHERE r.email = $1",
+            )
+            .bind(&email)
+            .fetch_optional(&mut *tx)
+            .await?;
+            match existing {
+                Some((id, of, _)) if of == customer => Some(id),
+                Some((_, _, other)) => {
+                    return rule(format!(
+                        "this address is already a requester of {other}, and a requester belongs to one customer"
+                    ));
+                }
+                None => {
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO requesters (id, customer_id, email) VALUES ($1, $2, $3)",
+                    )
+                    .bind(id)
+                    .bind(customer)
+                    .bind(&email)
+                    .execute(&mut *tx)
+                    .await?;
+                    Some(id)
+                }
+            }
+        }
+    };
+    let id = Uuid::new_v4();
+    let number: i64 = sqlx::query_scalar(
+        "INSERT INTO tickets (id, customer_id, requester_id, title) VALUES ($1, $2, $3, $4)
+         RETURNING number",
+    )
+    .bind(id)
+    .bind(customer)
+    .bind(requester)
+    .bind(title)
+    .fetch_one(&mut *tx)
+    .await?;
+    if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
+        sqlx::query("INSERT INTO notes (id, ticket_id, author_id, body) VALUES ($1, $2, $3, $4)")
+            .bind(Uuid::new_v4())
+            .bind(id)
+            .bind(author)
+            .bind(note)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(number)
+}
+
 /// What happens to the ticket's requester when the ticket moves to another customer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -301,7 +389,7 @@ pub struct TicketDetail {
     pub number: i64,
     pub title: String,
     pub state: TicketState,
-    pub customer: Party,
+    pub customer: TicketCustomer,
     pub requester: Option<Requester>,
     pub assignee: Option<Party>,
     /// Assets of the ticket's customer the ticket is about.
@@ -324,6 +412,14 @@ pub struct TicketDetail {
 pub struct Party {
     pub id: Uuid,
     pub name: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct TicketCustomer {
+    pub id: Uuid,
+    pub name: String,
+    /// Whether this is the help desk's own organization.
+    pub is_help_desk: bool,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -392,6 +488,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
         state: TicketState,
         customer_id: Uuid,
         customer_name: String,
+        customer_is_help_desk: bool,
         requester_id: Option<Uuid>,
         requester_email: Option<String>,
         requester_name: Option<String>,
@@ -403,6 +500,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
     }
     let row: Row = sqlx::query_as(
         "SELECT t.id, t.title, t.state, c.id AS customer_id, c.name AS customer_name,
+                c.is_help_desk AS customer_is_help_desk,
                 r.id AS requester_id, r.email AS requester_email, r.name AS requester_name,
                 (SELECT count(*) FROM tickets o WHERE o.requester_id = r.id) AS requester_tickets,
                 a.id AS assignee_id, a.name AS assignee_name, t.created_at, t.updated_at
@@ -454,9 +552,10 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
         number,
         title: row.title,
         state: row.state,
-        customer: Party {
+        customer: TicketCustomer {
             id: row.customer_id,
             name: row.customer_name,
+            is_help_desk: row.customer_is_help_desk,
         },
         requester: row.requester_id.map(|id| Requester {
             id,
@@ -650,6 +749,47 @@ mod tests {
         assert_eq!(detail(&db, second).await.unwrap().customer.id, brightfield);
         assert!(matches!(
             move_to_customer(&db, first, harbor, RequesterMove::Remove).await,
+            Err(Error::Rule(_))
+        ));
+    }
+
+    #[sqlx::test]
+    async fn an_agent_opens_a_ticket_by_hand(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let a = testing::agent(&db, "marco@northgate.test").await;
+        testing::requester(&db, harbor, "ivo@harbor.test").await;
+
+        let n = open(
+            &db,
+            brightfield,
+            "Phone: VPN down",
+            Some("Ada@Brightfield.test"),
+            Some("Called at 9."),
+            a,
+        )
+        .await
+        .unwrap();
+        let ticket = detail(&db, n).await.unwrap();
+        assert_eq!(
+            ticket.requester.map(|r| r.email).as_deref(),
+            Some("ada@brightfield.test")
+        );
+        assert!(
+            matches!(&ticket.timeline[..], [TimelineEntry::Note(note)] if note.body == "Called at 9.")
+        );
+        assert!(!ticket.customer.is_help_desk);
+
+        let planned = open(&db, brightfield, "Renew the certificate", None, None, a)
+            .await
+            .unwrap();
+        assert!(detail(&db, planned).await.unwrap().requester.is_none());
+        assert!(matches!(
+            open(&db, brightfield, "x", Some("ivo@harbor.test"), None, a).await,
+            Err(Error::Rule(_))
+        ));
+        assert!(matches!(
+            open(&db, brightfield, "  ", None, None, a).await,
             Err(Error::Rule(_))
         ));
     }
