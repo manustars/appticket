@@ -389,8 +389,47 @@
         "tags": [
           "tickets"
         ],
-        "summary": "Tickets, most recently updated first.",
+        "summary": "Tickets, most recently updated first (at most 200).",
         "operationId": "list_tickets",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Comma-separated states, e.g. `open,waiting`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "assignee",
+            "in": "query",
+            "description": "`me` (the signed-in agent), `none` (unassigned) or an agent's id.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "customer",
+            "in": "query",
+            "description": "A customer's id.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Text found in the title, the requester's address or the customer's name; `#12` or `12`\nalso finds ticket 12.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -400,6 +439,15 @@
                   "items": {
                     "$ref": "#/components/schemas/TicketSummary"
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }

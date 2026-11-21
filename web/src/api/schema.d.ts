@@ -149,7 +149,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Tickets, most recently updated first. */
+        /** Tickets, most recently updated first (at most 200). */
         get: operations["list_tickets"];
         put?: never;
         post?: never;
@@ -790,7 +790,19 @@ export interface operations {
     };
     list_tickets: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Comma-separated states, e.g. `open,waiting`. */
+                state?: string;
+                /** @description `me` (the signed-in agent), `none` (unassigned) or an agent's id. */
+                assignee?: string;
+                /** @description A customer's id. */
+                customer?: string;
+                /**
+                 * @description Text found in the title, the requester's address or the customer's name; `#12` or `12`
+                 *     also finds ticket 12.
+                 */
+                q?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -803,6 +815,14 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TicketSummary"][];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             401: {

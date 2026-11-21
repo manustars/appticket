@@ -1,11 +1,11 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
@@ -38,13 +38,65 @@ pub struct TicketSummary {
     updated_at: OffsetDateTime,
 }
 
-/// Tickets, most recently updated first.
-#[utoipa::path(get, path = "/api/tickets", tag = "tickets",
-    responses((status = OK, body = Vec<TicketSummary>), (status = UNAUTHORIZED, body = Problem)))]
+/// Which tickets to list. Every filter is optional; together they all apply.
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct TicketFilter {
+    /// Comma-separated states, e.g. `open,waiting`.
+    state: Option<String>,
+    /// `me` (the signed-in agent), `none` (unassigned) or an agent's id.
+    assignee: Option<String>,
+    /// A customer's id.
+    customer: Option<Uuid>,
+    /// Text found in the title, the requester's address or the customer's name; `#12` or `12`
+    /// also finds ticket 12.
+    q: Option<String>,
+}
+
+/// Tickets, most recently updated first (at most 200).
+#[utoipa::path(get, path = "/api/tickets", tag = "tickets", params(TicketFilter),
+    responses((status = OK, body = Vec<TicketSummary>), (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
 async fn list_tickets(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
+    Query(filter): Query<TicketFilter>,
 ) -> Result<Json<Vec<TicketSummary>>, ApiError> {
+    let states: Option<Vec<String>> = match filter.state.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(list) => {
+            let mut states = Vec::new();
+            for s in list.split(',').map(str::trim) {
+                if !["open", "waiting", "resolved", "closed"].contains(&s) {
+                    return Err(ApiError::BadRequest(format!("unknown ticket state {s:?}")));
+                }
+                states.push(s.to_owned());
+            }
+            Some(states)
+        }
+    };
+    let (unassigned, assignee) = match filter.assignee.as_deref().map(str::trim) {
+        None | Some("") => (false, None),
+        Some("none") => (true, None),
+        Some("me") => (false, Some(agent.id)),
+        Some(id) => (
+            false,
+            Some(Uuid::parse_str(id).map_err(|_| {
+                ApiError::BadRequest("assignee must be me, none or an agent's id".into())
+            })?),
+        ),
+    };
+    let q = filter.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
+    let number: Option<i64> = q.and_then(|q| q.trim_start_matches('#').parse().ok());
+    let pattern = q.map(|q| {
+        format!(
+            "%{}%",
+            q.replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        )
+    });
+
     let tickets = sqlx::query_as(
         "SELECT t.id, t.number, t.title, t.state, c.name AS customer_name,
                 r.email AS requester_email, a.name AS assignee_name, t.updated_at
@@ -52,9 +104,21 @@ async fn list_tickets(
          JOIN customers c ON c.id = t.customer_id
          LEFT JOIN requesters r ON r.id = t.requester_id
          LEFT JOIN agents a ON a.id = t.assignee_id
+         WHERE ($1::text[] IS NULL OR t.state = ANY($1))
+           AND (NOT $2 OR t.assignee_id IS NULL)
+           AND ($3::uuid IS NULL OR t.assignee_id = $3)
+           AND ($4::uuid IS NULL OR t.customer_id = $4)
+           AND ($5::text IS NULL OR t.number = $6
+                OR t.title ILIKE $5 OR r.email ILIKE $5 OR c.name ILIKE $5)
          ORDER BY t.updated_at DESC
          LIMIT 200",
     )
+    .bind(states)
+    .bind(unassigned)
+    .bind(assignee)
+    .bind(filter.customer)
+    .bind(pattern)
+    .bind(number)
     .fetch_all(&state.db)
     .await?;
     Ok(Json(tickets))

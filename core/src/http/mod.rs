@@ -76,6 +76,8 @@ pub fn router(state: AppState) -> Router {
 #[derive(Debug)]
 pub enum ApiError {
     Unauthorized,
+    /// The request itself is malformed; the text says how.
+    BadRequest(String),
     NotFound(&'static str),
     /// The request is well formed but breaks a rule; the text says which.
     Conflict(String),
@@ -92,6 +94,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, error) = match self {
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "not signed in".to_owned()),
+            ApiError::BadRequest(why) => (StatusCode::BAD_REQUEST, why),
             ApiError::NotFound(what) => (StatusCode::NOT_FOUND, format!("{what} not found")),
             ApiError::Conflict(why) => (StatusCode::CONFLICT, why),
             ApiError::Internal(error) => {
@@ -245,3 +248,6 @@ impl From<crate::error::Error> for ApiError {
         }
     }
 }
+
+#[cfg(test)]
+pub mod tests;
