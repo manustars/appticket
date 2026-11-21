@@ -85,7 +85,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** A ticket with its messages, notes and links. Scope `tickets:read`. */
+        /** A ticket with its messages and links, without internal notes. Scope `tickets:read`. */
         get: operations["ticket"];
         put?: never;
         post?: never;

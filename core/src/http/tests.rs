@@ -297,6 +297,37 @@ async fn an_addon_proposes_and_an_agent_accepts(db: PgPool) {
 
     let bot = Client::new_with_token(&db, &assistant.token, api.agent);
     let customers = bot.get("/api/addon/customers").await;
+    let n = testing::ticket(&db, brightfield, None, "n@brightfield.test").await;
+    crate::tickets::add_note(&db, n, api.agent, "Internal: the customer is late paying.")
+        .await
+        .unwrap();
+    let (_, refused) = bot
+        .call("GET", &format!("/api/addon/tickets/{n}"), None)
+        .await;
+    assert_eq!(
+        refused["error"],
+        "The add-on assistant lacks the scope tickets:read."
+    );
+    let full = crate::addons::register(
+        &db,
+        "full",
+        "http://127.0.0.1:9",
+        &[],
+        &["tickets:read".into()],
+    )
+    .await
+    .unwrap();
+    let seen = Client::new_with_token(&db, &full.token, api.agent)
+        .get(&format!("/api/addon/tickets/{n}"))
+        .await;
+    assert!(
+        seen["timeline"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["kind"] != "note"),
+        "notes never reach add-ons: {seen}"
+    );
     assert_eq!(customers[0]["name"], "Brightfield");
     let (status, created) = bot
         .call("POST", "/api/addon/proposals", Some(proposal))

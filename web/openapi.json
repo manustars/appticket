@@ -237,7 +237,7 @@
         "tags": [
           "add-ons"
         ],
-        "summary": "A ticket with its messages, notes and links. Scope `tickets:read`.",
+        "summary": "A ticket with its messages and links, without internal notes. Scope `tickets:read`.",
         "operationId": "ticket",
         "parameters": [
           {

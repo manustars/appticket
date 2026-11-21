@@ -168,7 +168,7 @@ async fn open_tickets(
     ))
 }
 
-/// A ticket with its messages, notes and links. Scope `tickets:read`.
+/// A ticket with its messages and links, without internal notes. Scope `tickets:read`.
 #[utoipa::path(get, path = "/api/addon/tickets/{number}", tag = "add-ons",
     params(("number" = i64, Path, description = "The ticket's number")),
     responses((status = OK, body = TicketDetail), (status = NOT_FOUND, body = Problem),
@@ -179,7 +179,12 @@ async fn ticket(
     Path(number): Path<i64>,
 ) -> Result<Json<TicketDetail>, ApiError> {
     caller.require(TICKETS_READ)?;
-    Ok(Json(tickets::detail(&state.db, number).await?))
+    let mut detail = tickets::detail(&state.db, number).await?;
+    // Internal notes are for agents only; an add-on never sees them.
+    detail
+        .timeline
+        .retain(|entry| !matches!(entry, tickets::TimelineEntry::Note(_)));
+    Ok(Json(detail))
 }
 
 #[derive(Deserialize, ToSchema)]

@@ -38,7 +38,12 @@ and these headers:
 | `hd-signature` | `sha256=` and the hex HMAC-SHA-256 of `<hd-timestamp>.<raw body>`, keyed with the event secret. |
 
 The add-on must check the signature over the raw body before parsing it, and should refuse a
-timestamp more than five minutes away from its own clock. Any 2xx answer counts as delivered;
+timestamp more than five minutes away from its own clock. The `hd-event-id` header is not signed:
+to skip duplicates, use the `id` inside the verified body.
+
+Answer quickly and do the work in the background: the core waits at most 10 seconds and delivers
+to add-ons one event at a time. Once the core has a 2xx answer it does not send that event again,
+so an add-on that fails later must retry the work itself. Any 2xx answer counts as delivered;
 anything else, or no answer within 10 seconds, is retried after 30 seconds, then with a doubling
 delay up to an hour, twelve times in all. Events may arrive more than once and, across retries, out
 of order.
@@ -75,7 +80,7 @@ sentence saying which scope is missing.
 | `GET /api/addon/customers` | `directory:read` | Customers that can get tickets, with their mail domains. |
 | `GET /api/addon/customers/{id}/assets` | `directory:read` | A customer's active assets. |
 | `GET /api/addon/tickets?requester_email=…` or `?customer=…` | `tickets:read` | Tickets that are not closed. |
-| `GET /api/addon/tickets/{number}` | `tickets:read` | A ticket with its messages, notes, links and open proposals. |
+| `GET /api/addon/tickets/{number}` | `tickets:read` | A ticket with its messages, links and open proposals; internal notes are never given to add-ons. |
 | `POST /api/addon/proposals` | `proposals:write` | Proposes something to the agents. |
 
 The full request and response shapes are in the core's OpenAPI specification
