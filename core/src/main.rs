@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 
+mod addons;
 mod auth;
 mod catalog;
 mod cli;
@@ -74,6 +75,9 @@ enum Command {
     /// Manage agents.
     #[command(subcommand)]
     Agent(cli::AgentCommand),
+    /// Manage add-ons.
+    #[command(subcommand)]
+    Addon(cli::AddonCommand),
     /// Print the OpenAPI specification of the HTTP API (needs no database).
     Openapi,
 }
@@ -110,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Migrate | Command::Openapi => Ok(()),
         Command::Customer(command) => cli::customer(&db, command).await,
         Command::Agent(command) => cli::agent(&db, command).await,
+        Command::Addon(command) => cli::addon(&db, command).await,
         Command::Serve {
             listen,
             imap_url,
@@ -150,6 +155,11 @@ async fn main() -> anyhow::Result<()> {
                 }
                 None => tracing::warn!("HD_SMTP_URL is not set: replies stay in the outbox"),
             }
+            tokio::spawn(addons::deliver(
+                db.clone(),
+                addons::http_client()?,
+                Duration::from_secs(5),
+            ));
             http::serve(http::AppState { db, sender }, listen).await
         }
     }

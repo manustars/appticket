@@ -15,6 +15,7 @@ use crate::testing;
 pub struct Client {
     state: AppState,
     cookie: String,
+    bearer: Option<String>,
     pub agent: Uuid,
 }
 
@@ -39,6 +40,20 @@ impl Client {
                 sender: Some(testing::sender()),
             },
             cookie: format!("{}={token}", crate::auth::SESSION_COOKIE),
+            bearer: None,
+            agent,
+        }
+    }
+
+    /// A client that authenticates with an add-on's bearer token instead of a session.
+    pub fn new_with_token(db: &PgPool, token: &str, agent: Uuid) -> Client {
+        Client {
+            state: AppState {
+                db: db.clone(),
+                sender: Some(testing::sender()),
+            },
+            cookie: String::new(),
+            bearer: Some(token.to_owned()),
             agent,
         }
     }
@@ -48,6 +63,9 @@ impl Client {
             .method(method)
             .uri(uri)
             .header(header::COOKIE, &self.cookie);
+        if let Some(token) = &self.bearer {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
         let body = match body {
             Some(json) => {
                 request = request.header(header::CONTENT_TYPE, "application/json");
@@ -194,4 +212,46 @@ async fn assets_and_services_are_linked_through_the_api(db: PgPool) {
     let ticket = api.get(&format!("/api/tickets/{n}")).await;
     assert_eq!(ticket["assets"][0]["name"], "PC-0042");
     assert_eq!(ticket["services"][0]["name"], "Hosted mail");
+}
+
+#[sqlx::test]
+async fn an_addon_calls_with_its_token_and_receives_messages(db: PgPool) {
+    let api = Client::new(&db).await;
+    let addon = crate::addons::register(
+        &db,
+        "assistant",
+        "http://127.0.0.1:9",
+        &[crate::addons::MESSAGE_RECEIVED.into()],
+        &[],
+    )
+    .await
+    .unwrap();
+    let as_addon = Client {
+        cookie: String::new(),
+        ..Client::new_with_token(&db, &addon.token, api.agent)
+    };
+    let (status, me) = as_addon.call("GET", "/api/addon/whoami", None).await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["name"], "assistant");
+    // An agent's session is not an add-on's token.
+    let (status, _) = api.call("GET", "/api/addon/whoami", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // A routed message is recorded as an event for the add-on.
+    let raw = b"From: Ada <ada@elsewhere.test>\r\nMessage-ID: <e1@elsewhere.test>\r\nSubject: Printer\r\n\r\nIt jams.\r\n";
+    let mut tx = db.begin().await.unwrap();
+    crate::mail::store(&mut tx, 1, raw).await.unwrap();
+    tx.commit().await.unwrap();
+    let (kind, subject, pending): (String, String, i64) = sqlx::query_as(
+        "SELECT e.kind, e.data->>'subject',
+                (SELECT count(*) FROM event_deliveries d WHERE d.event_id = e.id)
+         FROM events e",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (kind.as_str(), subject.as_str(), pending),
+        ("message.received", "Printer", 1)
+    );
 }

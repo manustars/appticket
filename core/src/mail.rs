@@ -223,12 +223,13 @@ async fn insert_message(
     incoming: &Incoming,
     ticket_id: Option<Uuid>,
 ) -> anyhow::Result<()> {
+    let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO messages (id, ticket_id, direction, rfc_message_id, in_reply_to, \"references\",
                                from_address, from_name, subject, body_text, raw)
          VALUES ($1, $2, 'inbound', $3, $4, $5, $6, $7, $8, $9, $10)",
     )
-    .bind(Uuid::new_v4())
+    .bind(id)
     .bind(ticket_id)
     .bind(&incoming.rfc_message_id)
     .bind(incoming.in_reply_to.first())
@@ -240,6 +241,29 @@ async fn insert_message(
     .bind(&incoming.raw)
     .execute(&mut **tx)
     .await?;
+    let ticket_number: Option<i64> = match ticket_id {
+        Some(ticket) => Some(
+            sqlx::query_scalar("SELECT number FROM tickets WHERE id = $1")
+                .bind(ticket)
+                .fetch_one(&mut **tx)
+                .await?,
+        ),
+        None => None,
+    };
+    crate::addons::emit(
+        tx,
+        crate::addons::MESSAGE_RECEIVED,
+        serde_json::json!({
+            "message_id": id,
+            "ticket_number": ticket_number,
+            "from_address": incoming.from_address,
+            "from_name": incoming.from_name,
+            "subject": incoming.subject,
+            "body_text": incoming.body_text,
+        }),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(())
 }
 

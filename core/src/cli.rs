@@ -123,3 +123,66 @@ pub async fn agent(db: &PgPool, command: AgentCommand) -> anyhow::Result<()> {
         }
     }
 }
+
+#[derive(Subcommand)]
+pub enum AddonCommand {
+    /// Register an add-on. Prints its token and event secret once: store them in the add-on.
+    Add {
+        /// A short name: lowercase letters, digits and dashes.
+        name: String,
+        /// The add-on's base URL; events are sent to <url>/events.
+        #[arg(long)]
+        url: String,
+        /// An event kind the add-on receives; repeat for several.
+        #[arg(long = "event")]
+        events: Vec<String>,
+        /// Something the add-on's token may do; repeat for several.
+        #[arg(long = "scope")]
+        scopes: Vec<String>,
+    },
+    /// List add-ons with their undelivered events.
+    List,
+    /// Switch an add-on on: its token works and its waiting events are delivered.
+    Enable { name: String },
+    /// Switch an add-on off: its token is refused and its events wait.
+    Disable { name: String },
+}
+
+pub async fn addon(db: &PgPool, command: AddonCommand) -> anyhow::Result<()> {
+    let fail = |e: crate::error::Error| anyhow::anyhow!("{e}");
+    match command {
+        AddonCommand::Add {
+            name,
+            url,
+            events,
+            scopes,
+        } => {
+            let added = crate::addons::register(db, &name, &url, &events, &scopes)
+                .await
+                .map_err(fail)?;
+            println!("{}", added.id);
+            println!("token: {}", added.token);
+            println!("event secret: {}", added.event_secret);
+        }
+        AddonCommand::List => {
+            for a in crate::addons::list(db).await.map_err(fail)? {
+                println!(
+                    "{}  {}  {}  events: {}  scopes: {}  undelivered: {}",
+                    a.name,
+                    if a.enabled { "on" } else { "off" },
+                    a.url,
+                    a.events.join(","),
+                    a.scopes.join(","),
+                    a.pending
+                );
+            }
+        }
+        AddonCommand::Enable { name } => crate::addons::set_enabled(db, &name, true)
+            .await
+            .map_err(fail)?,
+        AddonCommand::Disable { name } => crate::addons::set_enabled(db, &name, false)
+            .await
+            .map_err(fail)?,
+    }
+    Ok(())
+}
