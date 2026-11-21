@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: docker.io/library/postgres:18
+        env:
+          POSTGRES_USER: hd
+          POSTGRES_PASSWORD: hd
+          POSTGRES_DB: hd
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hd -d hd" --health-interval 2s --health-retries 30
+      mail:
+        image: docker.io/greenmail/standalone:2.1.8
+        env:
+          GREENMAIL_OPTS: >-
+            -Dgreenmail.setup.test.smtp -Dgreenmail.setup.test.imap -Dgreenmail.hostname=0.0.0.0
+            -Dgreenmail.users=helpdesk:helpdesk@helpdesk.test -Dgreenmail.users.login=local_part
+        ports: ["55025:3025", "55143:3143"]
+    env:
+      DATABASE_URL: postgres://hd:hd@127.0.0.1:55432/hd
+      HD_DATABASE_URL: postgres://hd:hd@127.0.0.1:55432/hd
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      # Includes the tests that need the test mail server.
+      - run: cargo test --locked -- --include-ignored
+      - name: The UI's copy of the API specification is current
+        run: cargo run -q --locked -- openapi | diff -u web/openapi.json -
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # The denylist is private and never committed; CI runs the other checks.
+      - run: bash scripts/scan-clean.sh
+        env:
+          SCAN_DENYLIST: none
