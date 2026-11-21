@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::{ApiError, AppState, Problem};
 use crate::auth::SignedIn;
-use crate::tickets::{self, Moved, RequesterMove, TicketDetail, TicketState};
+use crate::tickets::{self, Moved, Priority, RequesterMove, TicketDetail, TicketState};
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -20,6 +20,9 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(add_note))
         .routes(routes!(reply))
         .routes(routes!(set_state))
+        .routes(routes!(set_priority))
+        .routes(routes!(accept_proposal))
+        .routes(routes!(discard_proposal))
         .routes(routes!(set_assignee))
         .routes(routes!(move_ticket))
         .routes(routes!(set_parent, clear_parent))
@@ -33,6 +36,7 @@ pub struct TicketSummary {
     number: i64,
     title: String,
     state: TicketState,
+    priority: Priority,
     customer_name: String,
     requester_email: Option<String>,
     assignee_name: Option<String>,
@@ -107,7 +111,7 @@ async fn list_tickets(
     });
 
     let tickets = sqlx::query_as(
-        "SELECT t.id, t.number, t.title, t.state, c.name AS customer_name,
+        "SELECT t.id, t.number, t.title, t.state, t.priority, c.name AS customer_name,
                 r.email AS requester_email, a.name AS assignee_name, t.updated_at
          FROM tickets t
          JOIN customers c ON c.id = t.customer_id
@@ -373,4 +377,55 @@ async fn open_ticket(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(OpenedTicket { number })))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct PriorityChange {
+    priority: Priority,
+}
+
+/// Changes the ticket's priority.
+#[utoipa::path(put, path = "/api/tickets/{number}/priority", tag = "tickets",
+    params(("number" = i64, Path, description = "The ticket's number")),
+    request_body = PriorityChange,
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn set_priority(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(number): Path<i64>,
+    Json(change): Json<PriorityChange>,
+) -> Result<StatusCode, ApiError> {
+    tickets::set_priority(&state.db, number, change.priority).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Accepts a proposal: it is applied as if the agent did it. A draft reply comes back to be put
+/// in the composer; nothing is sent.
+#[utoipa::path(post, path = "/api/proposals/{id}/accept", tag = "proposals",
+    params(("id" = Uuid, Path, description = "The proposal")),
+    responses((status = OK, body = crate::proposals::Accepted), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn accept_proposal(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<Json<crate::proposals::Accepted>, ApiError> {
+    Ok(Json(
+        crate::proposals::accept(&state.db, id, agent.id).await?,
+    ))
+}
+
+/// Discards a proposal.
+#[utoipa::path(post, path = "/api/proposals/{id}/discard", tag = "proposals",
+    params(("id" = Uuid, Path, description = "The proposal")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn discard_proposal(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    crate::proposals::discard(&state.db, id, agent.id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

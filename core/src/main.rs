@@ -17,6 +17,7 @@ mod imap;
 mod mail;
 mod outbound;
 mod parents;
+mod proposals;
 #[cfg(test)]
 mod testing;
 mod tickets;

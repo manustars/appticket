@@ -54,8 +54,50 @@ A message arrived and the core routed it to a ticket or to the inbox.
 | `from_address`, `from_name` | The sender. |
 | `subject`, `body_text` | The subject and the plain-text body. |
 
+### `ticket.opened`
+
+An agent opened a ticket, by hand or from an inbox message. (A ticket opened by an incoming message
+is announced by that message's `message.received`, with its `ticket_number`.)
+
+| Field | Meaning |
+|---|---|
+| `ticket_number` | The new ticket. |
+
 ## Calls: add-on to core
 
-The add-on calls the core's API with `Authorization: Bearer <token>`. Today only
-`GET /api/addon/whoami` exists; it answers the add-on's name and scopes. What an add-on may do
-(its scopes) grows with the operations add-ons need, such as proposals.
+The add-on calls the core's API with `Authorization: Bearer <token>`. Each operation needs a scope
+given at registration (`hd addon add … --scope <scope>`); without it the core answers 409 with a
+sentence saying which scope is missing.
+
+| Call | Scope | What it does |
+|---|---|---|
+| `GET /api/addon/whoami` | none | The add-on's name and scopes. |
+| `GET /api/addon/customers` | `directory:read` | Customers that can get tickets, with their mail domains. |
+| `GET /api/addon/customers/{id}/assets` | `directory:read` | A customer's active assets. |
+| `GET /api/addon/tickets?requester_email=…` or `?customer=…` | `tickets:read` | Tickets that are not closed. |
+| `GET /api/addon/tickets/{number}` | `tickets:read` | A ticket with its messages, notes, links and open proposals. |
+| `POST /api/addon/proposals` | `proposals:write` | Proposes something to the agents. |
+
+The full request and response shapes are in the core's OpenAPI specification
+(`hd openapi`, or `/api/openapi.json` on a running core).
+
+### Proposals
+
+A proposal is about an inbox message (`message_id`) or a ticket (`ticket_number`), never both, and
+carries a `content` and a one-sentence `rationale` shown to the agent:
+
+```json
+{ "message_id": "…", "content": { "kind": "triage", "action": "open_ticket", "customer_id": "…" },
+  "rationale": "The sender writes from Brightfield's domain." }
+```
+
+| `kind` | On | Content |
+|---|---|---|
+| `triage` | message | `action`: `open_ticket` with `customer_id`, `attach` with `ticket_number`, or `discard` |
+| `priority` | ticket | `priority`: `low`, `normal`, `high` or `urgent` |
+| `assets` | ticket | `asset_ids`: active assets of the ticket's customer |
+| `reply` | ticket | `body`: a draft reply; an accepted draft goes into the agent's composer, it is never sent by itself |
+
+A new proposal replaces the open one of the same kind on the same message or ticket. The core
+refuses (409) a proposal that does not apply any more: a message already out of the inbox, a closed
+ticket, an asset of another customer. Nothing takes effect until an agent accepts it.

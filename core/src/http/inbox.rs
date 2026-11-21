@@ -24,6 +24,9 @@ pub fn routes() -> OpenApiRouter<AppState> {
 #[derive(Serialize, ToSchema, sqlx::FromRow)]
 pub struct InboxMessage {
     id: Uuid,
+    /// The open triage proposal of an add-on, if any.
+    #[sqlx(skip)]
+    proposal: Option<crate::proposals::ProposalView>,
     from_address: String,
     from_name: Option<String>,
     subject: String,
@@ -39,7 +42,7 @@ async fn list_inbox(
     State(state): State<AppState>,
     _agent: SignedIn,
 ) -> Result<Json<Vec<InboxMessage>>, ApiError> {
-    let messages = sqlx::query_as(
+    let mut messages: Vec<InboxMessage> = sqlx::query_as(
         "SELECT id, from_address, from_name, subject, body_text, created_at AS received_at
          FROM messages
          WHERE direction = 'inbound' AND ticket_id IS NULL AND discarded_at IS NULL
@@ -48,6 +51,12 @@ async fn list_inbox(
     )
     .fetch_all(&state.db)
     .await?;
+    let ids: Vec<Uuid> = messages.iter().map(|m| m.id).collect();
+    for (message, proposal) in crate::proposals::open_on_messages(&state.db, &ids).await? {
+        if let Some(m) = messages.iter_mut().find(|m| m.id == message) {
+            m.proposal = Some(proposal);
+        }
+    }
     Ok(Json(messages))
 }
 

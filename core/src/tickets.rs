@@ -24,6 +24,40 @@ pub enum TicketState {
     Closed,
 }
 
+/// How soon a ticket needs attention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, sqlx::Type)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "text", rename_all = "lowercase")]
+pub enum Priority {
+    Low,
+    Normal,
+    High,
+    Urgent,
+}
+
+pub async fn set_priority(db: &PgPool, number: i64, priority: Priority) -> Result<()> {
+    let mut tx = db.begin().await?;
+    let (ticket_id, state) = lock(&mut tx, number).await?;
+    not_closed(state)?;
+    sqlx::query("UPDATE tickets SET priority = $2, updated_at = now() WHERE id = $1")
+        .bind(ticket_id)
+        .bind(priority)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Records that a ticket was opened, for the add-ons that follow it.
+pub async fn emit_opened(tx: &mut Transaction<'_, Postgres>, number: i64) -> Result<()> {
+    crate::addons::emit(
+        tx,
+        crate::addons::TICKET_OPENED,
+        serde_json::json!({ "ticket_number": number }),
+    )
+    .await
+}
+
 /// The ticket's id and state, locked for the rest of the transaction.
 async fn lock(tx: &mut Transaction<'_, Postgres>, number: i64) -> Result<(Uuid, TicketState)> {
     sqlx::query_as("SELECT id, state FROM tickets WHERE number = $1 FOR UPDATE")
@@ -245,6 +279,7 @@ pub async fn open(
     .bind(title)
     .fetch_one(&mut *tx)
     .await?;
+    emit_opened(&mut tx, number).await?;
     if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
         sqlx::query("INSERT INTO notes (id, ticket_id, author_id, body) VALUES ($1, $2, $3, $4)")
             .bind(Uuid::new_v4())
@@ -389,6 +424,7 @@ pub struct TicketDetail {
     pub number: i64,
     pub title: String,
     pub state: TicketState,
+    pub priority: Priority,
     pub customer: TicketCustomer,
     pub requester: Option<Requester>,
     pub assignee: Option<Party>,
@@ -400,6 +436,8 @@ pub struct TicketDetail {
     pub parent: Option<crate::parents::RelatedTicket>,
     /// The customers' tickets about the failure this ticket tracks.
     pub children: Vec<crate::parents::RelatedTicket>,
+    /// Open proposals of add-ons such as the Assistant.
+    pub proposals: Vec<crate::proposals::ProposalView>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -486,6 +524,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
         id: Uuid,
         title: String,
         state: TicketState,
+        priority: Priority,
         customer_id: Uuid,
         customer_name: String,
         customer_is_help_desk: bool,
@@ -499,7 +538,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
         updated_at: OffsetDateTime,
     }
     let row: Row = sqlx::query_as(
-        "SELECT t.id, t.title, t.state, c.id AS customer_id, c.name AS customer_name,
+        "SELECT t.id, t.title, t.state, t.priority, c.id AS customer_id, c.name AS customer_name,
                 c.is_help_desk AS customer_is_help_desk,
                 r.id AS requester_id, r.email AS requester_email, r.name AS requester_name,
                 (SELECT count(*) FROM tickets o WHERE o.requester_id = r.id) AS requester_tickets,
@@ -546,12 +585,14 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
     timeline.sort_by_key(|(at, _)| *at);
     let (assets, services) = crate::catalog::ticket_links(db, row.id).await?;
     let (parent, children) = crate::parents::related(db, row.id).await?;
+    let proposals = crate::proposals::open_on_ticket(db, row.id).await?;
 
     Ok(TicketDetail {
         id: row.id,
         number,
         title: row.title,
         state: row.state,
+        priority: row.priority,
         customer: TicketCustomer {
             id: row.customer_id,
             name: row.customer_name,
@@ -571,6 +612,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
         services,
         parent,
         children,
+        proposals,
         created_at: row.created_at,
         updated_at: row.updated_at,
         timeline: timeline.into_iter().map(|(_, entry)| entry).collect(),

@@ -1,19 +1,31 @@
-//! The part of the API add-ons call, with `Authorization: Bearer <token>`.
+//! The part of the API add-ons call, with `Authorization: Bearer <token>`. Each operation needs
+//! a scope the add-on was registered with.
 
 use axum::{
     Json,
-    extract::FromRequestParts,
-    http::{header, request::Parts},
+    extract::{FromRequestParts, Path, Query, State},
+    http::{StatusCode, header, request::Parts},
 };
-use serde::Serialize;
-use utoipa::ToSchema;
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
+use uuid::Uuid;
 
 use super::{ApiError, AppState, Problem};
-use crate::addons::{self, Caller};
+use crate::addons::{self, Caller, DIRECTORY_READ, PROPOSALS_WRITE, TICKETS_READ};
+use crate::catalog::Asset;
+use crate::proposals::{self, Content, Target};
+use crate::tickets::{self, Priority, TicketDetail, TicketState};
 
 pub fn routes() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(whoami))
+    OpenApiRouter::new()
+        .routes(routes!(whoami))
+        .routes(routes!(customers))
+        .routes(routes!(customer_assets))
+        .routes(routes!(open_tickets))
+        .routes(routes!(ticket))
+        .routes(routes!(propose))
 }
 
 /// Requires an enabled add-on's token.
@@ -50,4 +62,171 @@ async fn whoami(caller: Caller) -> Json<AddonIdentity> {
         name: caller.name,
         scopes: caller.scopes,
     })
+}
+
+#[derive(Serialize, ToSchema, sqlx::FromRow)]
+pub struct AddonCustomer {
+    id: Uuid,
+    name: String,
+    is_help_desk: bool,
+    /// Mail domains that identify the customer's requesters.
+    domains: Vec<String>,
+}
+
+/// Customers that can get tickets, with their mail domains. Scope `directory:read`.
+#[utoipa::path(get, path = "/api/addon/customers", tag = "add-ons",
+    responses((status = OK, body = Vec<AddonCustomer>), (status = CONFLICT, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn customers(
+    State(state): State<AppState>,
+    caller: Caller,
+) -> Result<Json<Vec<AddonCustomer>>, ApiError> {
+    caller.require(DIRECTORY_READ)?;
+    Ok(Json(
+        sqlx::query_as(
+            "SELECT c.id, c.name, c.is_help_desk,
+                    coalesce((SELECT array_agg(d.domain ORDER BY d.domain) FROM customer_domains d
+                              WHERE d.customer_id = c.id), '{}') AS domains
+             FROM customers c WHERE c.offboarded_at IS NULL ORDER BY c.name",
+        )
+        .fetch_all(&state.db)
+        .await?,
+    ))
+}
+
+/// A customer's active assets. Scope `directory:read`.
+#[utoipa::path(get, path = "/api/addon/customers/{id}/assets", tag = "add-ons",
+    params(("id" = Uuid, Path, description = "The customer")),
+    responses((status = OK, body = Vec<Asset>), (status = CONFLICT, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn customer_assets(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<Asset>>, ApiError> {
+    caller.require(DIRECTORY_READ)?;
+    let assets = crate::catalog::assets_of(&state.db, id).await?;
+    Ok(Json(
+        assets
+            .into_iter()
+            .filter(|a| a.retired_at.is_none())
+            .collect(),
+    ))
+}
+
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct OpenTicketsFilter {
+    /// Tickets of this requester's address.
+    requester_email: Option<String>,
+    /// Tickets of this customer.
+    customer: Option<Uuid>,
+}
+
+#[derive(Serialize, ToSchema, sqlx::FromRow)]
+pub struct AddonTicketSummary {
+    number: i64,
+    title: String,
+    state: TicketState,
+    priority: Priority,
+    customer_id: Uuid,
+    requester_email: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    updated_at: OffsetDateTime,
+}
+
+/// Tickets that are not closed, of a requester or a customer, most recent first (at most 50).
+/// Scope `tickets:read`.
+#[utoipa::path(get, path = "/api/addon/tickets", tag = "add-ons", params(OpenTicketsFilter),
+    responses((status = OK, body = Vec<AddonTicketSummary>), (status = CONFLICT, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn open_tickets(
+    State(state): State<AppState>,
+    caller: Caller,
+    Query(filter): Query<OpenTicketsFilter>,
+) -> Result<Json<Vec<AddonTicketSummary>>, ApiError> {
+    caller.require(TICKETS_READ)?;
+    if filter.requester_email.is_none() && filter.customer.is_none() {
+        return Err(ApiError::BadRequest(
+            "give requester_email or customer".into(),
+        ));
+    }
+    Ok(Json(
+        sqlx::query_as(
+            "SELECT t.number, t.title, t.state, t.priority, t.customer_id,
+                    r.email AS requester_email, t.updated_at
+             FROM tickets t LEFT JOIN requesters r ON r.id = t.requester_id
+             WHERE t.state <> 'closed'
+               AND ($1::text IS NULL OR r.email = lower($1))
+               AND ($2::uuid IS NULL OR t.customer_id = $2)
+             ORDER BY t.updated_at DESC LIMIT 50",
+        )
+        .bind(filter.requester_email.map(|e| e.trim().to_owned()))
+        .bind(filter.customer)
+        .fetch_all(&state.db)
+        .await?,
+    ))
+}
+
+/// A ticket with its messages, notes and links. Scope `tickets:read`.
+#[utoipa::path(get, path = "/api/addon/tickets/{number}", tag = "add-ons",
+    params(("number" = i64, Path, description = "The ticket's number")),
+    responses((status = OK, body = TicketDetail), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn ticket(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(number): Path<i64>,
+) -> Result<Json<TicketDetail>, ApiError> {
+    caller.require(TICKETS_READ)?;
+    Ok(Json(tickets::detail(&state.db, number).await?))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct NewProposal {
+    /// For triage: the inbox message.
+    message_id: Option<Uuid>,
+    /// For anything else: the ticket.
+    ticket_number: Option<i64>,
+    content: Content,
+    /// Why the add-on suggests it, in a sentence the agent reads.
+    #[serde(default)]
+    rationale: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct ProposalCreated {
+    id: Uuid,
+}
+
+/// Proposes something to the agents; it replaces the open proposal of the same kind on the same
+/// message or ticket. Scope `proposals:write`.
+#[utoipa::path(post, path = "/api/addon/proposals", tag = "add-ons", request_body = NewProposal,
+    responses((status = CREATED, body = ProposalCreated), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn propose(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(new): Json<NewProposal>,
+) -> Result<(StatusCode, Json<ProposalCreated>), ApiError> {
+    caller.require(PROPOSALS_WRITE)?;
+    let target = match (new.message_id, new.ticket_number) {
+        (Some(message), None) => Target::Message(message),
+        (None, Some(number)) => Target::Ticket(number),
+        _ => {
+            return Err(ApiError::BadRequest(
+                "give exactly one of message_id and ticket_number".into(),
+            ));
+        }
+    };
+    let id = proposals::submit(
+        &state.db,
+        &caller.name,
+        target,
+        &new.content,
+        &new.rationale,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(ProposalCreated { id })))
 }

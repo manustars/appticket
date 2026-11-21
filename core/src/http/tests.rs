@@ -255,3 +255,66 @@ async fn an_addon_calls_with_its_token_and_receives_messages(db: PgPool) {
         ("message.received", "Printer", 1)
     );
 }
+
+#[sqlx::test]
+async fn an_addon_proposes_and_an_agent_accepts(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let message = testing::inbox_message(&db, "ada@brightfield.test").await;
+    let limited = crate::addons::register(
+        &db,
+        "reader",
+        "http://127.0.0.1:9",
+        &[],
+        &["tickets:read".into()],
+    )
+    .await
+    .unwrap();
+    let assistant = crate::addons::register(
+        &db,
+        "assistant",
+        "http://127.0.0.1:9",
+        &[],
+        &["proposals:write".into(), "directory:read".into()],
+    )
+    .await
+    .unwrap();
+    let proposal = serde_json::json!({
+        "message_id": message,
+        "content": {"kind": "triage", "action": "open_ticket", "customer_id": brightfield},
+        "rationale": "The sender writes from Brightfield's domain."
+    });
+
+    let reader = Client::new_with_token(&db, &limited.token, api.agent);
+    let (status, refused) = reader
+        .call("POST", "/api/addon/proposals", Some(proposal.clone()))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        refused["error"],
+        "The add-on reader lacks the scope proposals:write."
+    );
+
+    let bot = Client::new_with_token(&db, &assistant.token, api.agent);
+    let customers = bot.get("/api/addon/customers").await;
+    assert_eq!(customers[0]["name"], "Brightfield");
+    let (status, created) = bot
+        .call("POST", "/api/addon/proposals", Some(proposal))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    let inbox = api.get("/api/inbox").await;
+    let shown = &inbox[0]["proposal"];
+    assert_eq!(shown["customer_name"], "Brightfield");
+    assert_eq!(shown["addon"], "assistant");
+    let id = shown["id"].as_str().unwrap();
+    let (status, accepted) = api
+        .call("POST", &format!("/api/proposals/{id}/accept"), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    let number = accepted["ticket_number"].as_i64().unwrap();
+    let ticket = api.get(&format!("/api/tickets/{number}")).await;
+    assert_eq!(ticket["customer"]["name"], "Brightfield");
+    assert_eq!(ticket["priority"], "normal");
+    assert!(api.get("/api/inbox").await.as_array().unwrap().is_empty());
+}

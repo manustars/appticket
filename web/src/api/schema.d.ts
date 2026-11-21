@@ -4,6 +4,97 @@
  */
 
 export interface paths {
+    "/api/addon/customers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Customers that can get tickets, with their mail domains. Scope `directory:read`. */
+        get: operations["customers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/addon/customers/{id}/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A customer's active assets. Scope `directory:read`. */
+        get: operations["customer_assets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/addon/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Proposes something to the agents; it replaces the open proposal of the same kind on the same
+         *     message or ticket. Scope `proposals:write`.
+         */
+        post: operations["propose"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/addon/tickets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tickets that are not closed, of a requester or a customer, most recent first (at most 50).
+         *     Scope `tickets:read`.
+         */
+        get: operations["open_tickets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/addon/tickets/{number}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A ticket with its messages, notes and links. Scope `tickets:read`. */
+        get: operations["ticket"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/addon/whoami": {
         parameters: {
             query?: never;
@@ -313,6 +404,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/proposals/{id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accepts a proposal: it is applied as if the agent did it. A draft reply comes back to be put
+         *     in the composer; nothing is sent.
+         */
+        post: operations["accept_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/proposals/{id}/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Discards a proposal. */
+        post: operations["discard_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/services": {
         parameters: {
             query?: never;
@@ -543,6 +671,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tickets/{number}/priority": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Changes the ticket's priority. */
+        put: operations["set_priority"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tickets/{number}/replies": {
         parameters: {
             query?: never;
@@ -616,9 +761,39 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description What accepting a proposal did. */
+        Accepted: {
+            /** @description For a draft reply: the text to put in the composer. Nothing has been sent. */
+            reply_body?: string | null;
+            /**
+             * Format: int64
+             * @description The ticket the proposal opened or acted on, when there is one.
+             */
+            ticket_number?: number | null;
+        };
+        AddonCustomer: {
+            /** @description Mail domains that identify the customer's requesters. */
+            domains: string[];
+            /** Format: uuid */
+            id: string;
+            is_help_desk: boolean;
+            name: string;
+        };
         AddonIdentity: {
             name: string;
             scopes: string[];
+        };
+        AddonTicketSummary: {
+            /** Format: uuid */
+            customer_id: string;
+            /** Format: int64 */
+            number: number;
+            priority: components["schemas"]["Priority"];
+            requester_email?: string | null;
+            state: components["schemas"]["TicketState"];
+            title: string;
+            /** Format: date-time */
+            updated_at: string;
         };
         Agent: {
             email: string;
@@ -664,6 +839,23 @@ export interface components {
              * @description The number of the ticket the message belongs to.
              */
             ticket_number: number;
+        };
+        /** @description What is proposed. */
+        Content: (components["schemas"]["Triage"] & {
+            /** @enum {string} */
+            kind: "triage";
+        }) | {
+            /** @enum {string} */
+            kind: "priority";
+            priority: components["schemas"]["Priority"];
+        } | {
+            asset_ids: string[];
+            /** @enum {string} */
+            kind: "assets";
+        } | {
+            body: string;
+            /** @enum {string} */
+            kind: "reply";
         };
         Created: {
             /** Format: uuid */
@@ -733,6 +925,7 @@ export interface components {
             from_name?: string | null;
             /** Format: uuid */
             id: string;
+            proposal?: components["schemas"]["ProposalView"] | null;
             /** Format: date-time */
             received_at: string;
             subject: string;
@@ -795,6 +988,21 @@ export interface components {
         NewNote: {
             body: string;
         };
+        NewProposal: {
+            content: components["schemas"]["Content"];
+            /**
+             * Format: uuid
+             * @description For triage: the inbox message.
+             */
+            message_id?: string | null;
+            /** @description Why the add-on suggests it, in a sentence the agent reads. */
+            rationale?: string;
+            /**
+             * Format: int64
+             * @description For anything else: the ticket.
+             */
+            ticket_number?: number | null;
+        };
         NewReply: {
             body: string;
             then?: components["schemas"]["TicketState"] | null;
@@ -850,9 +1058,42 @@ export interface components {
             id: string;
             name: string;
         };
+        /**
+         * @description How soon a ticket needs attention.
+         * @enum {string}
+         */
+        Priority: "low" | "normal" | "high" | "urgent";
+        PriorityChange: {
+            priority: components["schemas"]["Priority"];
+        };
         /** @description Why a request failed, in words an agent can read. */
         Problem: {
             error: string;
+        };
+        ProposalCreated: {
+            /** Format: uuid */
+            id: string;
+        };
+        /** @description A proposal as agents see it, with the names it refers to. */
+        ProposalView: {
+            /** @description The add-on that made it. */
+            addon: string;
+            /** @description For an assets proposal: the assets' names. */
+            assets: components["schemas"]["ProposedAsset"][];
+            content: components["schemas"]["Content"];
+            /** Format: date-time */
+            created_at: string;
+            /** @description For triage that opens a ticket: the customer's name. */
+            customer_name?: string | null;
+            /** Format: uuid */
+            id: string;
+            rationale: string;
+        };
+        ProposedAsset: {
+            /** Format: uuid */
+            id: string;
+            kind: string;
+            name: string;
         };
         RelatedTicket: {
             customer_name: string;
@@ -952,6 +1193,9 @@ export interface components {
             /** Format: int64 */
             number: number;
             parent?: components["schemas"]["RelatedTicket"] | null;
+            priority: components["schemas"]["Priority"];
+            /** @description Open proposals of add-ons such as the Assistant. */
+            proposals: components["schemas"]["ProposalView"][];
             requester?: components["schemas"]["Requester"] | null;
             /** @description Services of the help desk the ticket is about. */
             services: components["schemas"]["LinkedService"][];
@@ -974,6 +1218,7 @@ export interface components {
              * @description The number agents and requesters see.
              */
             number: number;
+            priority: components["schemas"]["Priority"];
             requester_email?: string | null;
             state: components["schemas"]["TicketState"];
             title: string;
@@ -987,6 +1232,20 @@ export interface components {
             /** @enum {string} */
             kind: "note";
         });
+        Triage: {
+            /** @enum {string} */
+            action: "open_ticket";
+            /** Format: uuid */
+            customer_id: string;
+        } | {
+            /** @enum {string} */
+            action: "attach";
+            /** Format: int64 */
+            ticket_number: number;
+        } | {
+            /** @enum {string} */
+            action: "discard";
+        };
     };
     responses: never;
     parameters: never;
@@ -996,6 +1255,220 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    customers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddonCustomer"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    customer_assets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Asset"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    propose: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewProposal"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalCreated"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    open_tickets: {
+        parameters: {
+            query?: {
+                /** @description Tickets of this requester's address. */
+                requester_email?: string;
+                /** @description Tickets of this customer. */
+                customer?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddonTicketSummary"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    ticket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's number */
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketDetail"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     whoami: {
         parameters: {
             query?: never;
@@ -1780,6 +2253,96 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["OpenedTicket"];
                 };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    accept_proposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The proposal */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Accepted"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    discard_proposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The proposal */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             401: {
                 headers: {
@@ -2673,6 +3236,54 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    set_priority: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's number */
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PriorityChange"];
+            };
+        };
         responses: {
             204: {
                 headers: {

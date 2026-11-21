@@ -16,12 +16,20 @@ use uuid::Uuid;
 use crate::error::{Error, Result, rule};
 
 /// Event kinds the core records.
-pub const EVENT_KINDS: &[&str] = &[MESSAGE_RECEIVED];
+pub const EVENT_KINDS: &[&str] = &[MESSAGE_RECEIVED, TICKET_OPENED];
 /// A message arrived and was routed to a ticket or to the inbox.
 pub const MESSAGE_RECEIVED: &str = "message.received";
+/// An agent opened a ticket, by hand or from an inbox message.
+pub const TICKET_OPENED: &str = "ticket.opened";
 
 /// What an add-on's token may do.
-pub const SCOPES: &[&str] = &[];
+pub const SCOPES: &[&str] = &[DIRECTORY_READ, TICKETS_READ, PROPOSALS_WRITE];
+/// Read customers and their assets.
+pub const DIRECTORY_READ: &str = "directory:read";
+/// Read tickets.
+pub const TICKETS_READ: &str = "tickets:read";
+/// Make proposals.
+pub const PROPOSALS_WRITE: &str = "proposals:write";
 
 /// After this many failed attempts a delivery stops being retried.
 pub const MAX_ATTEMPTS: i32 = 12;
@@ -310,6 +318,17 @@ pub async fn deliver_due(db: &PgPool, client: &reqwest::Client) -> anyhow::Resul
 pub struct Caller {
     pub name: String,
     pub scopes: Vec<String>,
+}
+
+impl Caller {
+    /// Fails unless the add-on's token has `scope`.
+    pub fn require(&self, scope: &str) -> Result<()> {
+        if self.scopes.iter().any(|s| s == scope) {
+            Ok(())
+        } else {
+            rule(format!("the add-on {} lacks the scope {scope}", self.name))
+        }
+    }
 }
 
 /// The enabled add-on a token belongs to.

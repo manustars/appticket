@@ -10,6 +10,287 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/addon/customers": {
+      "get": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "Customers that can get tickets, with their mail domains. Scope `directory:read`.",
+        "operationId": "customers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AddonCustomer"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/addon/customers/{id}/assets": {
+      "get": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "A customer's active assets. Scope `directory:read`.",
+        "operationId": "customer_assets",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Asset"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/addon/proposals": {
+      "post": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "Proposes something to the agents; it replaces the open proposal of the same kind on the same\nmessage or ticket. Scope `proposals:write`.",
+        "operationId": "propose",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewProposal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/addon/tickets": {
+      "get": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "Tickets that are not closed, of a requester or a customer, most recent first (at most 50).\nScope `tickets:read`.",
+        "operationId": "open_tickets",
+        "parameters": [
+          {
+            "name": "requester_email",
+            "in": "query",
+            "description": "Tickets of this requester's address.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "customer",
+            "in": "query",
+            "description": "Tickets of this customer.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AddonTicketSummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/addon/tickets/{number}": {
+      "get": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "A ticket with its messages, notes and links. Scope `tickets:read`.",
+        "operationId": "ticket",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/addon/whoami": {
       "get": {
         "tags": [
@@ -1001,6 +1282,116 @@
               }
             }
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/proposals/{id}/accept": {
+      "post": {
+        "tags": [
+          "proposals"
+        ],
+        "summary": "Accepts a proposal: it is applied as if the agent did it. A draft reply comes back to be put\nin the composer; nothing is sent.",
+        "operationId": "accept_proposal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The proposal",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/proposals/{id}/discard": {
+      "post": {
+        "tags": [
+          "proposals"
+        ],
+        "summary": "Discards a proposal.",
+        "operationId": "discard_proposal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The proposal",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
           "401": {
             "content": {
               "application/json": {
@@ -2164,6 +2555,67 @@
         }
       }
     },
+    "/api/tickets/{number}/priority": {
+      "put": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Changes the ticket's priority.",
+        "operationId": "set_priority",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PriorityChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tickets/{number}/replies": {
       "post": {
         "tags": [
@@ -2478,6 +2930,55 @@
   },
   "components": {
     "schemas": {
+      "Accepted": {
+        "type": "object",
+        "description": "What accepting a proposal did.",
+        "properties": {
+          "reply_body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a draft reply: the text to put in the composer. Nothing has been sent."
+          },
+          "ticket_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The ticket the proposal opened or acted on, when there is one."
+          }
+        }
+      },
+      "AddonCustomer": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "is_help_desk",
+          "domains"
+        ],
+        "properties": {
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Mail domains that identify the customer's requesters."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_help_desk": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "AddonIdentity": {
         "type": "object",
         "required": [
@@ -2493,6 +2994,46 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "AddonTicketSummary": {
+        "type": "object",
+        "required": [
+          "number",
+          "title",
+          "state",
+          "priority",
+          "customer_id",
+          "updated_at"
+        ],
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "priority": {
+            "$ref": "#/components/schemas/Priority"
+          },
+          "requester_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/TicketState"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -2621,6 +3162,95 @@
             "description": "The number of the ticket the message belongs to."
           }
         }
+      },
+      "Content": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Triage",
+                "description": "What to do with an inbox message."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "triage"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "What to do with an inbox message."
+          },
+          {
+            "type": "object",
+            "description": "The ticket's priority.",
+            "required": [
+              "priority",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "priority"
+                ]
+              },
+              "priority": {
+                "$ref": "#/components/schemas/Priority"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Assets of the ticket's customer the ticket is about.",
+            "required": [
+              "asset_ids",
+              "kind"
+            ],
+            "properties": {
+              "asset_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "assets"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A draft reply to the requester; accepting it puts it in the agent's composer.",
+            "required": [
+              "body",
+              "kind"
+            ],
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "reply"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What is proposed."
       },
       "Created": {
         "type": "object",
@@ -2828,6 +3458,17 @@
             "type": "string",
             "format": "uuid"
           },
+          "proposal": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProposalView",
+                "description": "The open triage proposal of an add-on, if any."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "received_at": {
             "type": "string",
             "format": "date-time"
@@ -3005,6 +3646,37 @@
           }
         }
       },
+      "NewProposal": {
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "$ref": "#/components/schemas/Content"
+          },
+          "message_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "For triage: the inbox message."
+          },
+          "rationale": {
+            "type": "string",
+            "description": "Why the add-on suggests it, in a sentence the agent reads."
+          },
+          "ticket_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "For anything else: the ticket."
+          }
+        }
+      },
       "NewReply": {
         "type": "object",
         "required": [
@@ -3167,6 +3839,27 @@
           }
         }
       },
+      "Priority": {
+        "type": "string",
+        "description": "How soon a ticket needs attention.",
+        "enum": [
+          "low",
+          "normal",
+          "high",
+          "urgent"
+        ]
+      },
+      "PriorityChange": {
+        "type": "object",
+        "required": [
+          "priority"
+        ],
+        "properties": {
+          "priority": {
+            "$ref": "#/components/schemas/Priority"
+          }
+        }
+      },
       "Problem": {
         "type": "object",
         "description": "Why a request failed, in words an agent can read.",
@@ -3175,6 +3868,84 @@
         ],
         "properties": {
           "error": {
+            "type": "string"
+          }
+        }
+      },
+      "ProposalCreated": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ProposalView": {
+        "type": "object",
+        "description": "A proposal as agents see it, with the names it refers to.",
+        "required": [
+          "id",
+          "addon",
+          "content",
+          "rationale",
+          "created_at",
+          "assets"
+        ],
+        "properties": {
+          "addon": {
+            "type": "string",
+            "description": "The add-on that made it."
+          },
+          "assets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProposedAsset"
+            },
+            "description": "For an assets proposal: the assets' names."
+          },
+          "content": {
+            "$ref": "#/components/schemas/Content"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For triage that opens a ticket: the customer's name."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "rationale": {
+            "type": "string"
+          }
+        }
+      },
+      "ProposedAsset": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
             "type": "string"
           }
         }
@@ -3426,10 +4197,12 @@
           "number",
           "title",
           "state",
+          "priority",
           "customer",
           "assets",
           "services",
           "children",
+          "proposals",
           "created_at",
           "updated_at",
           "timeline"
@@ -3485,6 +4258,16 @@
               }
             ]
           },
+          "priority": {
+            "$ref": "#/components/schemas/Priority"
+          },
+          "proposals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProposalView"
+            },
+            "description": "Open proposals of add-ons such as the Assistant."
+          },
           "requester": {
             "oneOf": [
               {
@@ -3537,6 +4320,7 @@
           "number",
           "title",
           "state",
+          "priority",
           "customer_name",
           "updated_at"
         ],
@@ -3558,6 +4342,9 @@
             "type": "integer",
             "format": "int64",
             "description": "The number agents and requesters see."
+          },
+          "priority": {
+            "$ref": "#/components/schemas/Priority"
           },
           "requester_email": {
             "type": [
@@ -3624,6 +4411,62 @@
               }
             ],
             "description": "An internal remark, seen only by agents."
+          }
+        ]
+      },
+      "Triage": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "customer_id",
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "open_ticket"
+                ]
+              },
+              "customer_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "ticket_number",
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "attach"
+                ]
+              },
+              "ticket_number": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "discard"
+                ]
+              }
+            }
           }
         ]
       }

@@ -94,6 +94,7 @@ pub async fn open_ticket(db: &PgPool, message: Uuid, customer: Uuid) -> Result<i
         .bind(ticket)
         .execute(&mut *tx)
         .await?;
+    crate::tickets::emit_opened(&mut tx, number).await?;
     tx.commit().await?;
     Ok(number)
 }
