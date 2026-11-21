@@ -308,6 +308,8 @@ export interface components {
             direction: components["schemas"]["Direction"];
             from_address: string;
             from_name?: string | null;
+            /** @description The outbox stopped trying: the message will not be sent. */
+            gave_up: boolean;
             /** Format: uuid */
             id: string;
             /** @description Why the last attempt to send it failed. */

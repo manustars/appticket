@@ -55,7 +55,7 @@ pub async fn open_ticket(db: &PgPool, message: Uuid, customer: Uuid) -> Result<i
             Some((id, of, _)) if of == customer => Some(id),
             Some((_, _, other)) => {
                 return rule(format!(
-                    "{from} is a requester of {other}; a requester belongs to one customer"
+                    "the sender is already a requester of {other}, and a requester belongs to one customer"
                 ));
             }
             None => {

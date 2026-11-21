@@ -55,6 +55,10 @@ enum Command {
         /// The display name that goes with HD_MAIL_FROM.
         #[arg(long, env = "HD_MAIL_FROM_NAME", default_value = "Help desk")]
         mail_from_name: String,
+        /// Import the mail already in the mailbox on the first read. By default only mail that
+        /// arrives after the first read becomes tickets.
+        #[arg(long, env = "HD_IMAP_IMPORT_EXISTING")]
+        imap_import_existing: bool,
         /// Seconds between two reads of the mailbox.
         #[arg(long, env = "HD_IMAP_POLL_SECONDS", default_value_t = 30)]
         imap_poll_seconds: u64,
@@ -110,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
             mail_ca_file,
             mail_from,
             mail_from_name,
+            imap_import_existing,
             imap_poll_seconds,
         } => {
             let sender = mail_from
@@ -120,7 +125,8 @@ async fn main() -> anyhow::Result<()> {
             }
             match imap_url {
                 Some(url) => {
-                    let config = imap::MailboxConfig::from_url(&url, mail_ca_file.clone())?;
+                    let mut config = imap::MailboxConfig::from_url(&url, mail_ca_file.clone())?;
+                    config.import_existing = imap_import_existing;
                     tracing::info!(host = %config.host, tls = config.tls, mailbox = %config.mailbox, "reading mail");
                     tokio::spawn(imap::poll(
                         db.clone(),

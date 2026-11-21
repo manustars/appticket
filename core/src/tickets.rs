@@ -256,6 +256,8 @@ pub struct MessageEntry {
     pub sent_at: Option<OffsetDateTime>,
     /// Why the last attempt to send it failed.
     pub last_error: Option<String>,
+    /// The outbox stopped trying: the message will not be sent.
+    pub gave_up: bool,
 }
 
 #[derive(Serialize, ToSchema, sqlx::FromRow)]
@@ -300,11 +302,13 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
 
     let messages: Vec<MessageEntry> = sqlx::query_as(
         "SELECT m.id, m.direction, m.from_address, m.from_name, m.to_address,
-                a.name AS author_name, m.subject, m.body_text, m.created_at, m.sent_at, m.last_error
+                a.name AS author_name, m.subject, m.body_text, m.created_at, m.sent_at, m.last_error,
+                (m.direction = 'outbound' AND m.sent_at IS NULL AND m.send_attempts >= $2) AS gave_up
          FROM messages m LEFT JOIN agents a ON a.id = m.author_id
          WHERE m.ticket_id = $1",
     )
     .bind(row.id)
+    .bind(crate::outbound::MAX_ATTEMPTS)
     .fetch_all(db)
     .await?;
     let notes: Vec<NoteEntry> = sqlx::query_as(

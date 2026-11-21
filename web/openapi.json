@@ -862,7 +862,8 @@
           "from_address",
           "subject",
           "body_text",
-          "created_at"
+          "created_at",
+          "gave_up"
         ],
         "properties": {
           "author_name": {
@@ -890,6 +891,10 @@
               "string",
               "null"
             ]
+          },
+          "gave_up": {
+            "type": "boolean",
+            "description": "The outbox stopped trying: the message will not be sent."
           },
           "id": {
             "type": "string",

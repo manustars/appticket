@@ -182,13 +182,20 @@ function Entry({ entry }: { entry: TimelineEntry }) {
         </span>
         {outbound && (entry.sent_at
           ? <span className="status sent">Sent {formatTime(entry.sent_at)}</span>
-          : <span className="status queued">Queued</span>)}
+          : entry.gave_up
+            ? <span className="status failed">Not sent</span>
+            : <span className="status queued">Queued</span>)}
         <time className="when" dateTime={entry.created_at}>{formatTime(entry.created_at)}</time>
       </div>
       {entry.subject && <div className="subject">{entry.subject}</div>}
       <p className="body">{entry.body_text}</p>
-      {outbound && !entry.sent_at && entry.last_error && (
-        <p className="error">Not sent yet: {entry.last_error}</p>
+      {outbound && !entry.sent_at && entry.gave_up && (
+        <p className="error" role="alert">
+          This message was not sent: the help desk stopped trying. Last error: {entry.last_error ?? 'unknown'}
+        </p>
+      )}
+      {outbound && !entry.sent_at && !entry.gave_up && entry.last_error && (
+        <p className="error">Not sent yet, will try again: {entry.last_error}</p>
       )}
     </li>
   )

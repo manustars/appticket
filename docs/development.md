@@ -46,8 +46,12 @@ public web PKI; for servers with a private certificate authority, point `HD_MAIL
 file of that authority. Plain `imap://` and `smtp://` are accepted only for a server on this
 machine, such as the test one.
 
+The first time the core reads a mailbox it leaves the mail already there alone and reads only what
+arrives afterwards; set `HD_IMAP_IMPORT_EXISTING=true` to turn the existing mail into tickets too.
+
 Replies wait in an outbox in the database and are sent every few seconds; a failed attempt is
-retried after 30 s, then twice as long each time (up to an hour), eight times in all. The test mail
+retried after 30 s, then twice as long each time (up to an hour), eight times in all; after that
+the outbox gives up and the ticket shows the message as not sent. The test mail
 server accepts every recipient, so replies sent locally never leave it.
 
 ## First run

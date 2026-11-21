@@ -30,6 +30,9 @@ pub struct MailboxConfig {
     pub mailbox: String,
     /// Extra certificate authorities to trust (PEM), for servers with a private CA.
     pub ca_file: Option<PathBuf>,
+    /// Whether the first read imports the mail already in the mailbox; otherwise only mail that
+    /// arrives afterwards is read.
+    pub import_existing: bool,
 }
 
 impl MailboxConfig {
@@ -67,6 +70,7 @@ impl MailboxConfig {
                 mailbox
             },
             ca_file,
+            import_existing: false,
         })
     }
 }
@@ -152,6 +156,22 @@ async fn read_new(
         None => fetch_new(db, config, tcp).await?,
     };
 
+    if let Some(last_uid) = fetched.skip_to {
+        sqlx::query(
+            "INSERT INTO mailbox_cursors (mailbox, uidvalidity, last_uid) VALUES ($1, $2, $3)
+             ON CONFLICT (mailbox) DO NOTHING",
+        )
+        .bind(&config.mailbox)
+        .bind(fetched.uidvalidity)
+        .bind(last_uid)
+        .execute(db)
+        .await?;
+        tracing::info!(
+            mailbox = %config.mailbox,
+            last_uid,
+            "first read: mail already in the mailbox is left alone (set HD_IMAP_IMPORT_EXISTING to import it)"
+        );
+    }
     let count = fetched.messages.len();
     for (uid, raw) in fetched.messages {
         let mut tx = db.begin().await?;
@@ -172,6 +192,8 @@ async fn read_new(
 
 struct Fetched {
     uidvalidity: i64,
+    /// On the first read, without import: the UID the cursor starts from.
+    skip_to: Option<i64>,
     /// New messages as (UID, raw bytes), oldest first.
     messages: Vec<(i64, Vec<u8>)>,
 }
@@ -200,7 +222,18 @@ where
     // the Message-ID check skip what is already stored.
     let last_uid = match cursor {
         Some((validity, last)) if validity == uidvalidity => last,
-        _ => 0,
+        Some(_) => 0,
+        None if config.import_existing => 0,
+        None => {
+            // First contact: start after the newest message already there.
+            let next = i64::from(mailbox.uid_next.context("server sent no UIDNEXT")?);
+            session.logout().await.ok();
+            return Ok(Fetched {
+                uidvalidity,
+                skip_to: Some(next - 1),
+                messages: Vec::new(),
+            });
+        }
     };
 
     let mut messages: Vec<(i64, Vec<u8>)> = session
@@ -220,6 +253,7 @@ where
     messages.sort_by_key(|(uid, _)| *uid);
     Ok(Fetched {
         uidvalidity,
+        skip_to: None,
         messages,
     })
 }
@@ -247,6 +281,25 @@ mod tests {
             (c.user.as_str(), c.password.as_str()),
             ("help@example.com", "p/w")
         );
+    }
+
+    /// The first read of a mailbox leaves the mail already there alone and starts after it.
+    #[sqlx::test]
+    #[ignore = "needs the local test mail server (podman compose up -d)"]
+    async fn the_first_read_skips_existing_mail(db: PgPool) {
+        let config =
+            MailboxConfig::from_url("imap://helpdesk:helpdesk@127.0.0.1:55143/INBOX", None)
+                .unwrap();
+        assert_eq!(read_new(&db, &config, None).await.unwrap(), 0);
+        let messages: i64 = sqlx::query_scalar("SELECT count(*) FROM messages")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        let cursors: i64 = sqlx::query_scalar("SELECT count(*) FROM mailbox_cursors")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!((messages, cursors), (0, 1));
     }
 
     /// Puts a TLS terminator with a freshly made certificate in front of the local test mail
@@ -290,7 +343,8 @@ mod tests {
         });
 
         let url = format!("imaps://helpdesk:helpdesk@localhost:{port}/INBOX");
-        let trusted = MailboxConfig::from_url(&url, Some(ca.clone())).unwrap();
+        let mut trusted = MailboxConfig::from_url(&url, Some(ca.clone())).unwrap();
+        trusted.import_existing = true;
         let connector = tls_connector(trusted.ca_file.as_ref()).unwrap();
         read_new(&db, &trusted, Some(&connector))
             .await

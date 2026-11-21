@@ -210,6 +210,7 @@ select.state { font-weight: 500; }
 .status { font-size: 0.8rem; padding: 0 0.45em; border-radius: 999px; border: 1px solid currentColor; }
 .status.queued { color: var(--waiting); }
 .status.sent { color: var(--resolved); }
+.status.failed { color: var(--danger); }
 
 .closed-notice {
   margin: 0;
