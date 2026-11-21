@@ -13,12 +13,16 @@ use axum::{
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use time::OffsetDateTime;
 use utoipa::{OpenApi, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::auth::{self, SESSION_COOKIE, SESSION_DAYS, SignedIn};
+use crate::outbound::Sender;
+
+mod directory;
+mod inbox;
+mod tickets;
 
 #[derive(OpenApi)]
 #[openapi(info(
@@ -27,12 +31,20 @@ use crate::auth::{self, SESSION_COOKIE, SESSION_DAYS, SignedIn};
 ))]
 struct ApiDoc;
 
-pub async fn serve(db: PgPool, listen: SocketAddr) -> anyhow::Result<()> {
+/// What every handler can reach.
+#[derive(Clone)]
+pub struct AppState {
+    pub db: PgPool,
+    /// The help desk's own address, when sending mail is configured.
+    pub sender: Option<Sender>,
+}
+
+pub async fn serve(state: AppState, listen: SocketAddr) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("binding {listen}"))?;
     tracing::info!(%listen, "serving the HTTP API");
-    axum::serve(listener, router(db))
+    axum::serve(listener, router(state))
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
@@ -44,24 +56,29 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     api_router().split_for_parts().1
 }
 
-fn api_router() -> OpenApiRouter<PgPool> {
+fn api_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(health))
         .routes(routes!(current_session, sign_in, sign_out))
-        .routes(routes!(list_tickets))
-        .routes(routes!(list_inbox))
+        .merge(tickets::routes())
+        .merge(inbox::routes())
+        .merge(directory::routes())
 }
 
-fn router(db: PgPool) -> Router {
+pub fn router(state: AppState) -> Router {
     let (router, spec) = api_router().split_for_parts();
     router
         .route("/api/openapi.json", get(move || async move { Json(spec) }))
-        .with_state(db)
+        .with_state(state)
 }
 
 /// An error answered to the client; details of internal errors go to the log only.
+#[derive(Debug)]
 pub enum ApiError {
     Unauthorized,
+    NotFound(&'static str),
+    /// The request is well formed but breaks a rule; the text says which.
+    Conflict(String),
     Internal(anyhow::Error),
 }
 
@@ -73,43 +90,41 @@ impl<E: Into<anyhow::Error>> From<E> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        match self {
-            ApiError::Unauthorized => (
-                StatusCode::UNAUTHORIZED,
-                Json(Problem {
-                    error: "not signed in".into(),
-                }),
-            )
-                .into_response(),
+        let (status, error) = match self {
+            ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "not signed in".to_owned()),
+            ApiError::NotFound(what) => (StatusCode::NOT_FOUND, format!("{what} not found")),
+            ApiError::Conflict(why) => (StatusCode::CONFLICT, why),
             ApiError::Internal(error) => {
                 tracing::error!(error = format!("{error:#}"), "request failed");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(Problem {
-                        error: "internal error".into(),
-                    }),
+                    "internal error".to_owned(),
                 )
-                    .into_response()
             }
-        }
+        };
+        (status, Json(Problem { error })).into_response()
     }
 }
 
+/// Why a request failed, in words an agent can read.
 #[derive(Serialize, ToSchema)]
-struct Problem {
-    error: String,
+pub struct Problem {
+    pub error: String,
 }
 
 /// Requires a signed-in agent.
-impl FromRequestParts<PgPool> for SignedIn {
+impl FromRequestParts<AppState> for SignedIn {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, db: &PgPool) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let jar = CookieJar::from_headers(&parts.headers);
         let Some(cookie) = jar.get(SESSION_COOKIE) else {
             return Err(ApiError::Unauthorized);
         };
-        auth::agent_for(db, cookie.value())
+        auth::agent_for(&state.db, cookie.value())
             .await?
             .ok_or(ApiError::Unauthorized)
     }
@@ -123,8 +138,8 @@ struct Health {
 /// Whether the core and its database are up.
 #[utoipa::path(get, path = "/api/health", tag = "system",
     responses((status = OK, body = Health), (status = SERVICE_UNAVAILABLE, body = Health)))]
-async fn health(State(db): State<PgPool>) -> (StatusCode, Json<Health>) {
-    match sqlx::query("SELECT 1").execute(&db).await {
+async fn health(State(state): State<AppState>) -> (StatusCode, Json<Health>) {
+    match sqlx::query("SELECT 1").execute(&state.db).await {
         Ok(_) => (
             StatusCode::OK,
             Json(Health {
@@ -171,11 +186,11 @@ async fn current_session(agent: SignedIn) -> Json<Agent> {
 #[utoipa::path(post, path = "/api/session", tag = "session", request_body = SignInRequest,
     responses((status = NO_CONTENT), (status = UNAUTHORIZED, body = Problem)))]
 async fn sign_in(
-    State(db): State<PgPool>,
+    State(state): State<AppState>,
     jar: CookieJar,
     Json(request): Json<SignInRequest>,
 ) -> Result<(CookieJar, StatusCode), ApiError> {
-    let token = auth::sign_in(&db, &request.email, &request.password)
+    let token = auth::sign_in(&state.db, &request.email, &request.password)
         .await?
         .ok_or(ApiError::Unauthorized)?;
     let cookie = Cookie::build((SESSION_COOKIE, token))
@@ -190,11 +205,11 @@ async fn sign_in(
 /// Signs the agent out.
 #[utoipa::path(delete, path = "/api/session", tag = "session", responses((status = NO_CONTENT)))]
 async fn sign_out(
-    State(db): State<PgPool>,
+    State(state): State<AppState>,
     jar: CookieJar,
 ) -> Result<(CookieJar, StatusCode), ApiError> {
     if let Some(cookie) = jar.get(SESSION_COOKIE) {
-        auth::sign_out(&db, cookie.value()).await?;
+        auth::sign_out(&state.db, cookie.value()).await?;
     }
     Ok((
         jar.remove(Cookie::build(SESSION_COOKIE).path("/")),
@@ -202,78 +217,12 @@ async fn sign_out(
     ))
 }
 
-#[derive(Serialize, ToSchema, sqlx::FromRow)]
-struct TicketSummary {
-    id: Uuid,
-    /// The number agents and requesters see.
-    number: i64,
-    title: String,
-    #[schema(inline)]
-    state: TicketState,
-    customer_name: String,
-    requester_email: Option<String>,
-    assignee_name: Option<String>,
-    #[serde(with = "time::serde::rfc3339")]
-    updated_at: OffsetDateTime,
-}
-
-#[derive(Serialize, ToSchema, sqlx::Type)]
-#[serde(rename_all = "lowercase")]
-#[sqlx(type_name = "text", rename_all = "lowercase")]
-enum TicketState {
-    Open,
-    Waiting,
-    Resolved,
-    Closed,
-}
-
-/// Tickets, most recently updated first.
-#[utoipa::path(get, path = "/api/tickets", tag = "tickets",
-    responses((status = OK, body = Vec<TicketSummary>), (status = UNAUTHORIZED, body = Problem)))]
-async fn list_tickets(
-    State(db): State<PgPool>,
-    _agent: SignedIn,
-) -> Result<Json<Vec<TicketSummary>>, ApiError> {
-    let tickets = sqlx::query_as(
-        "SELECT t.id, t.number, t.title, t.state, c.name AS customer_name,
-                r.email AS requester_email, a.name AS assignee_name, t.updated_at
-         FROM tickets t
-         JOIN customers c ON c.id = t.customer_id
-         LEFT JOIN requesters r ON r.id = t.requester_id
-         LEFT JOIN agents a ON a.id = t.assignee_id
-         ORDER BY t.updated_at DESC
-         LIMIT 200",
-    )
-    .fetch_all(&db)
-    .await?;
-    Ok(Json(tickets))
-}
-
-#[derive(Serialize, ToSchema, sqlx::FromRow)]
-struct InboxMessage {
-    id: Uuid,
-    from_address: String,
-    from_name: Option<String>,
-    subject: String,
-    body_text: String,
-    #[serde(with = "time::serde::rfc3339")]
-    received_at: OffsetDateTime,
-}
-
-/// Messages waiting in the inbox, oldest first.
-#[utoipa::path(get, path = "/api/inbox", tag = "inbox",
-    responses((status = OK, body = Vec<InboxMessage>), (status = UNAUTHORIZED, body = Problem)))]
-async fn list_inbox(
-    State(db): State<PgPool>,
-    _agent: SignedIn,
-) -> Result<Json<Vec<InboxMessage>>, ApiError> {
-    let messages = sqlx::query_as(
-        "SELECT id, from_address, from_name, subject, body_text, received_at
-         FROM messages WHERE ticket_id IS NULL AND discarded_at IS NULL
-         ORDER BY received_at
-         LIMIT 200",
-    )
-    .fetch_all(&db)
-    .await?;
-    Ok(Json(messages))
+impl From<crate::error::Error> for ApiError {
+    fn from(error: crate::error::Error) -> Self {
+        match error {
+            crate::error::Error::NotFound(what) => ApiError::NotFound(what),
+            crate::error::Error::Rule(why) => ApiError::Conflict(why),
+            crate::error::Error::Internal(error) => ApiError::Internal(error),
+        }
+    }
 }

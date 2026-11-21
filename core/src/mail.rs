@@ -96,7 +96,7 @@ pub async fn route(
         let found: Option<(Uuid, String)> = sqlx::query_as(
             "SELECT t.id, t.state FROM messages m JOIN tickets t ON t.id = m.ticket_id
              WHERE m.rfc_message_id = ANY($1)
-             ORDER BY m.received_at DESC LIMIT 1",
+             ORDER BY m.created_at DESC LIMIT 1",
         )
         .bind(&thread)
         .fetch_optional(&mut **tx)
@@ -449,6 +449,47 @@ mod tests {
         )
         .await;
         assert!(matches!(routed, Routed::NewTicket { ticket_id: other } if other != ticket_id));
+    }
+
+    #[sqlx::test]
+    async fn the_requester_answering_our_reply_lands_on_the_same_ticket(db: PgPool) {
+        use crate::testing;
+        use crate::tickets::{self, TicketState};
+
+        customer(&db, "Brightfield", Some("brightfield.test")).await;
+        let Routed::NewTicket { ticket_id } = route_one(
+            &db,
+            &mail("ada@brightfield.test", "a1@brightfield.test", None),
+        )
+        .await
+        else {
+            panic!("expected a new ticket");
+        };
+        let number: i64 = sqlx::query_scalar("SELECT number FROM tickets WHERE id = $1")
+            .bind(ticket_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        tickets::reply(
+            &db,
+            &testing::sender(),
+            number,
+            agent,
+            "Restart it.",
+            TicketState::Waiting,
+        )
+        .await
+        .unwrap();
+        let ours: String =
+            sqlx::query_scalar("SELECT rfc_message_id FROM messages WHERE direction = 'outbound'")
+                .fetch_one(&db)
+                .await
+                .unwrap();
+
+        let answer = mail("ada@brightfield.test", "a2@brightfield.test", Some(&ours));
+        assert_eq!(route_one(&db, &answer).await, Routed::Reply { ticket_id });
+        assert_eq!(testing::state(&db, number).await, "open");
     }
 
     #[sqlx::test]

@@ -26,6 +26,12 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
 
 - Every ticket belongs to exactly one customer; the requester is optional (planned work, monitoring
   alerts) and, when present, belongs to that customer.
+- Only a ticket with a requester can be replied to. A reply goes through the outbox and moves the
+  ticket to the state the agent picks: waiting, unless the agent says otherwise.
+- A closed ticket changes no more: no state change, no assignee change, no reply, no message
+  attached from the inbox. Agents can still add internal notes to it.
+- Opening a ticket from an inbox message makes the sender its requester, registered with the
+  ticket's customer if new; a sender who is already a requester of another customer is refused.
 - A ticket links zero or more assets of its own customer and zero or more services its customer
   uses, at any time.
 - A ticket's states are open, waiting, resolved (a reply from the requester reopens it) and closed

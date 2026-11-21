@@ -60,6 +60,10 @@ An e-mail the help desk receives or sends; once attached to a ticket, it is part
 conversation with its requester.
 _Avoid_: Mail, e-mail, reply
 
+**Outbox**:
+Where a reply an agent has written waits until it is sent to the requester.
+_Avoid_: Queue, spool
+
 **Inbox**:
 Where incoming messages that no ticket has claimed wait for an agent to decide what to do with them.
 _Avoid_: Queue, triage

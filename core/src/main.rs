@@ -8,9 +8,15 @@ use tracing_subscriber::EnvFilter;
 
 mod auth;
 mod cli;
+mod error;
 mod http;
 mod imap;
 mod mail;
+mod outbound;
+#[cfg(test)]
+mod testing;
+mod tickets;
+mod triage;
 
 #[derive(Parser)]
 #[command(about = "Help desk core")]
@@ -34,9 +40,21 @@ enum Command {
         /// server on this machine). Without it no mail is read.
         #[arg(long, env = "HD_IMAP_URL")]
         imap_url: Option<String>,
-        /// PEM file of extra certificate authorities to trust for the mail server.
-        #[arg(long, env = "HD_IMAP_CA_FILE")]
-        imap_ca_file: Option<std::path::PathBuf>,
+        /// Server that sends replies: smtps://user:password@host[:port] or
+        /// smtp://user:password@host[:port]?tls=required (plain smtp:// only for a server on this
+        /// machine). Without it replies wait in the outbox.
+        #[arg(long, env = "HD_SMTP_URL")]
+        smtp_url: Option<String>,
+        /// PEM file of extra certificate authorities to trust for the mail servers.
+        #[arg(long, env = "HD_MAIL_CA_FILE")]
+        mail_ca_file: Option<std::path::PathBuf>,
+        /// The help desk's own address, which replies are sent from. Without it agents cannot
+        /// reply.
+        #[arg(long, env = "HD_MAIL_FROM")]
+        mail_from: Option<String>,
+        /// The display name that goes with HD_MAIL_FROM.
+        #[arg(long, env = "HD_MAIL_FROM_NAME", default_value = "Help desk")]
+        mail_from_name: String,
         /// Seconds between two reads of the mailbox.
         #[arg(long, env = "HD_IMAP_POLL_SECONDS", default_value_t = 30)]
         imap_poll_seconds: u64,
@@ -88,12 +106,21 @@ async fn main() -> anyhow::Result<()> {
         Command::Serve {
             listen,
             imap_url,
-            imap_ca_file,
+            smtp_url,
+            mail_ca_file,
+            mail_from,
+            mail_from_name,
             imap_poll_seconds,
         } => {
+            let sender = mail_from
+                .map(|address| outbound::Sender::new(&address, &mail_from_name))
+                .transpose()?;
+            if sender.is_none() {
+                tracing::warn!("HD_MAIL_FROM is not set: agents cannot reply");
+            }
             match imap_url {
                 Some(url) => {
-                    let config = imap::MailboxConfig::from_url(&url, imap_ca_file)?;
+                    let config = imap::MailboxConfig::from_url(&url, mail_ca_file.clone())?;
                     tracing::info!(host = %config.host, tls = config.tls, mailbox = %config.mailbox, "reading mail");
                     tokio::spawn(imap::poll(
                         db.clone(),
@@ -103,7 +130,18 @@ async fn main() -> anyhow::Result<()> {
                 }
                 None => tracing::warn!("HD_IMAP_URL is not set: no mail will be read"),
             }
-            http::serve(db, listen).await
+            match smtp_url {
+                Some(url) => {
+                    let transport = outbound::transport(&url, mail_ca_file.as_ref())?;
+                    tokio::spawn(outbound::deliver(
+                        db.clone(),
+                        transport,
+                        Duration::from_secs(5),
+                    ));
+                }
+                None => tracing::warn!("HD_SMTP_URL is not set: replies stay in the outbox"),
+            }
+            http::serve(http::AppState { db, sender }, listen).await
         }
     }
 }

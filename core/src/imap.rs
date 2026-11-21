@@ -71,7 +71,7 @@ impl MailboxConfig {
     }
 }
 
-fn is_local(host: &str) -> bool {
+pub fn is_local(host: &str) -> bool {
     host.eq_ignore_ascii_case("localhost")
         || host
             .trim_matches(['[', ']'])

@@ -10,6 +10,70 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/agents": {
+      "get": {
+        "tags": [
+          "directory"
+        ],
+        "summary": "All agents, by name.",
+        "operationId": "list_agents",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AgentEntry"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customers": {
+      "get": {
+        "tags": [
+          "directory"
+        ],
+        "summary": "Customers that can get new tickets (offboarded ones are left out), by name.",
+        "operationId": "list_customers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CustomerEntry"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/health": {
       "get": {
         "tags": [
@@ -60,6 +124,187 @@
             }
           },
           "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/inbox/{id}/attach": {
+      "post": {
+        "tags": [
+          "inbox"
+        ],
+        "summary": "Attaches an inbox message to an existing ticket.",
+        "operationId": "attach",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The inbox message",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Attach"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/inbox/{id}/discard": {
+      "post": {
+        "tags": [
+          "inbox"
+        ],
+        "summary": "Discards an inbox message. It stays stored but leaves the inbox.",
+        "operationId": "discard",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The inbox message",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/inbox/{id}/ticket": {
+      "post": {
+        "tags": [
+          "inbox"
+        ],
+        "summary": "Opens a ticket for an inbox message; its sender becomes the ticket's requester.",
+        "operationId": "open_ticket",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The inbox message",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenTicket"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenedTicket"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
             "content": {
               "application/json": {
                 "schema": {
@@ -170,6 +415,300 @@
           }
         }
       }
+    },
+    "/api/tickets/{number}": {
+      "get": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "A ticket with its messages and notes.",
+        "operationId": "get_ticket",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tickets/{number}/assignee": {
+      "put": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Sets or clears the ticket's assignee.",
+        "operationId": "set_assignee",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssigneeChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tickets/{number}/notes": {
+      "post": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Adds an internal note, seen only by agents.",
+        "operationId": "add_note",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewNote"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tickets/{number}/replies": {
+      "post": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Queues a reply to the ticket's requester. It is sent by e-mail shortly after.",
+        "operationId": "reply",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewReply"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tickets/{number}/state": {
+      "put": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Moves the ticket to another state. A closed ticket never changes.",
+        "operationId": "set_state",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StateChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -188,6 +727,73 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "AssigneeChange": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The agent responsible from now on; null leaves the ticket unassigned."
+          }
+        }
+      },
+      "Attach": {
+        "type": "object",
+        "required": [
+          "ticket_number"
+        ],
+        "properties": {
+          "ticket_number": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The number of the ticket the message belongs to."
+          }
+        }
+      },
+      "CustomerEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "is_help_desk"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_help_desk": {
+            "type": "boolean",
+            "description": "Whether this is the help desk's own organization."
           },
           "name": {
             "type": "string"
@@ -240,14 +846,204 @@
           }
         }
       },
+      "MessageEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "direction",
+          "from_address",
+          "subject",
+          "body_text",
+          "created_at"
+        ],
+        "properties": {
+          "author_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The agent who wrote an outbound message."
+          },
+          "body_text": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "direction": {
+            "type": "string",
+            "description": "\"inbound\" or \"outbound\"."
+          },
+          "from_address": {
+            "type": "string"
+          },
+          "from_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last attempt to send it failed."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When an outbound message left; empty while it waits in the outbox."
+          },
+          "subject": {
+            "type": "string"
+          },
+          "to_address": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "NewNote": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          }
+        }
+      },
+      "NewReply": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "then": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketState",
+                "description": "The state the ticket moves to; waiting (for the requester) when omitted."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "NoteEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "author_name",
+          "body",
+          "created_at"
+        ],
+        "properties": {
+          "author_name": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "OpenTicket": {
+        "type": "object",
+        "required": [
+          "customer_id"
+        ],
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The customer the new ticket belongs to."
+          }
+        }
+      },
+      "OpenedTicket": {
+        "type": "object",
+        "required": [
+          "number"
+        ],
+        "properties": {
+          "number": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Party": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "Problem": {
         "type": "object",
+        "description": "Why a request failed, in words an agent can read.",
         "required": [
           "error"
         ],
         "properties": {
           "error": {
             "type": "string"
+          }
+        }
+      },
+      "Requester": {
+        "type": "object",
+        "required": [
+          "id",
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -265,6 +1061,94 @@
             "type": "string"
           }
         }
+      },
+      "StateChange": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/TicketState"
+          }
+        }
+      },
+      "TicketDetail": {
+        "type": "object",
+        "description": "A ticket with everything written on it.",
+        "required": [
+          "id",
+          "number",
+          "title",
+          "state",
+          "customer",
+          "created_at",
+          "updated_at",
+          "timeline"
+        ],
+        "properties": {
+          "assignee": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Party"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "customer": {
+            "$ref": "#/components/schemas/Party"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "requester": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Requester"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/TicketState"
+          },
+          "timeline": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TimelineEntry"
+            },
+            "description": "Messages and notes, oldest first."
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TicketState": {
+        "type": "string",
+        "enum": [
+          "open",
+          "waiting",
+          "resolved",
+          "closed"
+        ]
       },
       "TicketSummary": {
         "type": "object",
@@ -302,13 +1186,7 @@
             ]
           },
           "state": {
-            "type": "string",
-            "enum": [
-              "open",
-              "waiting",
-              "resolved",
-              "closed"
-            ]
+            "$ref": "#/components/schemas/TicketState"
           },
           "title": {
             "type": "string"
@@ -318,6 +1196,56 @@
             "format": "date-time"
           }
         }
+      },
+      "TimelineEntry": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MessageEntry",
+                "description": "An e-mail received from, or sent to, the requester."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "message"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "An e-mail received from, or sent to, the requester."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NoteEntry",
+                "description": "An internal remark, seen only by agents."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "note"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "An internal remark, seen only by agents."
+          }
+        ]
       }
     }
   }

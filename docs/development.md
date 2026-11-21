@@ -27,16 +27,28 @@ HD_DATABASE_URL=postgres://hd:hd@127.0.0.1:55432/hd
 DATABASE_URL=postgres://hd:hd@127.0.0.1:55432/hd
 HD_IMAP_URL=imap://helpdesk:helpdesk@127.0.0.1:55143/INBOX
 HD_IMAP_POLL_SECONDS=5
+# Replies: the address they come from, and the server that sends them.
+HD_MAIL_FROM=helpdesk@helpdesk.test
+HD_SMTP_URL=smtp://127.0.0.1:55025
 ```
 
-Other variables: `HD_LISTEN` (default `127.0.0.1:8080`) and `HD_LOG` (a `tracing` filter, default
-`info,sqlx=warn`).
+Other variables: `HD_LISTEN` (default `127.0.0.1:8080`), `HD_MAIL_FROM_NAME` (default `Help desk`)
+and `HD_LOG` (a `tracing` filter, default `info,sqlx=warn`).
 
-A real mailbox needs TLS: `HD_IMAP_URL=imaps://user:password@host/INBOX` (port 993 unless given;
-percent-encode `@`, `/` and `:` inside the user or password). The server's certificate is checked
-against the public web PKI; for a server with a private certificate authority, point
-`HD_IMAP_CA_FILE` at a PEM file of that authority. Plain `imap://` is accepted only for a server on
-this machine, such as the test one.
+Real mail servers need TLS:
+
+- `HD_IMAP_URL=imaps://user:password@host/INBOX` (port 993 unless given);
+- `HD_SMTP_URL=smtps://user:password@host` (port 465) or `smtp://user:password@host?tls=required`
+  (STARTTLS, port 587).
+
+Percent-encode `@`, `/` and `:` inside the user or password. Certificates are checked against the
+public web PKI; for servers with a private certificate authority, point `HD_MAIL_CA_FILE` at a PEM
+file of that authority. Plain `imap://` and `smtp://` are accepted only for a server on this
+machine, such as the test one.
+
+Replies wait in an outbox in the database and are sent every few seconds; a failed attempt is
+retried after 30 s, then twice as long each time (up to an hour), eight times in all. The test mail
+server accepts every recipient, so replies sent locally never leave it.
 
 ## First run
 
