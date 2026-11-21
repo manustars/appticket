@@ -1861,6 +1861,116 @@
         }
       }
     },
+    "/api/tickets/{number}/parent": {
+      "put": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Makes the ticket a child of a parent ticket of the help desk's own organization.",
+        "operationId": "set_parent",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParentChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Detaches the ticket from its parent.",
+        "operationId": "clear_parent",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tickets/{number}/replies": {
       "post": {
         "tags": [
@@ -1892,6 +2002,75 @@
         },
         "responses": {
           "202": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tickets/{number}/resolve-children": {
+      "post": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Resolves every open or waiting child of this parent ticket, replying to each requester.",
+        "operationId": "resolve_children",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The parent ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveChildren"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolvedChildren"
+                }
+              }
+            }
+          },
           "401": {
             "content": {
               "application/json": {
@@ -2718,6 +2897,19 @@
           }
         }
       },
+      "ParentChange": {
+        "type": "object",
+        "required": [
+          "parent_number"
+        ],
+        "properties": {
+          "parent_number": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The number of the help desk's ticket that tracks the failure."
+          }
+        }
+      },
       "Party": {
         "type": "object",
         "required": [
@@ -2742,6 +2934,30 @@
         ],
         "properties": {
           "error": {
+            "type": "string"
+          }
+        }
+      },
+      "RelatedTicket": {
+        "type": "object",
+        "required": [
+          "number",
+          "title",
+          "state",
+          "customer_name"
+        ],
+        "properties": {
+          "customer_name": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TicketState"
+          },
+          "title": {
             "type": "string"
           }
         }
@@ -2819,6 +3035,38 @@
           "move",
           "remove"
         ]
+      },
+      "ResolveChildren": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Sent as a reply to the requester of every child that has one."
+          }
+        }
+      },
+      "ResolvedChildren": {
+        "type": "object",
+        "description": "What resolving the children did.",
+        "required": [
+          "resolved",
+          "replied"
+        ],
+        "properties": {
+          "replied": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Replies queued to their requesters."
+          },
+          "resolved": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Children moved to resolved."
+          }
+        }
       },
       "Service": {
         "type": "object",
@@ -2919,6 +3167,7 @@
           "customer",
           "assets",
           "services",
+          "children",
           "created_at",
           "updated_at",
           "timeline"
@@ -2941,6 +3190,13 @@
               }
             ]
           },
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RelatedTicket"
+            },
+            "description": "The customers' tickets about the failure this ticket tracks."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -2955,6 +3211,17 @@
           "number": {
             "type": "integer",
             "format": "int64"
+          },
+          "parent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RelatedTicket",
+                "description": "The parent ticket tracking the failure this ticket is about, if any."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "requester": {
             "oneOf": [

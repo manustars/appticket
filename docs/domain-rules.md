@@ -42,8 +42,10 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
   identified with the wrong customer, so all of the requester's tickets move with them, closed ones
   included. No ticket is ever left breaking the rules above.
 - A parent ticket belongs to the help desk's own organization; its children keep their own customer
-  and requester. Resolving the parent lets an agent resolve every child with one message to each
-  requester. This is the only link between tickets of different customers.
+  and requester. Resolving the children of a parent sends one message to each child's requester and
+  resolves every child that is open or waiting; the parent itself is resolved separately. This is
+  the only link between tickets of different customers. Parents are one level deep, a parent stays
+  with the help desk's own organization, and closed tickets are neither attached nor detached.
 
 ## Customers, assets and services
 

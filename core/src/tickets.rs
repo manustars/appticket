@@ -210,6 +210,14 @@ pub async fn move_to_customer(
     if current == customer {
         return rule("the ticket already belongs to this customer");
     }
+    let is_parent: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM tickets WHERE parent_id = $1)")
+            .bind(ticket_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if is_parent {
+        return rule("a parent ticket stays with the help desk's own organization");
+    }
     let offboarded: Option<bool> =
         sqlx::query_scalar("SELECT offboarded_at IS NOT NULL FROM customers WHERE id = $1")
             .bind(customer)
@@ -300,6 +308,10 @@ pub struct TicketDetail {
     pub assets: Vec<crate::catalog::LinkedAsset>,
     /// Services of the help desk the ticket is about.
     pub services: Vec<crate::catalog::LinkedService>,
+    /// The parent ticket tracking the failure this ticket is about, if any.
+    pub parent: Option<crate::parents::RelatedTicket>,
+    /// The customers' tickets about the failure this ticket tracks.
+    pub children: Vec<crate::parents::RelatedTicket>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -435,6 +447,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
         .collect();
     timeline.sort_by_key(|(at, _)| *at);
     let (assets, services) = crate::catalog::ticket_links(db, row.id).await?;
+    let (parent, children) = crate::parents::related(db, row.id).await?;
 
     Ok(TicketDetail {
         id: row.id,
@@ -457,6 +470,8 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
         }),
         assets,
         services,
+        parent,
+        children,
         created_at: row.created_at,
         updated_at: row.updated_at,
         timeline: timeline.into_iter().map(|(_, entry)| entry).collect(),

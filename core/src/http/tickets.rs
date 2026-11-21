@@ -22,6 +22,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(set_state))
         .routes(routes!(set_assignee))
         .routes(routes!(move_ticket))
+        .routes(routes!(set_parent, clear_parent))
+        .routes(routes!(resolve_children))
 }
 
 #[derive(Serialize, ToSchema, sqlx::FromRow)]
@@ -260,5 +262,71 @@ async fn move_ticket(
 ) -> Result<Json<Moved>, ApiError> {
     Ok(Json(
         tickets::move_to_customer(&state.db, number, change.customer_id, change.requester).await?,
+    ))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct ParentChange {
+    /// The number of the help desk's ticket that tracks the failure.
+    parent_number: i64,
+}
+
+/// Makes the ticket a child of a parent ticket of the help desk's own organization.
+#[utoipa::path(put, path = "/api/tickets/{number}/parent", tag = "tickets",
+    params(("number" = i64, Path, description = "The ticket's number")),
+    request_body = ParentChange,
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn set_parent(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(number): Path<i64>,
+    Json(change): Json<ParentChange>,
+) -> Result<StatusCode, ApiError> {
+    crate::parents::attach(&state.db, number, change.parent_number).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Detaches the ticket from its parent.
+#[utoipa::path(delete, path = "/api/tickets/{number}/parent", tag = "tickets",
+    params(("number" = i64, Path, description = "The ticket's number")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn clear_parent(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(number): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    crate::parents::detach(&state.db, number).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct ResolveChildren {
+    /// Sent as a reply to the requester of every child that has one.
+    body: String,
+}
+
+/// Resolves every open or waiting child of this parent ticket, replying to each requester.
+#[utoipa::path(post, path = "/api/tickets/{number}/resolve-children", tag = "tickets",
+    params(("number" = i64, Path, description = "The parent ticket's number")),
+    request_body = ResolveChildren,
+    responses((status = OK, body = crate::parents::ResolvedChildren),
+        (status = NOT_FOUND, body = Problem), (status = CONFLICT, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn resolve_children(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(number): Path<i64>,
+    Json(request): Json<ResolveChildren>,
+) -> Result<Json<crate::parents::ResolvedChildren>, ApiError> {
+    let Some(sender) = &state.sender else {
+        return Err(ApiError::Conflict(
+            "sending mail is not configured on this help desk".into(),
+        ));
+    };
+    Ok(Json(
+        crate::parents::resolve_children(&state.db, sender, number, agent.id, &request.body)
+            .await?,
     ))
 }

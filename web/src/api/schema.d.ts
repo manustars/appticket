@@ -489,6 +489,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tickets/{number}/parent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Makes the ticket a child of a parent ticket of the help desk's own organization. */
+        put: operations["set_parent"];
+        post?: never;
+        /** Detaches the ticket from its parent. */
+        delete: operations["clear_parent"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tickets/{number}/replies": {
         parameters: {
             query?: never;
@@ -500,6 +518,23 @@ export interface paths {
         put?: never;
         /** Queues a reply to the ticket's requester. It is sent by e-mail shortly after. */
         post: operations["reply"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tickets/{number}/resolve-children": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolves every open or waiting child of this parent ticket, replying to each requester. */
+        post: operations["resolve_children"];
         delete?: never;
         options?: never;
         head?: never;
@@ -751,6 +786,13 @@ export interface components {
             /** Format: int64 */
             number: number;
         };
+        ParentChange: {
+            /**
+             * Format: int64
+             * @description The number of the help desk's ticket that tracks the failure.
+             */
+            parent_number: number;
+        };
         Party: {
             /** Format: uuid */
             id: string;
@@ -759,6 +801,13 @@ export interface components {
         /** @description Why a request failed, in words an agent can read. */
         Problem: {
             error: string;
+        };
+        RelatedTicket: {
+            customer_name: string;
+            /** Format: int64 */
+            number: number;
+            state: components["schemas"]["TicketState"];
+            title: string;
         };
         Rename: {
             name: string;
@@ -787,6 +836,23 @@ export interface components {
          * @enum {string}
          */
         RequesterMove: "move" | "remove";
+        ResolveChildren: {
+            /** @description Sent as a reply to the requester of every child that has one. */
+            body: string;
+        };
+        /** @description What resolving the children did. */
+        ResolvedChildren: {
+            /**
+             * Format: int64
+             * @description Replies queued to their requesters.
+             */
+            replied: number;
+            /**
+             * Format: int64
+             * @description Children moved to resolved.
+             */
+            resolved: number;
+        };
         Service: {
             /**
              * Format: int64
@@ -817,6 +883,8 @@ export interface components {
             /** @description Assets of the ticket's customer the ticket is about. */
             assets: components["schemas"]["LinkedAsset"][];
             assignee?: components["schemas"]["Party"] | null;
+            /** @description The customers' tickets about the failure this ticket tracks. */
+            children: components["schemas"]["RelatedTicket"][];
             /** Format: date-time */
             created_at: string;
             customer: components["schemas"]["Party"];
@@ -824,6 +892,7 @@ export interface components {
             id: string;
             /** Format: int64 */
             number: number;
+            parent?: components["schemas"]["RelatedTicket"] | null;
             requester?: components["schemas"]["Requester"] | null;
             /** @description Services of the help desk the ticket is about. */
             services: components["schemas"]["LinkedService"][];
@@ -2320,6 +2389,98 @@ export interface operations {
             };
         };
     };
+    set_parent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's number */
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ParentChange"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    clear_parent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's number */
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     reply: {
         parameters: {
             query?: never;
@@ -2341,6 +2502,56 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    resolve_children: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The parent ticket's number */
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveChildren"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolvedChildren"];
+                };
             };
             401: {
                 headers: {
