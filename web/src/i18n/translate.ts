@@ -2,10 +2,11 @@
 import { createElement, Fragment, type ReactNode } from 'react'
 import { Refused } from '../api/client'
 import type { Key, Plural, RichVars, Vars } from './catalog'
-import { catalogs, formattingLocale, type Locale } from './locale'
+import { formattingLocale, type Loaded, type Locale } from './locale'
 
 export interface I18n {
   locale: Locale
+  /** Switches language once its catalog has loaded. */
   setLocale: (locale: Locale) => void
   /** The message as text, its placeholders filled in. */
   t: <K extends Key>(key: K, ...vars: Vars<K>) => string
@@ -20,8 +21,7 @@ export interface I18n {
 // A tag with what it wraps, or a placeholder.
 const token = /<(\w+)>([\s\S]*?)<\/\1>|\{(\w+)\}/g
 
-export function createI18n(locale: Locale, setLocale: (locale: Locale) => void): I18n {
-  const catalog = catalogs[locale]
+export function createI18n({ locale, catalog }: Loaded, setLocale: (locale: Locale) => void): I18n {
   const formatting = formattingLocale(locale)
   const plurals = new Intl.PluralRules(formatting)
   const numbers = new Intl.NumberFormat(formatting)

@@ -5,9 +5,10 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev": "node scripts/i18n.mjs && vite",
+    "build": "node scripts/i18n.mjs && tsc -b && vite build",
     "lint": "oxlint",
+    "i18n": "node scripts/i18n.mjs",
     "preview": "vite preview",
     "api": "cargo run -q -p hd-core -- openapi > openapi.json && npx --yes -p typescript@5.9.3 -p openapi-typescript@7.13.0 openapi-typescript openapi.json -o src/api/schema.d.ts"
   },

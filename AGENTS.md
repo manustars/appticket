@@ -6,6 +6,8 @@
   (`sdk/LICENSE`) so that add-ons can carry any license.
 - **English is the language of the project:** code, identifiers, database objects, API routes,
   docs, commit messages. English is also the source locale of the UI; Italian is a translation.
+  UI strings live in `web/src/i18n/locales/<language>.json`; `en.json` is the source, and the
+  build fails when another language misses a key or changes a placeholder (`web/src/i18n/README.md`).
 - **The product name is provisional.** It lives in one configurable place and stays out of
   identifiers: environment variables, cookies, headers and package names use the neutral prefix
   `hd` (`HD_…`, `hd_session`, `hd-core`).
