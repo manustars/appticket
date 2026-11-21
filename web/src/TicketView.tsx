@@ -61,8 +61,9 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
   const [chosen, setChosen] = useState<Mode | null>(null)
   // The add-on whose accepted draft is in the composer, unsent.
   const [draftFrom, setDraftFrom] = useState<string | null>(null)
-  // Asks the composer to come into view with the focus; bumped when a draft is put into it.
-  const [focusAsked, setFocusAsked] = useState(0)
+  // Asks the composer to put the caret after a text put into it (a restored or accepted draft), and,
+  // for an accepted one, to come into view with the focus.
+  const [caretAsked, setCaretAsked] = useState<CaretRequest | null>(null)
   // The composer's text is kept on the core as the agent's draft.
   const keeper = useDraftKeeper(number, onSignedOut)
   const { known } = keeper
@@ -104,6 +105,7 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
       if (saved) {
         setDraft(saved.body)
         setChosen(saved.mode)
+        setCaretAsked((r) => ({ seq: (r?.seq ?? 0) + 1, focus: false }))
         known({ mode: saved.mode, body: saved.body })
       } else {
         known({ mode: 'reply', body: '' })
@@ -149,7 +151,7 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
     // makes sure an older text typed before cannot land last.
     keeper.changed({ mode: 'reply', body })
     keeper.flush()
-    setFocusAsked((n) => n + 1)
+    setCaretAsked((r) => ({ seq: (r?.seq ?? 0) + 1, focus: true }))
   }
 
   function changeState(state: TicketState) {
@@ -268,7 +270,7 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
       {closed && (
         <p className="closed-notice">{t('ticket.closedNotice')}</p>
       )}
-      <Composer ticket={ticket} body={draft} chosen={chosen} draftFrom={draftFrom} focusAsked={focusAsked}
+      <Composer ticket={ticket} body={draft} chosen={chosen} draftFrom={draftFrom} caretAsked={caretAsked}
         saveState={keeper.saveState}
         onBody={(body) => {
           touched.current = true
@@ -344,6 +346,12 @@ const strong = (inner: ReactNode) => <strong>{inner}</strong>
 // confirmation.
 const thenStates: TicketState[] = ['open', 'waiting', 'resolved']
 
+/** Asks the composer to put the caret at the end of its text; `seq` tells one request from the next. */
+interface CaretRequest {
+  seq: number
+  focus: boolean
+}
+
 /** What the composer writes: the agent's pick when a reply is possible, else a note. */
 function composerMode(ticket: TicketDetail, picked: Mode | null): Mode {
   const canReply = Boolean(ticket.requester) && ticket.state !== 'closed'
@@ -353,15 +361,15 @@ function composerMode(ticket: TicketDetail, picked: Mode | null): Mode {
 /** The tallest the composer grows before it scrolls, in px. */
 const composerMaxHeight = () => Math.min(window.innerHeight * 0.6, 520)
 
-function Composer({ ticket, body, chosen: picked, draftFrom, focusAsked, saveState, onBody, onChoose, onLeave, onDone, onSignedOut }: {
+function Composer({ ticket, body, chosen: picked, draftFrom, caretAsked, saveState, onBody, onChoose, onLeave, onDone, onSignedOut }: {
   ticket: TicketDetail
   body: string
   /** The mode the agent picked; null for the default. The poll never changes it. */
   chosen: Mode | null
   /** The add-on whose accepted draft reply is in the composer, not sent yet. */
   draftFrom: string | null
-  /** Changes when the composer should come into view with the focus. */
-  focusAsked: number
+  /** A new request puts the caret after the text, and maybe brings the composer into view with the focus. */
+  caretAsked: CaretRequest | null
   /** Whether the text is saved as the agent's draft. */
   saveState: SaveState
   onBody: (body: string) => void
@@ -398,10 +406,16 @@ function Composer({ ticket, body, chosen: picked, draftFrom, focusAsked, saveSta
   }, [body, mode])
 
   useEffect(() => {
-    if (!focusAsked) return
-    textarea.current?.scrollIntoView({ block: 'center' })
-    textarea.current?.focus()
-  }, [focusAsked])
+    const area = textarea.current
+    if (!caretAsked || !area) return
+    if (caretAsked.focus) {
+      area.scrollIntoView({ block: 'center' })
+      area.focus()
+    }
+    // Typing goes on after the draft; the text stays scrolled to its start, greeting in view.
+    area.setSelectionRange(area.value.length, area.value.length)
+    area.scrollTop = 0
+  }, [caretAsked])
 
   async function submit(event: FormEvent) {
     event.preventDefault()
