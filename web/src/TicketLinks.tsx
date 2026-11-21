@@ -165,18 +165,18 @@ export function TicketServices({ ticket, onChanged, onSignedOut }: Props) {
   )
 }
 
-/** The parent of a customer's ticket, or the children of a help desk's ticket. */
-export function TicketFamily({ ticket, helpDesk, onChanged, onSignedOut }: Props & {
-  /** Whether the ticket belongs to the help desk's own organization; undefined while unknown. */
-  helpDesk: boolean | undefined
-}) {
-  if (helpDesk === undefined) return null
+/**
+ * How the ticket relates to others. Any ticket without children can have a parent, the help desk's
+ * own included (its colleagues can be hit by the same failure); a parent cannot become a child. A
+ * help desk ticket that is not a child can become a parent, so it also shows its (empty) children.
+ */
+export function TicketFamily({ ticket, onChanged, onSignedOut }: Props) {
+  const parent = ticket.children.length === 0
+  const children = ticket.children.length > 0 || (ticket.customer.is_help_desk && !ticket.parent)
   return (
     <>
-      {(!helpDesk || ticket.parent) && <Parent ticket={ticket} onChanged={onChanged} onSignedOut={onSignedOut} />}
-      {(helpDesk || ticket.children.length > 0) && (
-        <Children ticket={ticket} onChanged={onChanged} onSignedOut={onSignedOut} />
-      )}
+      {parent && <Parent ticket={ticket} onChanged={onChanged} onSignedOut={onSignedOut} />}
+      {children && <Children ticket={ticket} onChanged={onChanged} onSignedOut={onSignedOut} />}
     </>
   )
 }

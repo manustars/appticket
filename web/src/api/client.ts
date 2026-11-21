@@ -111,6 +111,14 @@ export function listCustomers(): Promise<CustomerEntry[]> {
   return json('GET', '/api/customers')
 }
 
+/**
+ * Opens a ticket by hand, e.g. after a phone call; returns its number. A new requester address is
+ * registered with the customer; `note` becomes an internal note recording what was said.
+ */
+export async function openTicket(request: Schemas['NewTicket']): Promise<number> {
+  return (await json<Schemas['OpenedTicket']>('POST', '/api/tickets', request)).number
+}
+
 /** Every customer, offboarded ones included (last), with counts. */
 export function listAllCustomers(): Promise<CustomerSummary[]> {
   return json('GET', '/api/customers/all')
@@ -284,6 +292,17 @@ export async function createService(name: string, description: string): Promise<
 
 export function getService(id: string): Promise<ServiceDetail> {
   return json('GET', servicePath(id))
+}
+
+/** Renames a service or changes its description. */
+export async function updateService(id: string, name: string, description: string): Promise<void> {
+  const request: Schemas['NewService'] = { name, description }
+  await call('PUT', servicePath(id), request)
+}
+
+/** The service stays on the tickets that refer to it but gets no new links or customers. */
+export async function retireService(id: string): Promise<void> {
+  await call('POST', `${servicePath(id)}/retire`)
 }
 
 export async function startUsingService(serviceId: string, customerId: string): Promise<void> {

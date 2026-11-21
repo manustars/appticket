@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   listAgents,
-  listCustomers,
+  listAllCustomers,
   Refused,
   type AgentEntry,
-  type CustomerEntry,
+  type CustomerSummary,
   type TicketState,
   type TicketSummary,
 } from './api/client'
 import { useI18n } from './i18n/context'
+import { NewTicket } from './NewTicket'
 import {
   allStates,
   defaultFilters,
@@ -37,9 +38,19 @@ interface Props {
 export function Tickets({ filters, tickets, error, onSignedOut }: Props) {
   const { t } = useI18n()
   const filtered = ticketsHref(filters) !== ticketsHref({ ...defaultFilters, states: allStates })
+  const [opening, setOpening] = useState(false)
   return (
     <div className="tickets-screen">
-      <TicketFilterBar filters={filters} onSignedOut={onSignedOut} />
+      <div className="tickets-top">
+        <TicketFilterBar filters={filters} onSignedOut={onSignedOut} />
+        {!opening && (
+          <button type="button" className="new-ticket" onClick={() => setOpening(true)}>{t('tickets.new')}</button>
+        )}
+      </div>
+      {opening && (
+        // A customer picked in the filter is the likely one for the new ticket.
+        <NewTicket customerId={filters.customer} onCancel={() => setOpening(false)} onSignedOut={onSignedOut} />
+      )}
       {error !== null && (
         <p className="error" role="alert">
           {error instanceof Refused ? error.message : t('error.loadFailed')}
@@ -112,12 +123,12 @@ function setFilters(change: Partial<TicketFilters>) {
 }
 
 const loadAgents = () => listAgents()
-const loadCustomers = () => listCustomers()
+const loadCustomers = () => listAllCustomers()
 
 function TicketFilterBar({ filters, onSignedOut }: { filters: TicketFilters; onSignedOut: () => void }) {
   const { t } = useI18n()
   const agents = useLoad<AgentEntry[]>(loadAgents, onSignedOut)
-  const customers = useLoad<CustomerEntry[]>(loadCustomers, onSignedOut)
+  const customers = useLoad<CustomerSummary[]>(loadCustomers, onSignedOut)
   const choice = stateChoice(filters.states)
   const isDefault = ticketsHref(filters) === ticketsHref(defaultFilters)
 
@@ -137,6 +148,9 @@ function TicketFilterBar({ filters, onSignedOut }: { filters: TicketFilters; onS
     timer.current = setTimeout(() => setFilters({ q: value.trim() }), searchDelay)
   }, [])
 
+  // Offboarded customers keep their history, so they can be picked too, apart from the others.
+  const active = customers.data?.filter((c) => !c.offboarded_at) ?? []
+  const offboarded = customers.data?.filter((c) => c.offboarded_at) ?? []
   const knownCustomer = !filters.customer || customers.data?.some((c) => c.id === filters.customer)
   const knownAssignee = ['', 'me', 'none'].includes(filters.assignee)
     || agents.data?.some((a) => a.id === filters.assignee)
@@ -175,9 +189,14 @@ function TicketFilterBar({ filters, onSignedOut }: { filters: TicketFilters; onS
         {t('filters.customer')}
         <select value={filters.customer} onChange={(e) => setFilters({ customer: e.target.value })}>
           <option value="">{t('filters.allCustomers')}</option>
-          {customers.data?.map((c) => (
+          {active.map((c) => (
             <option key={c.id} value={c.id}>{c.is_help_desk ? t('customer.helpDesk', { name: c.name }) : c.name}</option>
           ))}
+          {offboarded.length > 0 && (
+            <optgroup label={t('filters.offboarded')}>
+              {offboarded.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </optgroup>
+          )}
           {!knownCustomer && customers.data && <option value={filters.customer}>{filters.customer}</option>}
         </select>
       </label>

@@ -5,10 +5,12 @@ import {
   listCustomerAssets,
   listCustomers,
   listServices,
+  retireService,
   runOnAsset,
   startUsingService,
   stopRunningOnAsset,
   stopUsingService,
+  updateService,
   type Asset,
   type ServiceDetail,
 } from './api/client'
@@ -111,15 +113,12 @@ export function ServicePage({ id, onSignedOut }: { id: string; onSignedOut: () =
   return (
     <div className="page">
       <a className="back" href={servicesHref}>{t('service.back')}</a>
-      <div className="title-row">
-        <h1>{s.name}</h1>
-        {s.retired_at && <span className="marker retired">{t('marker.retired')}</span>}
-      </div>
-      {s.description && <p className="description">{s.description}</p>}
+      <ServiceHeading service={s} readOnly={readOnly} onChanged={service.reload} onSignedOut={onSignedOut} />
       <Problem error={service.error} />
       {s.retired_at && <p className="notice">{t('service.retiredNotice', { date: formatTime(s.retired_at) })}</p>}
       <UsedBy service={s} readOnly={readOnly} onChanged={service.reload} onSignedOut={onSignedOut} />
       <RunsOn service={s} readOnly={readOnly} onChanged={service.reload} onSignedOut={onSignedOut} />
+      {!readOnly && <Retire service={s} onChanged={service.reload} onSignedOut={onSignedOut} />}
     </div>
   )
 }
@@ -129,6 +128,84 @@ interface PartProps {
   readOnly: boolean
   onChanged: () => Promise<void>
   onSignedOut: () => void
+}
+
+/** The service's name and description, and the form that changes them. */
+function ServiceHeading({ service: s, readOnly, onChanged, onSignedOut }: PartProps) {
+  const { t } = useI18n()
+  const action = useAction(onSignedOut)
+  // What is typed while editing; null when not editing.
+  const [draft, setDraft] = useState<{ name: string; description: string } | null>(null)
+  const id = useId()
+
+  function submit(event: FormEvent) {
+    event.preventDefault()
+    if (!draft || !draft.name.trim()) return
+    void action.run(() => updateService(s.id, draft.name.trim(), draft.description.trim())).then(async (ok) => {
+      if (!ok) return
+      await onChanged()
+      setDraft(null)
+    })
+  }
+
+  if (draft === null) {
+    return (
+      <>
+        <div className="title-row">
+          <h1>{s.name}</h1>
+          {s.retired_at && <span className="marker retired">{t('marker.retired')}</span>}
+          {!readOnly && (
+            <button type="button" className="link" onClick={() => setDraft({ name: s.name, description: s.description })}>
+              {t('action.edit')}
+            </button>
+          )}
+        </div>
+        {s.description && <p className="description">{s.description}</p>}
+      </>
+    )
+  }
+  return (
+    <section className="panel" aria-labelledby={`${id}-title`}>
+      <h2 id={`${id}-title`}>{t('service.editTitle', { name: s.name })}</h2>
+      <form className="inline-form service-edit" onSubmit={submit}>
+        <label className="wide">
+          {t('services.name')}
+          <input required value={draft.name} autoFocus onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+        </label>
+        <label className="wide">
+          {t('services.description')}
+          <input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
+        </label>
+        <button type="submit" disabled={action.busy || !draft.name.trim()}>{t('action.save')}</button>
+        <button type="button" className="quiet" onClick={() => { setDraft(null); action.clear() }}>
+          {t('action.cancel')}
+        </button>
+      </form>
+      <Problem error={action.error} />
+    </section>
+  )
+}
+
+function Retire({ service: s, onChanged, onSignedOut }: Omit<PartProps, 'readOnly'>) {
+  const { t } = useI18n()
+  const action = useAction(onSignedOut)
+
+  function retire() {
+    if (!window.confirm(t('service.confirmRetire', { name: s.name }))) return
+    void action.run(() => retireService(s.id)).then(async (ok) => { if (ok) await onChanged() })
+  }
+
+  return (
+    <section className="panel danger-zone">
+      <div className="danger-row">
+        <p className="hint">{t('service.retireHint')}</p>
+        <button type="button" className="danger" disabled={action.busy} onClick={retire}>
+          {t('service.retire')}
+        </button>
+      </div>
+      <Problem error={action.error} />
+    </section>
+  )
 }
 
 function UsedBy({ service: s, readOnly, onChanged, onSignedOut }: PartProps) {

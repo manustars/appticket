@@ -143,12 +143,7 @@ export function CustomerPage({ id, onChanged, onSignedOut }: PageProps) {
       <dl className="facts">
         <div>
           <dt>{t('customer.activeTickets')}</dt>
-          <dd>
-            {/* The ticket list filters by customers that get tickets, so an offboarded one gets no link. */}
-            {readOnly
-              ? formatNumber(c.active_tickets)
-              : <a href={ticketsHref({ ...defaultFilters, customer: c.id })}>{formatNumber(c.active_tickets)}</a>}
-          </dd>
+          <dd><a href={ticketsHref({ ...defaultFilters, customer: c.id })}>{formatNumber(c.active_tickets)}</a></dd>
         </div>
         <div><dt>{t('customer.requesters')}</dt><dd>{formatNumber(c.requesters)}</dd></div>
       </dl>

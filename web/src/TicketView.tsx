@@ -39,7 +39,7 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
   // Failures are kept as they came and put into words when shown, so they follow the language.
   const [loadError, setLoadError] = useState<unknown>(null)
   const [agents, setAgents] = useState<AgentEntry[]>([])
-  // Customers that can get tickets; they also tell whether this ticket is the help desk's own.
+  // Customers that can get tickets, for moving the ticket to one of them.
   const [customers, setCustomers] = useState<CustomerEntry[] | null>(null)
   const [actionError, setActionError] = useState<unknown>(null)
   const [busy, setBusy] = useState(false)
@@ -120,8 +120,6 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
 
   const closed = ticket.state === 'closed'
   const requester = ticket.requester
-  // The help desk's own organization is never offboarded, so it is always in the list.
-  const helpDesk = customers?.some((c) => c.id === ticket.customer.id && c.is_help_desk)
   return (
     <div className="ticket">
       <a className="back" href={backHref}>{t('ticket.back')}</a>
@@ -198,7 +196,7 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
       <div className="ticket-links">
         <TicketAssets ticket={ticket} onChanged={changed} onSignedOut={onSignedOut} />
         <TicketServices ticket={ticket} onChanged={changed} onSignedOut={onSignedOut} />
-        <TicketFamily ticket={ticket} helpDesk={helpDesk} onChanged={changed} onSignedOut={onSignedOut} />
+        <TicketFamily ticket={ticket} onChanged={changed} onSignedOut={onSignedOut} />
       </div>
 
       <ol className="timeline">

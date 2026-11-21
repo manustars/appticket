@@ -35,6 +35,7 @@ export interface Messages {
   "customer.loading": { plural: false; placeholders: never; tags: never }
   "tickets.empty": { plural: false; placeholders: never; tags: never }
   "tickets.noMatch": { plural: false; placeholders: never; tags: never }
+  "tickets.new": { plural: false; placeholders: never; tags: never }
   "tickets.number": { plural: false; placeholders: never; tags: never }
   "tickets.title": { plural: false; placeholders: never; tags: never }
   "tickets.customer": { plural: false; placeholders: never; tags: never }
@@ -42,6 +43,14 @@ export interface Messages {
   "tickets.assignee": { plural: false; placeholders: never; tags: never }
   "tickets.state": { plural: false; placeholders: never; tags: never }
   "tickets.updated": { plural: false; placeholders: never; tags: never }
+  "newTicket.customer": { plural: false; placeholders: never; tags: never }
+  "newTicket.title": { plural: false; placeholders: never; tags: never }
+  "newTicket.requester": { plural: false; placeholders: never; tags: never }
+  "newTicket.requesterHint": { plural: false; placeholders: never; tags: never }
+  "newTicket.note": { plural: false; placeholders: never; tags: never }
+  "newTicket.notePlaceholder": { plural: false; placeholders: never; tags: never }
+  "newTicket.noteHint": { plural: false; placeholders: never; tags: never }
+  "newTicket.submit": { plural: false; placeholders: never; tags: never }
   "filters.label": { plural: false; placeholders: never; tags: never }
   "filters.state": { plural: false; placeholders: never; tags: never }
   "filters.notClosed": { plural: false; placeholders: never; tags: never }
@@ -52,6 +61,7 @@ export interface Messages {
   "filters.unassigned": { plural: false; placeholders: never; tags: never }
   "filters.customer": { plural: false; placeholders: never; tags: never }
   "filters.allCustomers": { plural: false; placeholders: never; tags: never }
+  "filters.offboarded": { plural: false; placeholders: never; tags: never }
   "filters.search": { plural: false; placeholders: never; tags: never }
   "filters.searchPlaceholder": { plural: false; placeholders: never; tags: never }
   "filters.reset": { plural: false; placeholders: never; tags: never }
@@ -190,6 +200,10 @@ export interface Messages {
   "services.addHint": { plural: false; placeholders: never; tags: never }
   "services.addSubmit": { plural: false; placeholders: never; tags: never }
   "service.back": { plural: false; placeholders: never; tags: never }
+  "service.editTitle": { plural: false; placeholders: "name"; tags: never }
+  "service.retire": { plural: false; placeholders: never; tags: never }
+  "service.retireHint": { plural: false; placeholders: never; tags: never }
+  "service.confirmRetire": { plural: false; placeholders: "name"; tags: never }
   "service.retiredNotice": { plural: false; placeholders: "date"; tags: never }
   "service.usedBy": { plural: false; placeholders: never; tags: never }
   "service.removeCustomer": { plural: false; placeholders: "name"; tags: never }
