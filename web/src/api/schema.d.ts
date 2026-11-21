@@ -780,6 +780,8 @@ export interface components {
             name: string;
         };
         AddonIdentity: {
+            /** @description The languages of the agents' UI: write each rationale in all of them. */
+            languages: string[];
             name: string;
             scopes: string[];
         };
@@ -839,6 +841,9 @@ export interface components {
              * @description The number of the ticket the message belongs to.
              */
             ticket_number: number;
+        };
+        BTreeMap: {
+            [key: string]: string;
         };
         /** @description What is proposed. */
         Content: (components["schemas"]["Triage"] & {
@@ -995,8 +1000,11 @@ export interface components {
              * @description For triage: the inbox message.
              */
             message_id?: string | null;
-            /** @description Why the add-on suggests it, in a sentence the agent reads. */
-            rationale?: string;
+            /**
+             * @description Why the add-on suggests it: one sentence per UI language (`{"en": "...", "it": "..."}`,
+             *     see `languages` in whoami), or a single English sentence.
+             */
+            rationale?: components["schemas"]["RationaleInput"];
             /**
              * Format: int64
              * @description For anything else: the ticket.
@@ -1087,7 +1095,8 @@ export interface components {
             customer_name?: string | null;
             /** Format: uuid */
             id: string;
-            rationale: string;
+            /** @description Why it is proposed, by language; show the agent's language, else English. */
+            rationale: components["schemas"]["BTreeMap"];
         };
         ProposedAsset: {
             /** Format: uuid */
@@ -1095,6 +1104,8 @@ export interface components {
             kind: string;
             name: string;
         };
+        /** @description A rationale as an add-on sends it. */
+        RationaleInput: components["schemas"]["BTreeMap"] | string;
         RelatedTicket: {
             customer_name: string;
             /** Format: int64 */

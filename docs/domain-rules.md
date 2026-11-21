@@ -73,6 +73,9 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
   tickets (assets involved, priority, a draft reply).
 - It never acts alone: every proposal waits for an agent to accept, edit or discard it. An
   accepted draft reply goes into the composer; the agent sends it.
+- A proposal's rationale is written in every language of the agents' UI, and each agent reads it in
+  the language they chose (English when theirs is missing). A draft reply is in the requester's
+  language.
 - A message or ticket has at most one open proposal of each kind; a newer one replaces it. A
   proposal that no longer applies (the message left the inbox, the ticket was closed) cannot be
   accepted.

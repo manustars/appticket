@@ -1,6 +1,8 @@
 //! Proposals: what an add-on such as the Assistant suggests on an inbox message or a ticket. A
 //! proposal takes effect only when an agent accepts it (ADR 0006, docs/domain-rules.md).
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -9,6 +11,39 @@ use uuid::Uuid;
 
 use crate::error::{Error, Result, rule};
 use crate::tickets::{Priority, TicketState};
+
+/// The languages of the agents' UI; a rationale should be written in each of them. Kept equal to
+/// the catalogs in web/src/i18n/locales by a test.
+pub const UI_LANGUAGES: &[&str] = &["en", "it"];
+
+/// Why a proposal is made, one sentence per language: `{"en": "...", "it": "..."}`.
+pub type Rationale = BTreeMap<String, String>;
+
+/// Checks a rationale: language tags of 2 to 8 lowercase letters, each with a non-empty sentence of
+/// at most 500 characters. Returns it trimmed.
+pub fn clean_rationale(rationale: &Rationale) -> Result<Rationale> {
+    let mut clean = Rationale::new();
+    for (language, text) in rationale {
+        let valid_tag =
+            (2..=8).contains(&language.len()) && language.chars().all(|c| c.is_ascii_lowercase());
+        if !valid_tag {
+            return rule(format!(
+                "{language:?} is not a language tag such as \"en\" or \"it\""
+            ));
+        }
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if text.chars().count() > 500 {
+            return rule(format!(
+                "the {language} rationale is longer than 500 characters"
+            ));
+        }
+        clean.insert(language.clone(), text.to_owned());
+    }
+    Ok(clean)
+}
 
 /// What is proposed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -58,8 +93,9 @@ pub async fn submit(
     addon: &str,
     target: Target,
     content: &Content,
-    rationale: &str,
+    rationale: &Rationale,
 ) -> Result<Uuid> {
+    let rationale = clean_rationale(rationale)?;
     let mut tx = db.begin().await?;
     let addon_id: Uuid = sqlx::query_scalar("SELECT id FROM addons WHERE name = $1")
         .bind(addon)
@@ -182,7 +218,7 @@ pub async fn submit(
     .bind(ticket_id)
     .bind(content.kind())
     .bind(sqlx::types::Json(content))
-    .bind(rationale.trim())
+    .bind(sqlx::types::Json(&rationale))
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -196,7 +232,8 @@ pub struct ProposalView {
     /// The add-on that made it.
     pub addon: String,
     pub content: Content,
-    pub rationale: String,
+    /// Why it is proposed, by language; show the agent's language, else English.
+    pub rationale: Rationale,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     /// For triage that opens a ticket: the customer's name.
@@ -217,7 +254,7 @@ struct Row {
     id: Uuid,
     addon: String,
     content: sqlx::types::Json<Content>,
-    rationale: String,
+    rationale: sqlx::types::Json<Rationale>,
     created_at: OffsetDateTime,
 }
 
@@ -247,7 +284,7 @@ async fn views(db: &PgPool, rows: Vec<Row>) -> Result<Vec<ProposalView>> {
             id: row.id,
             addon: row.addon,
             content,
-            rationale: row.rationale,
+            rationale: row.rationale.0,
             created_at: row.created_at,
             customer_name,
             assets,
@@ -389,6 +426,41 @@ mod tests {
     use super::*;
     use crate::testing;
 
+    fn en(text: &str) -> Rationale {
+        Rationale::from([("en".to_owned(), text.to_owned())])
+    }
+
+    #[test]
+    fn rationales_are_checked_per_language() {
+        let mut r = en("  Domain of Brightfield ");
+        r.insert("it".into(), "Dominio di Brightfield".into());
+        r.insert("de".into(), "   ".into());
+        let clean = clean_rationale(&r).unwrap();
+        assert_eq!(clean.len(), 2, "empty sentences are dropped");
+        assert_eq!(clean["en"], "Domain of Brightfield");
+        assert!(clean_rationale(&Rationale::from([("EN".into(), "x".into())])).is_err());
+        assert!(clean_rationale(&Rationale::from([("en".into(), "x".repeat(501))])).is_err());
+    }
+
+    #[test]
+    fn ui_languages_match_the_catalogs() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../web/src/i18n/locales");
+        let mut catalogs: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| {
+                e.ok()?
+                    .file_name()
+                    .to_str()?
+                    .strip_suffix(".json")
+                    .map(str::to_owned)
+            })
+            .collect();
+        catalogs.sort();
+        let mut ours: Vec<&str> = UI_LANGUAGES.to_vec();
+        ours.sort();
+        assert_eq!(catalogs, ours);
+    }
+
     async fn assistant(db: &PgPool) {
         crate::addons::register(db, "assistant", "http://127.0.0.1:9", &[], &[])
             .await
@@ -408,7 +480,7 @@ mod tests {
             "assistant",
             Target::Message(m),
             &discard,
-            "Looks like spam",
+            &en("Looks like spam"),
         )
         .await
         .unwrap();
@@ -420,7 +492,7 @@ mod tests {
             "assistant",
             Target::Message(m),
             &open,
-            "Domain of Brightfield",
+            &en("Domain of Brightfield"),
         )
         .await
         .unwrap();
@@ -446,7 +518,7 @@ mod tests {
         assert!(open_on_messages(&db, &[m]).await.unwrap().is_empty());
         // The message left the inbox: a new triage proposal no longer applies.
         assert!(matches!(
-            submit(&db, "assistant", Target::Message(m), &discard, "").await,
+            submit(&db, "assistant", Target::Message(m), &discard, &en("")).await,
             Err(Error::Rule(_))
         ));
     }
@@ -475,7 +547,7 @@ mod tests {
                 &Content::Assets {
                     asset_ids: vec![pc, other]
                 },
-                ""
+                &en("")
             )
             .await,
             Err(Error::Rule(_))
@@ -487,7 +559,7 @@ mod tests {
             &Content::Assets {
                 asset_ids: vec![pc],
             },
-            "",
+            &en(""),
         )
         .await
         .unwrap();
@@ -498,7 +570,7 @@ mod tests {
             &Content::Priority {
                 priority: Priority::High,
             },
-            "Nobody can work",
+            &en("Nobody can work"),
         )
         .await
         .unwrap();
@@ -509,7 +581,7 @@ mod tests {
             &Content::Reply {
                 body: "Please restart.".into(),
             },
-            "",
+            &en(""),
         )
         .await
         .unwrap();
@@ -542,7 +614,7 @@ mod tests {
             &Content::Priority {
                 priority: Priority::Low,
             },
-            "",
+            &en(""),
         )
         .await
         .unwrap();
@@ -552,7 +624,14 @@ mod tests {
             Err(Error::Rule(_))
         ));
         assert!(matches!(
-            submit(&db, "assistant", t, &Content::Triage(Triage::Discard), "").await,
+            submit(
+                &db,
+                "assistant",
+                t,
+                &Content::Triage(Triage::Discard),
+                &en("")
+            )
+            .await,
             Err(Error::Rule(_))
         ));
     }

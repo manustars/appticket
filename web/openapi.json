@@ -2983,9 +2983,17 @@
         "type": "object",
         "required": [
           "name",
-          "scopes"
+          "scopes",
+          "languages"
         ],
         "properties": {
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The languages of the agents' UI: write each rationale in all of them."
+          },
           "name": {
             "type": "string"
           },
@@ -3161,6 +3169,15 @@
             "format": "int64",
             "description": "The number of the ticket the message belongs to."
           }
+        }
+      },
+      "BTreeMap": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "propertyNames": {
+          "type": "string"
         }
       },
       "Content": {
@@ -3664,8 +3681,8 @@
             "description": "For triage: the inbox message."
           },
           "rationale": {
-            "type": "string",
-            "description": "Why the add-on suggests it, in a sentence the agent reads."
+            "$ref": "#/components/schemas/RationaleInput",
+            "description": "Why the add-on suggests it: one sentence per UI language (`{\"en\": \"...\", \"it\": \"...\"}`,\nsee `languages` in whoami), or a single English sentence."
           },
           "ticket_number": {
             "type": [
@@ -3926,7 +3943,8 @@
             "format": "uuid"
           },
           "rationale": {
-            "type": "string"
+            "$ref": "#/components/schemas/BTreeMap",
+            "description": "Why it is proposed, by language; show the agent's language, else English."
           }
         }
       },
@@ -3949,6 +3967,19 @@
             "type": "string"
           }
         }
+      },
+      "RationaleInput": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/BTreeMap",
+            "description": "One sentence per language."
+          },
+          {
+            "type": "string",
+            "description": "A single sentence, taken as English."
+          }
+        ],
+        "description": "A rationale as an add-on sends it."
       },
       "RelatedTicket": {
         "type": "object",

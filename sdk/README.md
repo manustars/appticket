@@ -76,7 +76,7 @@ sentence saying which scope is missing.
 
 | Call | Scope | What it does |
 |---|---|---|
-| `GET /api/addon/whoami` | none | The add-on's name and scopes. |
+| `GET /api/addon/whoami` | none | The add-on's name, scopes and the languages of the agents' UI. |
 | `GET /api/addon/customers` | `directory:read` | Customers that can get tickets, with their mail domains. |
 | `GET /api/addon/customers/{id}/assets` | `directory:read` | A customer's active assets. |
 | `GET /api/addon/tickets?requester_email=…` or `?customer=…` | `tickets:read` | Tickets that are not closed. |
@@ -89,12 +89,19 @@ The full request and response shapes are in the core's OpenAPI specification
 ### Proposals
 
 A proposal is about an inbox message (`message_id`) or a ticket (`ticket_number`), never both, and
-carries a `content` and a one-sentence `rationale` shown to the agent:
+carries a `content` and a `rationale`: one sentence per language of the agents' UI, so that each
+agent reads it in the language they chose. `GET /api/addon/whoami` lists those languages; a single
+string is accepted too and taken as English, which is also what agents see when their language is
+missing.
 
 ```json
 { "message_id": "…", "content": { "kind": "triage", "action": "open_ticket", "customer_id": "…" },
-  "rationale": "The sender writes from Brightfield's domain." }
+  "rationale": { "en": "The sender writes from Brightfield's domain.",
+                 "it": "Il mittente scrive dal dominio di Brightfield." } }
 ```
+
+A draft reply (`kind: reply`) is for the requester, so it is written in the requester's language,
+not in the agents'.
 
 | `kind` | On | Content |
 |---|---|---|

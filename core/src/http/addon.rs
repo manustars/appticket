@@ -52,6 +52,31 @@ impl FromRequestParts<AppState> for Caller {
 pub struct AddonIdentity {
     name: String,
     scopes: Vec<String>,
+    /// The languages of the agents' UI: write each rationale in all of them.
+    languages: Vec<String>,
+}
+
+/// A rationale as an add-on sends it.
+#[derive(Deserialize, ToSchema, Default)]
+#[serde(untagged)]
+pub enum RationaleInput {
+    /// One sentence per language.
+    PerLanguage(proposals::Rationale),
+    /// A single sentence, taken as English.
+    English(String),
+    #[default]
+    #[serde(skip)]
+    None,
+}
+
+impl RationaleInput {
+    fn into_map(self) -> proposals::Rationale {
+        match self {
+            RationaleInput::PerLanguage(map) => map,
+            RationaleInput::English(text) => proposals::Rationale::from([("en".to_owned(), text)]),
+            RationaleInput::None => proposals::Rationale::new(),
+        }
+    }
 }
 
 /// The add-on the token belongs to, and what it may do.
@@ -61,6 +86,10 @@ async fn whoami(caller: Caller) -> Json<AddonIdentity> {
     Json(AddonIdentity {
         name: caller.name,
         scopes: caller.scopes,
+        languages: proposals::UI_LANGUAGES
+            .iter()
+            .map(|l| (*l).to_owned())
+            .collect(),
     })
 }
 
@@ -194,9 +223,10 @@ pub struct NewProposal {
     /// For anything else: the ticket.
     ticket_number: Option<i64>,
     content: Content,
-    /// Why the add-on suggests it, in a sentence the agent reads.
+    /// Why the add-on suggests it: one sentence per UI language (`{"en": "...", "it": "..."}`,
+    /// see `languages` in whoami), or a single English sentence.
     #[serde(default)]
-    rationale: String,
+    rationale: RationaleInput,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -230,7 +260,7 @@ async fn propose(
         &caller.name,
         target,
         &new.content,
-        &new.rationale,
+        &new.rationale.into_map(),
     )
     .await?;
     Ok((StatusCode::CREATED, Json(ProposalCreated { id })))
