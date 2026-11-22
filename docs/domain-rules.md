@@ -158,9 +158,10 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   address, a phone number, a website and internal notes.
 - A customer has any number of external references, each made of a system and a name in it; a
   customer can have several in the same system, and each one names exactly one customer.
-- A customer has any number of sites, each with a name and an address. Sites are retired, never
-  deleted: a retired site gets no new requesters or assets, and those at it are left without a
-  site after a warning.
+- A customer has any number of sites, each with a name and an address. A customer's active sites
+  have different names, ignoring case. Sites are retired, never deleted: a retired site gets no
+  new requesters or assets, and those at it are left without a site after a warning; it can still
+  be corrected.
 - An asset belongs to exactly one customer.
 - Every asset has an asset kind from the list the help desk manages; the kind says whether its
   assets move with their holder or stay at their site. No two asset kinds have names that differ
