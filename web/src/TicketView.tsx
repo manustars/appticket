@@ -25,6 +25,7 @@ import { useI18n } from './i18n/context'
 import { addonName } from './addon'
 import { useDraftKeeper, type SaveState } from './drafts'
 import { TicketProposals } from './Proposals'
+import { useSession } from './session'
 import { TicketAssets, TicketFamily, TicketServices } from './TicketLinks'
 import { useLoad } from './useAction'
 
@@ -42,6 +43,9 @@ interface Props {
 
 export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) {
   const { t, formatTime, errorText } = useI18n()
+  const { agent, can } = useSession()
+  const canWork = can('tickets.work')
+  const allowed: Allowed = { reply: can('tickets.reply'), note: canWork }
   const [ticket, setTicket] = useState<TicketDetail | null>(null)
   // Failures are kept as they came and put into words when shown, so they follow the language.
   const [loadError, setLoadError] = useState<unknown>(null)
@@ -170,6 +174,19 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
 
   const closed = ticket.state === 'closed'
   const requester = ticket.requester
+  const assigneeId = ticket.assignee?.id ?? null
+  /**
+   * Whether the agent may make `target` the assignee (null: nobody). Taking the ticket, or giving
+   * back one's own, is working on it; anything else is assigning it to others.
+   */
+  const mayAssign = (target: string | null) => {
+    const own = target === null ? assigneeId === null || assigneeId === agent.id : target === agent.id
+    return can(own ? 'tickets.work' : 'tickets.assign')
+  }
+  // The agents the role lets the agent pick, and the current assignee whoever it is.
+  const assignable = agents.filter((a) => a.id === assigneeId || mayAssign(a.id))
+  const canChangeAssignee = mayAssign(null) || agents.some((a) => a.id !== assigneeId && mayAssign(a.id))
+  const writable = allowed.note || replyPossible(ticket, allowed)
   return (
     <div className="ticket">
       <a className="back" href={backHref}>{t('ticket.back')}</a>
@@ -181,7 +198,7 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
           <dt>{t('ticket.customer')}</dt>
           <dd>
             {ticket.customer.name}{' '}
-            {!closed && !moving && (
+            {!closed && !moving && can('tickets.move') && (
               <button type="button" className="link" disabled={busy} onClick={() => setMoving(true)}>
                 {t('ticket.changeCustomer')}
               </button>
@@ -200,7 +217,7 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
           <dt><label htmlFor="ticket-state">{t('ticket.state')}</label></dt>
           <dd>
             <select id="ticket-state" className={`state ${ticket.state}`} value={ticket.state}
-              disabled={closed || busy} onChange={(e) => changeState(e.target.value as TicketState)}>
+              disabled={closed || busy || !canWork} onChange={(e) => changeState(e.target.value as TicketState)}>
               {states.map((s) => <option key={s} value={s}>{t(`state.${s}`)}</option>)}
             </select>
           </dd>
@@ -209,7 +226,7 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
           <dt><label htmlFor="ticket-priority">{t('ticket.priority')}</label></dt>
           <dd>
             <select id="ticket-priority" className={`priority ${ticket.priority}`} value={ticket.priority}
-              disabled={closed || busy}
+              disabled={closed || busy || !canWork}
               onChange={(e) => void change(() => setPriority(number, e.target.value as Priority))}>
               {priorities.map((p) => <option key={p} value={p}>{t(`priority.${p}`)}</option>)}
             </select>
@@ -218,14 +235,14 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
         <div>
           <dt><label htmlFor="ticket-assignee">{t('ticket.assignee')}</label></dt>
           <dd>
-            <select id="ticket-assignee" value={ticket.assignee?.id ?? ''} disabled={closed || busy}
+            <select id="ticket-assignee" value={assigneeId ?? ''} disabled={closed || busy || !canChangeAssignee}
               onChange={(e) => void change(() => setAssignee(number, e.target.value || null))}>
-              <option value="">{t('ticket.unassigned')}</option>
+              {(assigneeId === null || mayAssign(null)) && <option value="">{t('ticket.unassigned')}</option>}
               {/* The current assignee stays visible even before the agents list arrives. */}
-              {ticket.assignee && !agents.some((a) => a.id === ticket.assignee?.id) && (
+              {ticket.assignee && !agents.some((a) => a.id === assigneeId) && (
                 <option value={ticket.assignee.id}>{ticket.assignee.name}</option>
               )}
-              {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              {assignable.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </dd>
         </div>
@@ -270,28 +287,31 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
       {closed && (
         <p className="closed-notice">{t('ticket.closedNotice')}</p>
       )}
-      <Composer ticket={ticket} body={draft} chosen={chosen} draftFrom={draftFrom} caretAsked={caretAsked}
-        saveState={keeper.saveState}
-        onBody={(body) => {
-          touched.current = true
-          setDraft(body)
-          if (!body.trim()) setDraftFrom(null)
-          keeper.changed({ mode: composerMode(ticket, chosen), body })
-        }}
-        onChoose={(mode) => {
-          touched.current = true
-          setChosen(mode)
-          keeper.changed({ mode: composerMode(ticket, mode), body: draft })
-        }}
-        onLeave={keeper.flush}
-        onDone={(mode) => {
-          // Sending cleared the draft on the core.
-          known({ mode, body: '' })
-          setDraftFrom(null)
-          void load()
-          onChanged()
-        }}
-        onSignedOut={onSignedOut} />
+      {!writable && <p className="notice">{t('composer.notAllowed')}</p>}
+      {writable && (
+        <Composer ticket={ticket} allowed={allowed} body={draft} chosen={chosen} draftFrom={draftFrom}
+          caretAsked={caretAsked} saveState={keeper.saveState}
+          onBody={(body) => {
+            touched.current = true
+            setDraft(body)
+            if (!body.trim()) setDraftFrom(null)
+            keeper.changed({ mode: composerMode(ticket, chosen, allowed), body })
+          }}
+          onChoose={(mode) => {
+            touched.current = true
+            setChosen(mode)
+            keeper.changed({ mode: composerMode(ticket, mode, allowed), body: draft })
+          }}
+          onLeave={keeper.flush}
+          onDone={(mode) => {
+            // Sending cleared the draft on the core.
+            known({ mode, body: '' })
+            setDraftFrom(null)
+            void load()
+            onChanged()
+          }}
+          onSignedOut={onSignedOut} />
+      )}
     </div>
   )
 }
@@ -352,17 +372,30 @@ interface CaretRequest {
   focus: boolean
 }
 
-/** What the composer writes: the agent's pick when a reply is possible, else a note. */
-function composerMode(ticket: TicketDetail, picked: Mode | null): Mode {
-  const canReply = Boolean(ticket.requester) && ticket.state !== 'closed'
-  return canReply ? picked ?? 'reply' : 'note'
+/** What the agent's role lets them write: replies to requesters, internal notes. */
+interface Allowed {
+  reply: boolean
+  note: boolean
+}
+
+/** Whether a reply can be written: the ticket has a requester, is not closed, and the role allows it. */
+const replyPossible = (ticket: TicketDetail, allowed: Allowed) =>
+  allowed.reply && Boolean(ticket.requester) && ticket.state !== 'closed'
+
+/** What the composer writes: the agent's pick when both are possible, else the one that is. */
+function composerMode(ticket: TicketDetail, picked: Mode | null, allowed: Allowed): Mode {
+  if (!replyPossible(ticket, allowed)) return 'note'
+  if (!allowed.note) return 'reply'
+  return picked ?? 'reply'
 }
 
 /** The tallest the composer grows before it scrolls, in px. */
 const composerMaxHeight = () => Math.min(window.innerHeight * 0.6, 520)
 
-function Composer({ ticket, body, chosen: picked, draftFrom, caretAsked, saveState, onBody, onChoose, onLeave, onDone, onSignedOut }: {
+function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked, saveState, onBody, onChoose, onLeave, onDone, onSignedOut }: {
   ticket: TicketDetail
+  /** What the agent's role lets them write; the composer is shown only when one of them is possible. */
+  allowed: Allowed
   body: string
   /** The mode the agent picked; null for the default. The poll never changes it. */
   chosen: Mode | null
@@ -382,7 +415,6 @@ function Composer({ ticket, body, chosen: picked, draftFrom, caretAsked, saveSta
 }) {
   const { t, rich, errorText } = useI18n()
   const requester = ticket.requester
-  const chosen: Mode = picked ?? (requester ? 'reply' : 'note')
   const setChosen = onChoose
   const setBody = onBody
   const [then, setThen] = useState<TicketState>('waiting')
@@ -391,8 +423,8 @@ function Composer({ ticket, body, chosen: picked, draftFrom, caretAsked, saveSta
   const id = useId()
   // Without a requester there is nobody to reply to, and a closed ticket gets no more replies.
   const closed = ticket.state === 'closed'
-  const canReply = requester !== null && requester !== undefined && !closed
-  const mode: Mode = canReply ? chosen : 'note'
+  const canReply = replyPossible(ticket, allowed)
+  const mode: Mode = composerMode(ticket, picked, allowed)
 
   const textarea = useRef<HTMLTextAreaElement>(null)
 
@@ -447,7 +479,7 @@ function Composer({ ticket, body, chosen: picked, draftFrom, caretAsked, saveSta
         </label>
         <label className={mode === 'note' ? 'current' : ''}>
           <input type="radio" name={`${id}-mode`} value="note" checked={mode === 'note'}
-            onChange={() => setChosen('note')} />
+            disabled={!allowed.note} onChange={() => setChosen('note')} />
           {t('composer.note')}
         </label>
       </fieldset>

@@ -2,10 +2,21 @@
 // marked as suggestions and carry the add-on's reason, so they never pass for the agent's own work.
 import { useId, type ReactNode } from 'react'
 import { addonName, rationaleIn } from './addon'
-import { acceptProposal, discardProposal, type Proposal, type TicketDetail } from './api/client'
+import { acceptProposal, discardProposal, type Permission, type Proposal, type TicketDetail } from './api/client'
 import { useI18n } from './i18n/context'
 import { Problem } from './Problem'
+import { useSession } from './session'
 import { useAction } from './useAction'
+
+/**
+ * The permission deciding on a proposal needs, as the core checks it: sorting the inbox for
+ * triage, replying to accept a draft reply, working tickets otherwise.
+ */
+function needs(proposal: Proposal, accepting: boolean): Permission {
+  if (proposal.content.kind === 'triage') return 'inbox.triage'
+  if (proposal.content.kind === 'reply' && accepting) return 'tickets.reply'
+  return 'tickets.work'
+}
 
 /** The quiet mark that says: an add-on suggests this, nothing has happened yet. */
 export function SuggestionTag({ addon }: { addon?: string }) {
@@ -44,7 +55,7 @@ export function ProposalWhat({ proposal: p }: { proposal: Proposal }) {
   }
 }
 
-/** One proposal with its reason and the agent's two choices. */
+/** One proposal with its reason and the choices the agent's role allows. */
 function ProposalItem({ proposal, busy, onAccept, onDiscard, extra }: {
   proposal: Proposal
   busy: boolean
@@ -53,6 +64,9 @@ function ProposalItem({ proposal, busy, onAccept, onDiscard, extra }: {
   extra?: ReactNode
 }) {
   const { t, locale } = useI18n()
+  const { can } = useSession()
+  const canAccept = can(needs(proposal, true))
+  const canDiscard = can(needs(proposal, false))
   // Follows the language the agent picks, as the add-on wrote it for that language.
   const rationale = rationaleIn(proposal.rationale, locale)
   return (
@@ -60,10 +74,14 @@ function ProposalItem({ proposal, busy, onAccept, onDiscard, extra }: {
       <div className="proposal-what"><ProposalWhat proposal={proposal} /></div>
       {rationale && <p className="rationale">{rationale}</p>}
       {extra}
-      <div className="proposal-actions">
-        <button type="button" disabled={busy} onClick={onAccept}>{t('proposals.accept')}</button>
-        <button type="button" className="quiet" disabled={busy} onClick={onDiscard}>{t('proposals.discard')}</button>
-      </div>
+      {(canAccept || canDiscard) && (
+        <div className="proposal-actions">
+          {canAccept && <button type="button" disabled={busy} onClick={onAccept}>{t('proposals.accept')}</button>}
+          {canDiscard && (
+            <button type="button" className="quiet" disabled={busy} onClick={onDiscard}>{t('proposals.discard')}</button>
+          )}
+        </div>
+      )}
     </li>
   )
 }

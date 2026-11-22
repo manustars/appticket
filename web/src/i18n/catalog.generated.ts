@@ -15,6 +15,8 @@ export interface Messages {
   "desk.inbox": { plural: false; placeholders: never; tags: never }
   "desk.customers": { plural: false; placeholders: never; tags: never }
   "desk.services": { plural: false; placeholders: never; tags: never }
+  "desk.admin": { plural: false; placeholders: never; tags: never }
+  "desk.account": { plural: false; placeholders: never; tags: never }
   "desk.signOut": { plural: false; placeholders: never; tags: never }
   "action.save": { plural: false; placeholders: never; tags: never }
   "action.cancel": { plural: false; placeholders: never; tags: never }
@@ -34,6 +36,31 @@ export interface Messages {
   "priority.normal": { plural: false; placeholders: never; tags: never }
   "priority.high": { plural: false; placeholders: never; tags: never }
   "priority.urgent": { plural: false; placeholders: never; tags: never }
+  "role.administrator": { plural: false; placeholders: never; tags: never }
+  "permission.tickets.work": { plural: false; placeholders: never; tags: never }
+  "permissionHint.tickets.work": { plural: false; placeholders: never; tags: never }
+  "permission.tickets.reply": { plural: false; placeholders: never; tags: never }
+  "permissionHint.tickets.reply": { plural: false; placeholders: never; tags: never }
+  "permission.tickets.open": { plural: false; placeholders: never; tags: never }
+  "permissionHint.tickets.open": { plural: false; placeholders: never; tags: never }
+  "permission.tickets.assign": { plural: false; placeholders: never; tags: never }
+  "permissionHint.tickets.assign": { plural: false; placeholders: never; tags: never }
+  "permission.tickets.move": { plural: false; placeholders: never; tags: never }
+  "permissionHint.tickets.move": { plural: false; placeholders: never; tags: never }
+  "permission.inbox.triage": { plural: false; placeholders: never; tags: never }
+  "permissionHint.inbox.triage": { plural: false; placeholders: never; tags: never }
+  "permission.customers.manage": { plural: false; placeholders: never; tags: never }
+  "permissionHint.customers.manage": { plural: false; placeholders: never; tags: never }
+  "permission.catalog.manage": { plural: false; placeholders: never; tags: never }
+  "permissionHint.catalog.manage": { plural: false; placeholders: never; tags: never }
+  "permission.agents.manage": { plural: false; placeholders: never; tags: never }
+  "permissionHint.agents.manage": { plural: false; placeholders: never; tags: never }
+  "permission.roles.manage": { plural: false; placeholders: never; tags: never }
+  "permissionHint.roles.manage": { plural: false; placeholders: never; tags: never }
+  "permission.addons.manage": { plural: false; placeholders: never; tags: never }
+  "permissionHint.addons.manage": { plural: false; placeholders: never; tags: never }
+  "permission.mail.view": { plural: false; placeholders: never; tags: never }
+  "permissionHint.mail.view": { plural: false; placeholders: never; tags: never }
   "customer.helpDesk": { plural: false; placeholders: "name"; tags: never }
   "customer.choose": { plural: false; placeholders: never; tags: never }
   "customer.loading": { plural: false; placeholders: never; tags: never }
@@ -113,6 +140,7 @@ export interface Messages {
   "composer.draftSaving": { plural: false; placeholders: never; tags: never }
   "composer.draftSaved": { plural: false; placeholders: never; tags: never }
   "composer.draftNotSaved": { plural: false; placeholders: "error"; tags: never }
+  "composer.notAllowed": { plural: false; placeholders: never; tags: never }
   "move.to": { plural: false; placeholders: never; tags: never }
   "move.requesterBelongs": { plural: false; placeholders: "customer" | "email"; tags: never }
   "move.requesterToo": { plural: false; placeholders: never; tags: never }
@@ -228,6 +256,7 @@ export interface Messages {
   "service.noAssets": { plural: false; placeholders: never; tags: never }
   "service.linkAsset": { plural: false; placeholders: never; tags: never }
   "inbox.empty": { plural: false; placeholders: never; tags: never }
+  "inbox.readOnly": { plural: false; placeholders: never; tags: never }
   "inbox.noSubject": { plural: false; placeholders: never; tags: never }
   "inbox.goToTicket": { plural: false; placeholders: "number"; tags: never }
   "inbox.opened": { plural: false; placeholders: "number" | "subject"; tags: never }
@@ -259,4 +288,107 @@ export interface Messages {
   "proposals.reply": { plural: false; placeholders: never; tags: never }
   "proposals.replaceDraft": { plural: false; placeholders: "addon"; tags: never }
   "proposals.draftReady": { plural: false; placeholders: "addon"; tags: "strong" }
+  "account.title": { plural: false; placeholders: never; tags: never }
+  "account.name": { plural: false; placeholders: never; tags: never }
+  "account.email": { plural: false; placeholders: never; tags: never }
+  "account.role": { plural: false; placeholders: never; tags: never }
+  "account.changePassword": { plural: false; placeholders: never; tags: never }
+  "account.currentPassword": { plural: false; placeholders: never; tags: never }
+  "account.newPassword": { plural: false; placeholders: never; tags: never }
+  "account.repeatPassword": { plural: false; placeholders: never; tags: never }
+  "account.passwordHint": { plural: true; placeholders: "count"; tags: never }
+  "account.tooShort": { plural: true; placeholders: "count"; tags: never }
+  "account.mismatch": { plural: false; placeholders: never; tags: never }
+  "account.wrongCurrent": { plural: false; placeholders: never; tags: never }
+  "account.changed": { plural: false; placeholders: never; tags: never }
+  "account.submit": { plural: false; placeholders: never; tags: never }
+  "admin.title": { plural: false; placeholders: never; tags: never }
+  "admin.agents": { plural: false; placeholders: never; tags: never }
+  "admin.roles": { plural: false; placeholders: never; tags: never }
+  "admin.addons": { plural: false; placeholders: never; tags: never }
+  "admin.mail": { plural: false; placeholders: never; tags: never }
+  "admin.notAllowed": { plural: false; placeholders: never; tags: never }
+  "admin.refresh": { plural: false; placeholders: never; tags: never }
+  "agents.title": { plural: false; placeholders: never; tags: never }
+  "agents.name": { plural: false; placeholders: never; tags: never }
+  "agents.email": { plural: false; placeholders: never; tags: never }
+  "agents.emailPlaceholder": { plural: false; placeholders: never; tags: never }
+  "agents.role": { plural: false; placeholders: never; tags: never }
+  "agents.roleOf": { plural: false; placeholders: "name"; tags: never }
+  "agents.you": { plural: false; placeholders: never; tags: never }
+  "agents.deactivatedOn": { plural: false; placeholders: "date"; tags: never }
+  "agents.resetPassword": { plural: false; placeholders: never; tags: never }
+  "agents.deactivate": { plural: false; placeholders: never; tags: never }
+  "agents.reactivate": { plural: false; placeholders: never; tags: never }
+  "agents.confirmOwnRole": { plural: false; placeholders: never; tags: never }
+  "agents.confirmReset": { plural: false; placeholders: "name"; tags: never }
+  "agents.confirmDeactivate": { plural: false; placeholders: "name"; tags: never }
+  "agents.deactivated": { plural: true; placeholders: "count" | "name"; tags: never }
+  "agents.reactivated": { plural: false; placeholders: "name"; tags: never }
+  "agents.handOutHint": { plural: false; placeholders: never; tags: never }
+  "agents.add": { plural: false; placeholders: never; tags: never }
+  "agents.addSubmit": { plural: false; placeholders: never; tags: never }
+  "agents.addHint": { plural: false; placeholders: never; tags: never }
+  "agents.loadingRoles": { plural: false; placeholders: never; tags: never }
+  "agents.chooseRole": { plural: false; placeholders: never; tags: never }
+  "agents.defaultRole": { plural: false; placeholders: "name"; tags: never }
+  "agents.addedPassword": { plural: false; placeholders: "email" | "name"; tags: never }
+  "agents.resetDone": { plural: false; placeholders: "email" | "name"; tags: never }
+  "agents.shownOnce": { plural: false; placeholders: never; tags: never }
+  "agents.copy": { plural: false; placeholders: never; tags: never }
+  "agents.copied": { plural: false; placeholders: never; tags: never }
+  "agents.dismiss": { plural: false; placeholders: never; tags: never }
+  "roles.hint": { plural: false; placeholders: never; tags: never }
+  "roles.default": { plural: false; placeholders: never; tags: never }
+  "roles.agents": { plural: true; placeholders: "count"; tags: never }
+  "roles.everyPermission": { plural: false; placeholders: never; tags: never }
+  "roles.administratorHint": { plural: false; placeholders: never; tags: never }
+  "roles.notYours": { plural: false; placeholders: never; tags: never }
+  "roles.name": { plural: false; placeholders: never; tags: never }
+  "roles.namePlaceholder": { plural: false; placeholders: never; tags: never }
+  "roles.makeDefault": { plural: false; placeholders: never; tags: never }
+  "roles.remove": { plural: false; placeholders: never; tags: never }
+  "roles.confirmRemove": { plural: false; placeholders: "name"; tags: never }
+  "roles.defaultNotRemovable": { plural: false; placeholders: never; tags: never }
+  "roles.inUse": { plural: false; placeholders: never; tags: never }
+  "roles.add": { plural: false; placeholders: never; tags: never }
+  "roles.addSubmit": { plural: false; placeholders: never; tags: never }
+  "addons.title": { plural: false; placeholders: never; tags: never }
+  "addons.empty": { plural: false; placeholders: never; tags: never }
+  "addons.name": { plural: false; placeholders: never; tags: never }
+  "addons.events": { plural: false; placeholders: never; tags: never }
+  "addons.scopes": { plural: false; placeholders: never; tags: never }
+  "addons.pending": { plural: false; placeholders: never; tags: never }
+  "addons.failing": { plural: false; placeholders: never; tags: never }
+  "addons.switch": { plural: false; placeholders: never; tags: never }
+  "addons.switchNamed": { plural: false; placeholders: "name"; tags: never }
+  "addons.on": { plural: false; placeholders: never; tags: never }
+  "addons.off": { plural: false; placeholders: never; tags: never }
+  "addons.lastError": { plural: false; placeholders: "error"; tags: never }
+  "addons.register": { plural: false; placeholders: never; tags: "code" }
+  "mail.hint": { plural: false; placeholders: never; tags: never }
+  "mail.reading": { plural: false; placeholders: never; tags: never }
+  "mail.readingOff": { plural: false; placeholders: never; tags: never }
+  "mail.sending": { plural: false; placeholders: never; tags: never }
+  "mail.sendingOff": { plural: false; placeholders: never; tags: never }
+  "mail.server": { plural: false; placeholders: never; tags: never }
+  "mail.lastSuccess": { plural: false; placeholders: never; tags: never }
+  "mail.never": { plural: false; placeholders: never; tags: never }
+  "mail.lastError": { plural: false; placeholders: "date"; tags: never }
+  "mail.from": { plural: false; placeholders: never; tags: never }
+  "mail.noFrom": { plural: false; placeholders: never; tags: never }
+  "mail.outbox": { plural: false; placeholders: never; tags: never }
+  "mail.nothingWaiting": { plural: false; placeholders: never; tags: never }
+  "mail.waiting": { plural: true; placeholders: "count"; tags: never }
+  "mail.waitingSince": { plural: true; placeholders: "count" | "date"; tags: never }
+  "mail.failing": { plural: false; placeholders: never; tags: never }
+  "mail.ticket": { plural: false; placeholders: never; tags: never }
+  "mail.subject": { plural: false; placeholders: never; tags: never }
+  "mail.to": { plural: false; placeholders: never; tags: never }
+  "mail.attempts": { plural: false; placeholders: never; tags: never }
+  "mail.nextAttempt": { plural: false; placeholders: never; tags: never }
+  "mail.gaveUp": { plural: false; placeholders: never; tags: never }
+  "mailState.working": { plural: false; placeholders: never; tags: never }
+  "mailState.failing": { plural: false; placeholders: never; tags: never }
+  "mailState.idle": { plural: false; placeholders: never; tags: never }
 }

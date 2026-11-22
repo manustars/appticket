@@ -21,6 +21,7 @@ import {
   ticketsHref,
   type TicketFilters,
 } from './route'
+import { useSession } from './session'
 import { useLoad } from './useAction'
 
 /** How long typing pauses before the search is sent. */
@@ -39,15 +40,17 @@ export function Tickets({ filters, tickets, error, onSignedOut }: Props) {
   const { t } = useI18n()
   const filtered = ticketsHref(filters) !== ticketsHref({ ...defaultFilters, states: allStates })
   const [opening, setOpening] = useState(false)
+  // Opening tickets by hand is a permission of its own; reading the list is not.
+  const canOpen = useSession().can('tickets.open')
   return (
     <div className="tickets-screen">
       <div className="tickets-top">
         <TicketFilterBar filters={filters} onSignedOut={onSignedOut} />
-        {!opening && (
+        {canOpen && !opening && (
           <button type="button" className="new-ticket" onClick={() => setOpening(true)}>{t('tickets.new')}</button>
         )}
       </div>
-      {opening && (
+      {canOpen && opening && (
         // A customer picked in the filter is the likely one for the new ticket.
         <NewTicket customerId={filters.customer} onCancel={() => setOpening(false)} onSignedOut={onSignedOut} />
       )}

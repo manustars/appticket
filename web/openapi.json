@@ -7,7 +7,7 @@
       "name": "AGPL-3.0-only",
       "identifier": "AGPL-3.0-only"
     },
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "paths": {
     "/api/addon/customers": {
@@ -4699,12 +4699,17 @@
         "description": "A reply the outbox has not managed to send yet.",
         "required": [
           "subject",
-          "attempts"
+          "attempts",
+          "given_up"
         ],
         "properties": {
           "attempts": {
             "type": "integer",
             "format": "int32"
+          },
+          "given_up": {
+            "type": "boolean",
+            "description": "The outbox has stopped trying (crate::outbound::MAX_ATTEMPTS); the message stays unsent."
           },
           "last_error": {
             "type": [

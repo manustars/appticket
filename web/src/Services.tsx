@@ -17,6 +17,7 @@ import {
 import { useI18n } from './i18n/context'
 import { Problem } from './Problem'
 import { customerHref, go, serviceHref, servicesHref } from './route'
+import { useSession } from './session'
 import { useAction, useLoad } from './useAction'
 
 const loadServices = () => listServices()
@@ -25,6 +26,7 @@ const loadCustomers = () => listCustomers()
 export function Services({ onSignedOut }: { onSignedOut: () => void }) {
   const { t, formatNumber } = useI18n()
   const services = useLoad(loadServices, onSignedOut)
+  const canManage = useSession().can('catalog.manage')
   return (
     <div className="page">
       <h1>{t('services.title')}</h1>
@@ -53,7 +55,7 @@ export function Services({ onSignedOut }: { onSignedOut: () => void }) {
           </tbody>
         </table>
       )}
-      <AddService onSignedOut={onSignedOut} />
+      {canManage && <AddService onSignedOut={onSignedOut} />}
     </div>
   )
 }
@@ -96,6 +98,7 @@ function AddService({ onSignedOut }: { onSignedOut: () => void }) {
 
 export function ServicePage({ id, onSignedOut }: { id: string; onSignedOut: () => void }) {
   const { t, formatTime } = useI18n()
+  const canManage = useSession().can('catalog.manage')
   const load = useCallback(() => getService(id), [id])
   const service = useLoad(load, onSignedOut)
 
@@ -108,8 +111,9 @@ export function ServicePage({ id, onSignedOut }: { id: string; onSignedOut: () =
       </div>
     )
   }
-  // A retired service stays on its tickets but gets no new links.
-  const readOnly = Boolean(s.retired_at)
+  // A retired service stays on its tickets but gets no new links. Services are part of the
+  // catalog, changed by those who manage it.
+  const readOnly = Boolean(s.retired_at) || !canManage
   return (
     <div className="page">
       <a className="back" href={servicesHref}>{t('service.back')}</a>

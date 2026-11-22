@@ -21,6 +21,7 @@ import {
 import { useI18n } from './i18n/context'
 import { Problem } from './Problem'
 import { customerHref, customersHref, defaultFilters, go, serviceHref, ticketsHref } from './route'
+import { useSession } from './session'
 import { useAction, useLoad } from './useAction'
 
 /** Domains typed into one box, separated by spaces, commas or semicolons. */
@@ -32,6 +33,7 @@ const loadServices = () => listServices()
 export function Customers({ onSignedOut }: { onSignedOut: () => void }) {
   const { t, formatNumber } = useI18n()
   const customers = useLoad(loadAll, onSignedOut)
+  const canManage = useSession().can('customers.manage')
   return (
     <div className="page">
       <h1>{t('customers.title')}</h1>
@@ -62,7 +64,7 @@ export function Customers({ onSignedOut }: { onSignedOut: () => void }) {
           </tbody>
         </table>
       )}
-      <AddCustomer onSignedOut={onSignedOut} />
+      {canManage && <AddCustomer onSignedOut={onSignedOut} />}
     </div>
   )
 }
@@ -113,6 +115,7 @@ interface PageProps {
 
 export function CustomerPage({ id, onChanged, onSignedOut }: PageProps) {
   const { t, formatTime, formatNumber } = useI18n()
+  const { can } = useSession()
   const load = useCallback(() => getCustomer(id), [id])
   const customer = useLoad(load, onSignedOut)
   const { reload } = customer
@@ -130,8 +133,12 @@ export function CustomerPage({ id, onChanged, onSignedOut }: PageProps) {
       </div>
     )
   }
-  // An offboarded customer's history stays as it was: nothing on this page changes it.
-  const readOnly = Boolean(c.offboarded_at)
+  // An offboarded customer's history stays as it was: nothing on this page changes it. Otherwise
+  // the customer itself is changed by those who manage customers, its assets and the services it
+  // uses by those who manage the catalog.
+  const offboarded = Boolean(c.offboarded_at)
+  const readOnly = offboarded || !can('customers.manage')
+  const catalogReadOnly = offboarded || !can('catalog.manage')
   return (
     <div className="page">
       <a className="back" href={customersHref}>{t('customer.back')}</a>
@@ -149,8 +156,8 @@ export function CustomerPage({ id, onChanged, onSignedOut }: PageProps) {
       </dl>
       <Domains customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       <Requesters customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
-      <CustomerAssets customer={c} readOnly={readOnly} onSignedOut={onSignedOut} />
-      <CustomerServices customer={c} readOnly={readOnly} onSignedOut={onSignedOut} />
+      <CustomerAssets customer={c} readOnly={catalogReadOnly} onSignedOut={onSignedOut} />
+      <CustomerServices customer={c} readOnly={catalogReadOnly} onSignedOut={onSignedOut} />
       {!readOnly && <Offboard customer={c} onChanged={changed} onSignedOut={onSignedOut} />}
     </div>
   )

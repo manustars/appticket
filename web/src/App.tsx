@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { Account } from './Account'
+import { Admin } from './Admin'
 import {
   currentAgent,
   listInbox,
@@ -16,6 +18,8 @@ import { useI18n } from './i18n/context'
 import { LanguageSwitcher } from './i18n/LanguageSwitcher'
 import { Inbox } from './Inbox'
 import {
+  accountHref,
+  adminHref,
   customersHref,
   defaultFilters,
   go,
@@ -27,6 +31,7 @@ import {
   type TicketFilters,
 } from './route'
 import { ServicePage, Services } from './Services'
+import { adminPermissions, SessionContext, type Session } from './session'
 import { Tickets } from './Tickets'
 import { TicketView } from './TicketView'
 
@@ -45,8 +50,11 @@ function App() {
   if (unreachable) return <main className="center"><p className="error">{t('error.unreachable')}</p></main>
   if (agent === undefined) return null
   if (agent === null) return <SignIn onSignedIn={setAgent} />
-  return <Desk agent={agent} onSignedOut={signedOut} />
+  return <Desk agent={agent} onAgent={setAgent} onSignedOut={signedOut} />
 }
+
+/** The same agent with the same role, as far as the screen shows it. */
+const sameAgent = (a: Agent, b: Agent) => JSON.stringify(a) === JSON.stringify(b)
 
 function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
   const { t } = useI18n()
@@ -99,9 +107,27 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
   )
 }
 
-function Desk({ agent, onSignedOut }: { agent: Agent; onSignedOut: () => void }) {
+function Desk({ agent, onAgent, onSignedOut }: {
+  agent: Agent
+  /** The core answered with the agent again: their role may have changed meanwhile. */
+  onAgent: (agent: Agent) => void
+  onSignedOut: () => void
+}) {
   const { t, formatNumber } = useI18n()
   const route = useRoute()
+  // A change to the agent's role applies from their next request, so the screen asks again with
+  // every refresh, and at once after a change made here.
+  const refreshAgent = useCallback(async () => {
+    const now = await currentAgent()
+    if (now === null) onSignedOut()
+    else if (!sameAgent(now, agent)) onAgent(now)
+  }, [agent, onAgent, onSignedOut])
+  const session = useMemo<Session>(() => ({
+    agent,
+    can: (permission) => agent.permissions.includes(permission),
+    refresh: refreshAgent,
+  }), [agent, refreshAgent])
+  const { can } = session
   // The filters of the list last shown, kept while a ticket or another screen is open, so that the
   // way back finds the list as it was.
   const [filters, setFilters] = useState<TicketFilters>(
@@ -119,6 +145,7 @@ function Desk({ agent, onSignedOut }: { agent: Agent; onSignedOut: () => void })
 
   const refresh = useCallback(async () => {
     const mine = ++latest.current
+    void refreshAgent().catch(() => {})
     const [list, waiting] = await Promise.allSettled([listTickets(ticketQuery(filters)), listInbox()])
     if ([list, waiting].some((r) => r.status === 'rejected' && r.reason instanceof Unauthorized)) {
       onSignedOut()
@@ -140,7 +167,7 @@ function Desk({ agent, onSignedOut }: { agent: Agent; onSignedOut: () => void })
     } else {
       setInboxFailed(true)
     }
-  }, [filters, onSignedOut])
+  }, [filters, onSignedOut, refreshAgent])
 
   useEffect(() => {
     // Mail is read every few seconds, so the lists follow it.
@@ -164,47 +191,58 @@ function Desk({ agent, onSignedOut }: { agent: Agent; onSignedOut: () => void })
   const current = (s: typeof section) => (section === s ? 'current' : '')
 
   return (
-    <div className="desk">
-      <header>
-        <nav>
-          {/* The count is of the list as filtered, as the list itself shows it. */}
-          <button className={current('tickets')} onClick={() => go(listHref)}>
-            {t('desk.tickets')} {tickets && <span className="count">{formatNumber(tickets.length)}</span>}
-          </button>
-          <button className={current('inbox')} onClick={() => go(inboxHref)}>
-            {t('desk.inbox')} {inbox && <span className="count">{formatNumber(inbox.length)}</span>}
-          </button>
-          <button className={current('customers')} onClick={() => go(customersHref)}>
-            {t('desk.customers')}
-          </button>
-          <button className={current('services')} onClick={() => go(servicesHref)}>
-            {t('desk.services')}
-          </button>
-        </nav>
-        <span className="who">{agent.name}</span>
-        <LanguageSwitcher />
-        <button className="quiet" onClick={leave}>{t('desk.signOut')}</button>
-      </header>
-      <main>
-        {inboxFailed && <p className="error" role="alert">{t('error.loadFailed')}</p>}
-        {route.view === 'ticket' ? (
-          <TicketView key={route.number} number={route.number} backHref={listHref} onChanged={refresh}
-            onSignedOut={onSignedOut} />
-        ) : route.view === 'inbox' ? (
-          <Inbox messages={inbox} onChanged={refresh} onSignedOut={onSignedOut} />
-        ) : route.view === 'customers' ? (
-          <Customers onSignedOut={onSignedOut} />
-        ) : route.view === 'customer' ? (
-          <CustomerPage key={route.id} id={route.id} onChanged={refresh} onSignedOut={onSignedOut} />
-        ) : route.view === 'services' ? (
-          <Services onSignedOut={onSignedOut} />
-        ) : route.view === 'service' ? (
-          <ServicePage key={route.id} id={route.id} onSignedOut={onSignedOut} />
-        ) : (
-          <Tickets filters={route.filters} tickets={tickets} error={ticketsError} onSignedOut={onSignedOut} />
-        )}
-      </main>
-    </div>
+    <SessionContext value={session}>
+      <div className="desk">
+        <header>
+          <nav>
+            {/* The count is of the list as filtered, as the list itself shows it. */}
+            <button className={current('tickets')} onClick={() => go(listHref)}>
+              {t('desk.tickets')} {tickets && <span className="count">{formatNumber(tickets.length)}</span>}
+            </button>
+            <button className={current('inbox')} onClick={() => go(inboxHref)}>
+              {t('desk.inbox')} {inbox && <span className="count">{formatNumber(inbox.length)}</span>}
+            </button>
+            <button className={current('customers')} onClick={() => go(customersHref)}>
+              {t('desk.customers')}
+            </button>
+            <button className={current('services')} onClick={() => go(servicesHref)}>
+              {t('desk.services')}
+            </button>
+            {adminPermissions.some(can) && (
+              <button className={current('admin')} onClick={() => go(adminHref())}>
+                {t('desk.admin')}
+              </button>
+            )}
+          </nav>
+          <a className={`who ${current('account')}`} href={accountHref} title={t('desk.account')}>{agent.name}</a>
+          <LanguageSwitcher />
+          <button className="quiet" onClick={leave}>{t('desk.signOut')}</button>
+        </header>
+        <main>
+          {inboxFailed && <p className="error" role="alert">{t('error.loadFailed')}</p>}
+          {route.view === 'ticket' ? (
+            <TicketView key={route.number} number={route.number} backHref={listHref} onChanged={refresh}
+              onSignedOut={onSignedOut} />
+          ) : route.view === 'inbox' ? (
+            <Inbox messages={inbox} onChanged={refresh} onSignedOut={onSignedOut} />
+          ) : route.view === 'customers' ? (
+            <Customers onSignedOut={onSignedOut} />
+          ) : route.view === 'customer' ? (
+            <CustomerPage key={route.id} id={route.id} onChanged={refresh} onSignedOut={onSignedOut} />
+          ) : route.view === 'services' ? (
+            <Services onSignedOut={onSignedOut} />
+          ) : route.view === 'service' ? (
+            <ServicePage key={route.id} id={route.id} onSignedOut={onSignedOut} />
+          ) : route.view === 'admin' ? (
+            <Admin tab={route.tab} onSignedOut={onSignedOut} />
+          ) : route.view === 'account' ? (
+            <Account onSignedOut={onSignedOut} />
+          ) : (
+            <Tickets filters={route.filters} tickets={tickets} error={ticketsError} onSignedOut={onSignedOut} />
+          )}
+        </main>
+      </div>
+    </SessionContext>
   )
 }
 

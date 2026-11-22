@@ -19,6 +19,7 @@ import {
 import { useI18n } from './i18n/context'
 import { Problem } from './Problem'
 import { ticketHref } from './route'
+import { useSession } from './session'
 import { useAction, useLoad } from './useAction'
 
 interface Props {
@@ -33,11 +34,13 @@ const nothing = () => Promise.resolve([])
 
 export function TicketAssets({ ticket, onChanged, onSignedOut }: Props) {
   const { t } = useI18n()
-  const closed = ticket.state === 'closed'
+  // Changing the links is working the ticket.
+  const canWork = useSession().can('tickets.work')
+  const locked = ticket.state === 'closed' || !canWork
   const customerId = ticket.customer.id
   // Reloaded when the ticket moves to another customer.
   const load = useCallback(
-    (): Promise<Asset[]> => (closed ? nothing() : listCustomerAssets(customerId)), [closed, customerId])
+    (): Promise<Asset[]> => (locked ? nothing() : listCustomerAssets(customerId)), [locked, customerId])
   const options = useLoad(load, onSignedOut)
   const action = useAction(onSignedOut)
   const [chosen, setChosen] = useState('')
@@ -68,7 +71,7 @@ export function TicketAssets({ ticket, onChanged, onSignedOut }: Props) {
           {ticket.assets.map((a) => (
             <li key={a.id}>
               {a.name} <span className="muted">{a.kind}</span>
-              {!closed && (
+              {!locked && (
                 <button type="button" className="link danger" disabled={action.busy}
                   aria-label={t('links.unlinkNamed', { name: a.name })} onClick={() => unlink(a.id)}>
                   {t('action.unlink')}
@@ -78,7 +81,7 @@ export function TicketAssets({ ticket, onChanged, onSignedOut }: Props) {
           ))}
         </ul>
       )}
-      {!closed && (
+      {!locked && (
         <form className="inline-form" onSubmit={link}>
           <label>
             {t('links.addAsset', { customer: ticket.customer.name })}
@@ -101,10 +104,12 @@ export function TicketAssets({ ticket, onChanged, onSignedOut }: Props) {
 
 export function TicketServices({ ticket, onChanged, onSignedOut }: Props) {
   const { t } = useI18n()
-  const closed = ticket.state === 'closed'
+  // Changing the links is working the ticket.
+  const canWork = useSession().can('tickets.work')
+  const locked = ticket.state === 'closed' || !canWork
   const customerId = ticket.customer.id
   const load = useCallback(
-    (): Promise<Service[]> => (closed ? nothing() : listCustomerServices(customerId)), [closed, customerId])
+    (): Promise<Service[]> => (locked ? nothing() : listCustomerServices(customerId)), [locked, customerId])
   const options = useLoad(load, onSignedOut)
   const action = useAction(onSignedOut)
   const [chosen, setChosen] = useState('')
@@ -134,7 +139,7 @@ export function TicketServices({ ticket, onChanged, onSignedOut }: Props) {
           {ticket.services.map((s) => (
             <li key={s.id}>
               {s.name}
-              {!closed && (
+              {!locked && (
                 <button type="button" className="link danger" disabled={action.busy}
                   aria-label={t('links.unlinkNamed', { name: s.name })} onClick={() => unlink(s.id)}>
                   {t('action.unlink')}
@@ -144,7 +149,7 @@ export function TicketServices({ ticket, onChanged, onSignedOut }: Props) {
           ))}
         </ul>
       )}
-      {!closed && (
+      {!locked && (
         <form className="inline-form" onSubmit={link}>
           <label>
             {t('links.addService', { customer: ticket.customer.name })}
@@ -187,8 +192,9 @@ function Parent({ ticket, onChanged, onSignedOut }: Props) {
   const [number, setNumber] = useState('')
   const [invalid, setInvalid] = useState(false)
   const id = useId()
-  // Closed tickets are neither attached nor detached.
-  const closed = ticket.state === 'closed'
+  // Closed tickets are neither attached nor detached; nor is any ticket without working tickets.
+  const canWork = useSession().can('tickets.work')
+  const locked = ticket.state === 'closed' || !canWork
   const parent = ticket.parent
 
   function attach(event: FormEvent) {
@@ -216,7 +222,7 @@ function Parent({ ticket, onChanged, onSignedOut }: Props) {
         <ul className="items">
           <li>
             <RelatedLink ticket={parent} />
-            {!closed && (
+            {!locked && (
               <button type="button" className="link danger" disabled={action.busy} onClick={detach}>
                 {t('parent.detach')}
               </button>
@@ -226,7 +232,7 @@ function Parent({ ticket, onChanged, onSignedOut }: Props) {
       ) : (
         <p className="empty">{t('parent.none')}</p>
       )}
-      {!parent && !closed && (
+      {!parent && !locked && (
         <>
           <form className="inline-form" onSubmit={attach}>
             <label>
@@ -263,7 +269,11 @@ function Children({ ticket, onChanged, onSignedOut }: Props) {
   // What the last resolve did, kept after the children it resolved have changed state.
   const [done, setDone] = useState<ResolvedChildren | null>(null)
   const id = useId()
-  const pending = ticket.children.filter((c) => c.state === 'open' || c.state === 'waiting').length
+  const { can } = useSession()
+  // Resolving replies to each child's requester and changes the children's state.
+  const pending = can('tickets.work') && can('tickets.reply')
+    ? ticket.children.filter((c) => c.state === 'open' || c.state === 'waiting').length
+    : 0
 
   function submit(event: FormEvent) {
     event.preventDefault()

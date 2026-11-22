@@ -27,6 +27,12 @@ export type Route =
   | { view: 'customer'; id: string }
   | { view: 'services' }
   | { view: 'service'; id: string }
+  /** `tab` null: the first tab the agent may see. */
+  | { view: 'admin'; tab: AdminTab | null }
+  | { view: 'account' }
+
+export const adminTabs = ['agents', 'roles', 'addons', 'mail'] as const
+export type AdminTab = (typeof adminTabs)[number]
 
 export const ticketHref = (number: number) => `#/tickets/${number}`
 export const inboxHref = '#/inbox'
@@ -34,6 +40,8 @@ export const customersHref = '#/customers'
 export const customerHref = (id: string) => `#/customers/${encodeURIComponent(id)}`
 export const servicesHref = '#/services'
 export const serviceHref = (id: string) => `#/services/${encodeURIComponent(id)}`
+export const adminHref = (tab?: AdminTab) => (tab ? `#/admin/${tab}` : '#/admin')
+export const accountHref = '#/account'
 
 const sameStates = (a: TicketState[], b: TicketState[]) =>
   a.length === b.length && a.every((s) => b.includes(s))
@@ -79,6 +87,13 @@ export function parseRoute(hash: string): Route {
   if (hash === inboxHref) return { view: 'inbox' }
   if (hash === customersHref) return { view: 'customers' }
   if (hash === servicesHref) return { view: 'services' }
+  if (hash === accountHref) return { view: 'account' }
+  if (hash === adminHref()) return { view: 'admin', tab: null }
+  const admin = /^#\/admin\/([a-z]+)$/.exec(hash)
+  if (admin) {
+    const tab = adminTabs.find((t) => t === admin[1])
+    return { view: 'admin', tab: tab ?? null }
+  }
   const ticket = /^#\/tickets\/(\d+)$/.exec(hash)
   if (ticket) return { view: 'ticket', number: Number(ticket[1]) }
   const customer = /^#\/customers\/([^/?#]+)$/.exec(hash)

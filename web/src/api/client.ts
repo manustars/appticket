@@ -2,7 +2,10 @@
 import type { components } from './schema'
 
 type Schemas = components['schemas']
+export type Activity = Schemas['Activity']
+export type AddonRow = Schemas['AddonRow']
 export type Agent = Schemas['Agent']
+export type AgentAccount = Schemas['AgentAccount']
 export type AgentEntry = Schemas['AgentEntry']
 export type Asset = Schemas['Asset']
 export type CustomerDetail = Schemas['CustomerDetail']
@@ -10,11 +13,15 @@ export type CustomerEntry = Schemas['CustomerEntry']
 export type CustomerSummary = Schemas['CustomerSummary']
 export type Draft = Schemas['Draft']
 export type DraftMode = Schemas['DraftMode']
+export type FailingReply = Schemas['FailingReply']
 export type InboxMessage = Schemas['InboxMessage']
+export type MailState = Schemas['MailState']
 export type Moved = Schemas['Moved']
+export type Permission = Schemas['Permission']
 export type Priority = Schemas['Priority']
 export type Proposal = Schemas['ProposalView']
 export type ResolvedChildren = Schemas['ResolvedChildren']
+export type Role = Schemas['Role']
 export type Service = Schemas['Service']
 export type ServiceDetail = Schemas['ServiceDetail']
 export type TicketDetail = Schemas['TicketDetail']
@@ -84,6 +91,15 @@ export async function signIn(email: string, password: string): Promise<boolean> 
 
 export async function signOut(): Promise<void> {
   await call('DELETE', '/api/session')
+}
+
+/**
+ * Changes the signed-in agent's own password; their other sessions end. Refused (403) when the
+ * current password is wrong, and (409) when the new one is too short.
+ */
+export async function changeOwnPassword(currentPassword: string, newPassword: string): Promise<void> {
+  const request: Schemas['PasswordChange'] = { current_password: currentPassword, new_password: newPassword }
+  await call('PUT', '/api/session/password', request)
 }
 
 /** What the ticket list is narrowed to; a field left out or empty does not narrow it. */
@@ -356,4 +372,86 @@ export async function runOnAsset(serviceId: string, assetId: string): Promise<vo
 
 export async function stopRunningOnAsset(serviceId: string, assetId: string): Promise<void> {
   await call('DELETE', `${servicePath(serviceId)}/assets/${encodeURIComponent(assetId)}`)
+}
+
+// Administration: agents, roles, add-ons and the state of the mail. Each needs a permission.
+
+const adminAgentPath = (id: string) => `/api/admin/agents/${encodeURIComponent(id)}`
+const rolePath = (id: string) => `/api/admin/roles/${encodeURIComponent(id)}`
+
+/** Every permission the product has, in its order. */
+export function listPermissions(): Promise<Permission[]> {
+  return json('GET', '/api/admin/permissions')
+}
+
+/** Every agent, deactivated ones included. */
+export function listAgentAccounts(): Promise<AgentAccount[]> {
+  return json('GET', '/api/admin/agents')
+}
+
+/** Adds an agent with `roleId`, or the default role; the generated first password comes back once. */
+export function addAgent(email: string, name: string, roleId: string | null): Promise<Schemas['AddedAgent']> {
+  const request: Schemas['NewAgent'] = { email, name, role_id: roleId }
+  return json('POST', '/api/admin/agents', request)
+}
+
+export async function setAgentRole(id: string, roleId: string): Promise<void> {
+  const request: Schemas['RoleChange'] = { role_id: roleId }
+  await call('PUT', `${adminAgentPath(id)}/role`, request)
+}
+
+/** Gives the agent a generated password, returned once; their sessions end. */
+export async function resetAgentPassword(id: string): Promise<string> {
+  return (await json<Schemas['GeneratedPassword']>('POST', `${adminAgentPath(id)}/password`)).password
+}
+
+/** The agent can no longer sign in; returns how many tickets lost them as their assignee. */
+export async function deactivateAgent(id: string): Promise<number> {
+  return (await json<Schemas['Deactivated']>('POST', `${adminAgentPath(id)}/deactivate`)).unassigned
+}
+
+export async function reactivateAgent(id: string): Promise<void> {
+  await call('POST', `${adminAgentPath(id)}/reactivate`)
+}
+
+/** Every role, the Administrator first. */
+export function listRoles(): Promise<Role[]> {
+  return json('GET', '/api/admin/roles')
+}
+
+/** Adds a role; returns its id. */
+export async function createRole(name: string, permissions: Permission[]): Promise<string> {
+  const request: Schemas['RoleRequest'] = { name, permissions }
+  return (await json<Schemas['Created']>('POST', '/api/admin/roles', request)).id
+}
+
+/** Renames a role and sets its permissions. */
+export async function updateRole(id: string, name: string, permissions: Permission[]): Promise<void> {
+  const request: Schemas['RoleRequest'] = { name, permissions }
+  await call('PUT', rolePath(id), request)
+}
+
+/** Refused for the default role and for a role some agent has. */
+export async function removeRole(id: string): Promise<void> {
+  await call('DELETE', rolePath(id))
+}
+
+/** New agents get this role when none is named. */
+export async function makeDefaultRole(id: string): Promise<void> {
+  await call('POST', `${rolePath(id)}/default`)
+}
+
+export function listAddons(): Promise<AddonRow[]> {
+  return json('GET', '/api/admin/addons')
+}
+
+/** Switches an add-on on or off. */
+export async function setAddonEnabled(name: string, enabled: boolean): Promise<void> {
+  const request: Schemas['Switch'] = { enabled }
+  await call('PUT', `/api/admin/addons/${encodeURIComponent(name)}/enabled`, request)
+}
+
+/** How reading and sending mail went lately, and what waits in the outbox. */
+export function getMailState(): Promise<MailState> {
+  return json('GET', '/api/admin/mail')
 }

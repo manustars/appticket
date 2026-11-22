@@ -1275,6 +1275,8 @@ export interface components {
         FailingReply: {
             /** Format: int32 */
             attempts: number;
+            /** @description The outbox has stopped trying (crate::outbound::MAX_ATTEMPTS); the message stays unsent. */
+            given_up: boolean;
             last_error?: string | null;
             /** Format: date-time */
             next_attempt_at?: string | null;

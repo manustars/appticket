@@ -11,6 +11,7 @@ import {
 import { useI18n } from './i18n/context'
 import { InboxProposal, type TriageDone } from './Proposals'
 import { ticketHref } from './route'
+import { useSession } from './session'
 
 interface Props {
   messages: InboxMessage[] | null
@@ -29,6 +30,7 @@ export function Inbox({ messages, onChanged, onSignedOut }: Props) {
   const { t, errorText } = useI18n()
   const [customers, setCustomers] = useState<CustomerEntry[] | null>(null)
   const [error, setError] = useState<unknown>(null)
+  const canSort = useSession().can('inbox.triage')
   // What the last action did, kept after its message has left the inbox.
   const [done, setDone] = useState<Done | null>(null)
 
@@ -62,12 +64,14 @@ export function Inbox({ messages, onChanged, onSignedOut }: Props) {
           )}
         </p>
       )}
+      {!canSort && messages.length > 0 && <p className="notice">{t('inbox.readOnly')}</p>}
       {messages.length === 0 ? (
         <p className="empty">{t('inbox.empty')}</p>
       ) : (
         <ul className="inbox">
           {messages.map((m) => (
-            <InboxItem key={m.id} message={m} customers={customers} onSignedOut={onSignedOut} onChanged={onChanged}
+            <InboxItem key={m.id} message={m} customers={customers} canSort={canSort}
+              onSignedOut={onSignedOut} onChanged={onChanged}
               onDone={(result) => { setDone(result); onChanged() }} />
           ))}
         </ul>
@@ -80,9 +84,11 @@ type Action = 'open' | 'attach' | null
 /** Typed into the ticket number: not a number a ticket can have. */
 const notATicket = Symbol('not a ticket number')
 
-function InboxItem({ message: m, customers, onDone, onChanged, onSignedOut }: {
+function InboxItem({ message: m, customers, canSort, onDone, onChanged, onSignedOut }: {
   message: InboxMessage
   customers: CustomerEntry[] | null
+  /** Whether the agent's role allows sorting the inbox; without it the message is only read. */
+  canSort: boolean
   onDone: (result: Done) => void
   /** Something changed that leaves the message in the inbox, such as a discarded proposal. */
   onChanged: () => void
@@ -172,15 +178,17 @@ function InboxItem({ message: m, customers, onDone, onChanged, onSignedOut }: {
           onDone={(done) => onDone(triageDone(done))} />
       )}
 
-      <div className="actions">
-        <button type="button" className={action === 'open' ? 'current' : ''} aria-expanded={action === 'open'}
-          disabled={busy} onClick={() => choose(action === 'open' ? null : 'open')}>{t('inbox.open')}</button>
-        <button type="button" className={action === 'attach' ? 'current' : ''} aria-expanded={action === 'attach'}
-          disabled={busy} onClick={() => choose(action === 'attach' ? null : 'attach')}>{t('inbox.attach')}</button>
-        <button type="button" className="danger" disabled={busy} onClick={discard}>{t('inbox.discard')}</button>
-      </div>
+      {canSort && (
+        <div className="actions">
+          <button type="button" className={action === 'open' ? 'current' : ''} aria-expanded={action === 'open'}
+            disabled={busy} onClick={() => choose(action === 'open' ? null : 'open')}>{t('inbox.open')}</button>
+          <button type="button" className={action === 'attach' ? 'current' : ''} aria-expanded={action === 'attach'}
+            disabled={busy} onClick={() => choose(action === 'attach' ? null : 'attach')}>{t('inbox.attach')}</button>
+          <button type="button" className="danger" disabled={busy} onClick={discard}>{t('inbox.discard')}</button>
+        </div>
+      )}
 
-      {action === 'open' && (
+      {canSort && action === 'open' && (
         <form className="action-form" onSubmit={open}>
           <label htmlFor={`${id}-customer`}>{t('inbox.customer')}</label>
           <select id={`${id}-customer`} required value={customerId} disabled={!customers}
@@ -194,7 +202,7 @@ function InboxItem({ message: m, customers, onDone, onChanged, onSignedOut }: {
           <button type="button" className="quiet" onClick={() => choose(null)}>{t('inbox.cancel')}</button>
         </form>
       )}
-      {action === 'attach' && (
+      {canSort && action === 'attach' && (
         <form className="action-form" onSubmit={attach}>
           <label htmlFor={`${id}-ticket`}>{t('inbox.ticketNumber')}</label>
           <input id={`${id}-ticket`} type="number" min={1} step={1} required inputMode="numeric"
