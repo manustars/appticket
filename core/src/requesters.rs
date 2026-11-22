@@ -367,6 +367,52 @@ mod tests {
         ));
     }
 
+    /// An address taken from the requester no longer receives their replies.
+    #[sqlx::test]
+    async fn a_removed_address_gets_no_more_replies(db: PgPool) {
+        use crate::tickets::{self, TicketState};
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        add_address(&db, ada, "ada@home.test").await.unwrap();
+        add_address(&db, ada, "ada@studio.test").await.unwrap();
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        let n = testing::ticket(&db, brightfield, Some(ada), "h@home.test").await;
+        testing::message_from(&db, n, "ada@home.test").await;
+        tickets::reply(
+            &db,
+            &testing::sender(),
+            n,
+            agent,
+            "Hi.",
+            None,
+            TicketState::Waiting,
+        )
+        .await
+        .unwrap();
+
+        remove_address(&db, ada, "ada@home.test").await.unwrap();
+        let requester = tickets::detail(&db, n).await.unwrap().requester.unwrap();
+        assert_eq!(requester.reply_to, None);
+        assert_eq!(
+            requester.last_picked, None,
+            "the last reply went to a removed address"
+        );
+        assert_eq!(requester.email, "ada@brightfield.test");
+        assert!(matches!(
+            tickets::reply(
+                &db,
+                &testing::sender(),
+                n,
+                agent,
+                "Hi.",
+                None,
+                TicketState::Waiting
+            )
+            .await,
+            Err(Error::Rule(_))
+        ));
+    }
+
     /// The database keeps the rules even when the code above is bypassed.
     #[sqlx::test]
     async fn the_database_keeps_the_address_rules(db: PgPool) {
