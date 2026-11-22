@@ -20,6 +20,19 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
 ## People
 
 - Every requester belongs to exactly one customer.
+- A requester has one or more e-mail addresses, and each address belongs to exactly one requester;
+  a message from any of them identifies the requester. A reply goes to the address the requester
+  last wrote from on that ticket; on a ticket they have not written on, the agent picks one.
+- A requester also has a name, phone numbers, a job title and internal notes; agents who manage
+  customers correct them.
+- A requester who leaves their customer is departed: their history stays, no ticket is opened for
+  them, and every message from their addresses, replies included, waits in the inbox. The assets
+  they hold lose their holder, and they stop being a key requester. A departed requester can come
+  back.
+- A customer has any number of key requesters, who are requesters of that customer and not
+  departed. They receive the messages about failures that affect their customer (those sent when
+  the children of a parent ticket are resolved) and the replies on its tickets that have no
+  requester.
 - Requesters have no access to the product for now: they only exchange messages.
 - Agents are always staff of the help desk and see every customer.
 - A ticket has at most one assignee; other agents can still write messages and notes on it.
@@ -33,6 +46,8 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
   tickets by hand, assign tickets to others, move tickets to another customer, sort the inbox,
   manage customers, manage the catalog (assets and services), manage agents, manage roles, manage
   add-ons, and view the state of the mail. The help desk defines the roles.
+- Managing customers covers their sites, external references, requesters and key requesters;
+  managing the catalog covers asset kinds and every detail of an asset, its holder included.
 - Permissions apply to every customer.
 - The Administrator role exists exactly once and allows everything, including permissions later
   versions add; it is never changed or removed.
@@ -63,8 +78,10 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
 
 - Every ticket belongs to exactly one customer; the requester is optional (planned work, monitoring
   alerts) and, when present, belongs to that customer.
-- Only a ticket with a requester can be replied to. A reply goes through the outbox and moves the
-  ticket to the state the agent picks: waiting, unless the agent says otherwise.
+- A reply on a ticket with a requester goes to the requester; on a ticket without one, it goes to
+  every key requester of the ticket's customer, and the ticket stays without a requester. A ticket
+  with neither cannot be replied to. A reply goes through the outbox and moves the ticket to the
+  state the agent picks: waiting, unless the agent says otherwise.
 - What an agent writes on a ticket and has not sent yet is kept as their draft, one per agent and
   ticket, until they send it as a reply or a note; it survives leaving the page.
 - A closed ticket changes no more: no state change, no assignee change, no reply, no message
@@ -91,8 +108,21 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
 - Exactly one customer is the help desk's own organization, and it uses every service the help desk
   provides.
 - Customers are offboarded, never deleted. Every message from an offboarded customer's requesters
-  or domains, replies included, waits in the inbox.
+  or domains, replies included, waits in the inbox. An offboarded customer can come back, with its
+  history, requesters and assets.
+- A customer has a name, and optionally a legal name, a tax identifier with its country, an
+  address, a phone number, a website and internal notes.
+- A customer has any number of external references, each made of a system and a name in it; a
+  customer can have several in the same system, and each one names exactly one customer.
+- A customer has any number of sites, each with a name and an address.
 - An asset belongs to exactly one customer.
+- Every asset has an asset kind from the list the help desk manages; the kind says whether its
+  assets move with their holder or stay at their site. An add-on that supplies assets maps its own
+  kinds to that list in its configuration.
+- An asset has optionally a serial number, a site of its customer and a holder, who is a requester
+  of its customer and not departed. An asset whose kind moves with its holder is at its holder's
+  site while it has a holder, and at its own site otherwise; any other asset is at its own site.
+- A ticket is at the sites of the assets it links; when it links none, at its requester's site.
 - A service is linked explicitly to the customers that use it, and optionally to the assets it runs
   on, which can belong to any customer.
 - Assets and services are retired, never deleted: a retired one stays on the tickets that refer to

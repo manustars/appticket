@@ -16,8 +16,9 @@
 - **Domain language** is in `GLOSSARY.md`, the rules the schema must respect in
   `docs/domain-rules.md`, and decisions with their reasons in `docs/adr/`. Use the glossary's terms
   in code, docs and UI source strings.
-- **A ticket refers to assets in a thin catalog the core owns;** add-ons can feed and enrich it
-  ([ADR 0002](docs/adr/0002-core-owns-a-thin-asset-catalog.md)). What the help desk provides to
+- **A ticket refers to assets in a catalog the core owns,** with what the help desk needs without
+  add-ons (kind, site, holder); add-ons feed it and supply live details
+  ([ADR 0002](docs/adr/0002-core-owns-the-asset-catalog.md)). What the help desk provides to
   several customers is a service, not an asset
   ([ADR 0003](docs/adr/0003-services-are-not-assets.md)).
 - **Stack:** Rust core (Tokio, axum, sqlx) on PostgreSQL, TypeScript UI (React, Vite) over a REST

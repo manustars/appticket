@@ -25,11 +25,32 @@ _Avoid_: Client, account, tenant
 
 **Offboarded**:
 Said of a customer the help desk no longer serves; its history stays, but it gets no new tickets.
+An offboarded customer can come back.
 _Avoid_: Dismissed, deleted, archived, inactive
+
+**Site**:
+A place where a customer works, such as an office or a data centre; a customer has any number of
+them, and its requesters and assets can each be at one.
+_Avoid_: Location, branch, office
+
+**External reference**:
+A name another system uses for a customer, such as a group in a monitoring tool; a customer can
+have several in the same system, and each one names exactly one customer.
+_Avoid_: External ID, external code, mapping
 
 **Requester**:
 A person, belonging to exactly one customer, who asks the help desk for assistance.
 _Avoid_: User, contact, end user
+
+**Key requester**:
+A requester who speaks for their customer: they receive the announcements about failures that
+affect it and the replies on its tickets that have no requester; a customer has any number of them.
+_Avoid_: Contact, point of contact, referent
+
+**Departed**:
+Said of a requester who no longer works for their customer; their history stays, but no new
+ticket is opened for them and their messages wait in the inbox. A departed requester can come back.
+_Avoid_: Deleted, offboarded, deactivated, inactive
 
 **Agent**:
 A member of the help desk's staff who handles tickets.
@@ -105,6 +126,16 @@ _Avoid_: Comment, internal message
 Something a customer owns that the help desk looks after, such as a computer, an application or a
 licence.
 _Avoid_: Configuration item, CI, device, item, target
+
+**Asset kind**:
+A category of assets the help desk defines, such as laptop, desktop or printer; it says whether
+its assets move with their holder or stay at their site.
+_Avoid_: Type, category, class
+
+**Holder**:
+The requester an asset has been given to, such as the person who uses a laptop; an asset has at
+most one, of its own customer.
+_Avoid_: Assignee, owner, user
 
 **Service**:
 Something the help desk provides to one or more customers, such as hosted mail, backup or
