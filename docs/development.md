@@ -66,6 +66,9 @@ HD_AGENT_PASSWORD=dev-password cargo run -p hd-core -- agent add marco@northgate
 cargo run -p hd-core -- serve
 ```
 
+As the first agent, Marco gets the Administrator role (`hd role list` and `hd agent --help` show
+the rest; passwords need at least 12 characters).
+
 In another terminal, the UI:
 
 ```sh

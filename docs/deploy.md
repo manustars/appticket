@@ -110,13 +110,38 @@ The `hd` command runs inside the core's pod, with the pod's database settings:
 # The help desk's own organization, with its mail domain.
 kubectl -n helpdesk exec deploy/hd-core -- hd customer add "Northgate Studio" --help-desk --domain example.com
 
-# The first agent; a password is generated and printed once.
+# The first agent, who gets the Administrator role; a password is generated and printed once.
 kubectl -n helpdesk exec deploy/hd-core -- hd agent add agent@example.com --name "Ada Agent"
 ```
 
 To choose the password yourself instead, pass it through the environment of the command:
 `kubectl -n helpdesk exec deploy/hd-core -- env HD_AGENT_PASSWORD='…' hd agent add …`. Customers,
-their domains, assets and services can then be managed in the UI.
+their domains, assets and services can then be managed in the UI, and so can agents and roles,
+under Administration.
+
+### Agents and roles
+
+Every agent has one role ([ADR 0007](adr/0007-roles-and-permissions.md)). The first agent gets
+the built-in Administrator role, which allows everything; later agents get the default role
+(`Agent`, which works tickets and sorts the inbox) unless `--role` names another. Roles and
+agents are managed in the UI by agents whose role allows it, or with the `hd` command:
+
+```sh
+hd role permissions                      # the permissions a role can hold
+hd role list
+hd role add "Front desk" --permission inbox.triage --permission tickets.work
+hd role default "Front desk"             # the role new agents get
+hd agent add bo@example.com --name "Bo" --role "Front desk"
+hd agent set-role bo@example.com Administrator
+hd agent set-password bo@example.com     # generated and printed, or from HD_AGENT_PASSWORD
+hd agent deactivate bo@example.com       # cannot sign in; their open tickets are unassigned
+hd agent reactivate bo@example.com
+```
+
+The core always keeps one active agent with the Administrator role. If nobody who can still sign
+in has it, `hd agent set-role <e-mail> Administrator` gives it back; the command line is not
+limited by roles. Upgrading from a version without roles makes every existing agent an
+Administrator.
 
 ## The Assistant
 

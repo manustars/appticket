@@ -8,7 +8,7 @@
 core:
   image:
     # A released version, or `latest` while trying things out.
-    tag: "0.1.0"
+    tag: "0.2.0"
   mail:
     # The test mail server below provides the mailbox; the replies come from its address.
     pollSeconds: 5
