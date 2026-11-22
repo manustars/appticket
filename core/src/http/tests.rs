@@ -734,3 +734,57 @@ async fn a_requester_with_several_addresses_through_the_api(db: PgPool) {
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{json}");
 }
+
+/// Sites are kept on the customer: added, corrected and retired, never deleted.
+#[sqlx::test]
+async fn sites_are_managed_through_the_api(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let (status, created) = api
+        .call(
+            "POST",
+            &format!("/api/customers/{brightfield}/sites"),
+            Some(serde_json::json!({ "name": "Head office", "address": "Via Roma 1, Torino" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let site = created["id"].as_str().unwrap().to_owned();
+
+    let (status, json) = api
+        .call(
+            "POST",
+            &format!("/api/customers/{brightfield}/sites"),
+            Some(serde_json::json!({ "name": "head office", "address": "Corso Francia 9" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+
+    let (status, _) = api
+        .call(
+            "PUT",
+            &format!("/api/sites/{site}"),
+            Some(
+                serde_json::json!({ "name": "Head office", "address": "Via Roma 1, 10121 Torino" }),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = api
+        .call("POST", &format!("/api/sites/{site}/retire"), None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let customer = api.get(&format!("/api/customers/{brightfield}")).await;
+    let sites = customer["sites"].as_array().unwrap();
+    assert_eq!(sites.len(), 1);
+    assert_eq!(sites[0]["address"], "Via Roma 1, 10121 Torino");
+    assert!(sites[0]["retired_at"].is_string());
+    let (status, _) = api
+        .call("DELETE", &format!("/api/sites/{site}"), None)
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::METHOD_NOT_ALLOWED,
+        "sites are never deleted"
+    );
+}

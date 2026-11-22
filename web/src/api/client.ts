@@ -305,6 +305,25 @@ export async function addRequester(id: string, email: string, name: string | nul
   await call('POST', `${customerPath(id)}/requesters`, request)
 }
 
+/** Adds a site to the customer; refused when an active site of theirs has the name. */
+export async function addSite(customer: string, name: string, address: string): Promise<void> {
+  const request: Schemas['SiteFields'] = { name, address }
+  await call('POST', `${customerPath(customer)}/sites`, request)
+}
+
+const sitePath = (id: string) => `/api/sites/${encodeURIComponent(id)}`
+
+/** Corrects a site's name and address. */
+export async function updateSite(id: string, name: string, address: string): Promise<void> {
+  const request: Schemas['SiteFields'] = { name, address }
+  await call('PUT', sitePath(id), request)
+}
+
+/** Retires a site for good: it stays visible but gets no new requesters or assets. */
+export async function retireSite(id: string): Promise<void> {
+  await call('POST', `${sitePath(id)}/retire`)
+}
+
 const requesterPath = (id: string) => `/api/requesters/${encodeURIComponent(id)}`
 
 /** Gives the requester one more address; refused when it belongs to a requester already. */

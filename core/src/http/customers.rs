@@ -1,4 +1,5 @@
-//! Managing customers, their mail domains and their requesters with their addresses.
+//! Managing customers, their mail domains, their sites and their requesters with their
+//! addresses.
 
 use axum::{
     Json,
@@ -15,6 +16,7 @@ use crate::auth::SignedIn;
 use crate::customers::{self, CustomerDetail, CustomerSummary};
 use crate::requesters;
 use crate::roles::Permission;
+use crate::sites;
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -25,6 +27,9 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(add_requester))
         .routes(routes!(add_address))
         .routes(routes!(remove_address))
+        .routes(routes!(add_site))
+        .routes(routes!(update_site))
+        .routes(routes!(retire_site))
         .routes(routes!(offboard))
 }
 
@@ -202,6 +207,66 @@ async fn remove_address(
 ) -> Result<StatusCode, ApiError> {
     agent.grant.require(Permission::ManageCustomers)?;
     requesters::remove_address(&state.db, id, &address).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct SiteFields {
+    name: String,
+    /// The site's postal address.
+    address: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct CreatedSite {
+    id: Uuid,
+}
+
+/// Adds a site to the customer; the customer's active sites have different names.
+#[utoipa::path(post, path = "/api/customers/{id}/sites", tag = "customers",
+    params(("id" = Uuid, Path, description = "The customer")), request_body = SiteFields,
+    responses((status = CREATED, body = CreatedSite), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn add_site(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+    Json(new): Json<SiteFields>,
+) -> Result<(StatusCode, Json<CreatedSite>), ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
+    let site = sites::create(&state.db, id, &new.name, &new.address).await?;
+    Ok((StatusCode::CREATED, Json(CreatedSite { id: site })))
+}
+
+/// Corrects a site's name and address; a retired site too.
+#[utoipa::path(put, path = "/api/sites/{id}", tag = "customers",
+    params(("id" = Uuid, Path, description = "The site")), request_body = SiteFields,
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn update_site(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+    Json(fields): Json<SiteFields>,
+) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
+    sites::update(&state.db, id, &fields.name, &fields.address).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Retires a site: it stays visible but gets no new requesters or assets. Sites are never
+/// deleted, and a retired one does not come back.
+#[utoipa::path(post, path = "/api/sites/{id}/retire", tag = "customers",
+    params(("id" = Uuid, Path, description = "The site")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn retire_site(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
+    sites::retire(&state.db, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

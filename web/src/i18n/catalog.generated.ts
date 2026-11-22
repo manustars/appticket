@@ -221,6 +221,18 @@ export interface Messages {
   "customer.offboardHint": { plural: false; placeholders: never; tags: never }
   "customer.offboard": { plural: false; placeholders: never; tags: never }
   "customer.confirmOffboard": { plural: false; placeholders: "name"; tags: never }
+  "sites.title": { plural: false; placeholders: never; tags: never }
+  "sites.hint": { plural: false; placeholders: never; tags: never }
+  "sites.empty": { plural: false; placeholders: never; tags: never }
+  "sites.name": { plural: false; placeholders: never; tags: never }
+  "sites.address": { plural: false; placeholders: never; tags: never }
+  "sites.addressPlaceholder": { plural: false; placeholders: never; tags: never }
+  "sites.add": { plural: false; placeholders: never; tags: never }
+  "sites.editNamed": { plural: false; placeholders: "name"; tags: never }
+  "sites.retire": { plural: false; placeholders: never; tags: never }
+  "sites.retireNamed": { plural: false; placeholders: "name"; tags: never }
+  "sites.retired": { plural: false; placeholders: "date"; tags: never }
+  "sites.confirmRetire": { plural: false; placeholders: "name"; tags: never }
   "assets.title": { plural: false; placeholders: never; tags: never }
   "assets.empty": { plural: false; placeholders: never; tags: never }
   "assets.kind": { plural: false; placeholders: never; tags: never }

@@ -1922,6 +1922,75 @@
         }
       }
     },
+    "/api/customers/{id}/sites": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Adds a site to the customer; the customer's active sites have different names.",
+        "operationId": "add_site",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiteFields"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedSite"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/health": {
       "get": {
         "tags": [
@@ -2952,6 +3021,118 @@
             }
           },
           "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sites/{id}": {
+      "put": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Corrects a site's name and address; a retired site too.",
+        "operationId": "update_site",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The site",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiteFields"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sites/{id}/retire": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Retires a site: it stays visible but gets no new requesters or assets. Sites are never\ndeleted, and a retired one does not come back.",
+        "operationId": "retire_site",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The site",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4625,6 +4806,18 @@
           }
         }
       },
+      "CreatedSite": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "CustomerChange": {
         "type": "object",
         "required": [
@@ -4650,7 +4843,8 @@
           {
             "type": "object",
             "required": [
-              "requester_list"
+              "requester_list",
+              "sites"
             ],
             "properties": {
               "requester_list": {
@@ -4658,6 +4852,13 @@
                 "items": {
                   "$ref": "#/components/schemas/RequesterEntry"
                 }
+              },
+              "sites": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Site"
+                },
+                "description": "The customer's sites, active ones first."
               }
             }
           }
@@ -5886,6 +6087,50 @@
             "type": "string"
           },
           "password": {
+            "type": "string"
+          }
+        }
+      },
+      "Site": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "retired_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the site was retired: it stays visible but gets no new requesters or assets."
+          }
+        }
+      },
+      "SiteFields": {
+        "type": "object",
+        "required": [
+          "name",
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The site's postal address."
+          },
+          "name": {
             "type": "string"
           }
         }

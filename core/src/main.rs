@@ -24,6 +24,7 @@ mod parents;
 mod proposals;
 mod requesters;
 mod roles;
+mod sites;
 #[cfg(test)]
 mod testing;
 mod tickets;

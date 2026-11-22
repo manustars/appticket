@@ -28,6 +28,8 @@ pub struct CustomerDetail {
     #[serde(flatten)]
     pub summary: CustomerSummary,
     pub requester_list: Vec<RequesterEntry>,
+    /// The customer's sites, active ones first.
+    pub sites: Vec<crate::sites::Site>,
 }
 
 #[derive(Serialize, ToSchema, sqlx::FromRow)]
@@ -78,6 +80,7 @@ pub async fn detail(db: &PgPool, id: Uuid) -> Result<CustomerDetail> {
     Ok(CustomerDetail {
         summary,
         requester_list,
+        sites: crate::sites::of(db, id).await?,
     })
 }
 
@@ -131,7 +134,7 @@ async fn add_domain_in(
 }
 
 /// A customer that exists and is not offboarded, locked.
-async fn lock_active(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<bool> {
+pub(crate) async fn lock_active(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<bool> {
     let row: Option<(bool, bool)> = sqlx::query_as(
         "SELECT offboarded_at IS NOT NULL, is_help_desk FROM customers WHERE id = $1 FOR UPDATE",
     )

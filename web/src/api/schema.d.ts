@@ -543,6 +543,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/customers/{id}/sites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Adds a site to the customer; the customer's active sites have different names. */
+        post: operations["add_site"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -821,6 +838,43 @@ export interface paths {
         /** Changes the signed-in agent's password; their other sessions end. */
         put: operations["change_password"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sites/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Corrects a site's name and address; a retired site too. */
+        put: operations["update_site"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sites/{id}/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retires a site: it stays visible but gets no new requesters or assets. Sites are never
+         *     deleted, and a retired one does not come back.
+         */
+        post: operations["retire_site"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1242,6 +1296,10 @@ export interface components {
             /** Format: uuid */
             id: string;
         };
+        CreatedSite: {
+            /** Format: uuid */
+            id: string;
+        };
         CustomerChange: {
             /** Format: uuid */
             customer_id: string;
@@ -1253,6 +1311,8 @@ export interface components {
         };
         CustomerDetail: components["schemas"]["CustomerSummary"] & {
             requester_list: components["schemas"]["RequesterEntry"][];
+            /** @description The customer's sites, active ones first. */
+            sites: components["schemas"]["Site"][];
         };
         CustomerEntry: {
             /** Format: uuid */
@@ -1683,6 +1743,22 @@ export interface components {
         SignInRequest: {
             email: string;
             password: string;
+        };
+        Site: {
+            address: string;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /**
+             * Format: date-time
+             * @description When the site was retired: it stays visible but gets no new requesters or assets.
+             */
+            retired_at?: string | null;
+        };
+        SiteFields: {
+            /** @description The site's postal address. */
+            address: string;
+            name: string;
         };
         StateChange: {
             state: components["schemas"]["TicketState"];
@@ -3314,6 +3390,56 @@ export interface operations {
             };
         };
     };
+    add_site: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SiteFields"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedSite"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     health: {
         parameters: {
             query?: never;
@@ -4159,6 +4285,98 @@ export interface operations {
                 };
             };
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    update_site: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SiteFields"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    retire_site: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

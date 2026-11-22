@@ -3,6 +3,7 @@ import {
   addDomain,
   addRequester,
   addRequesterAddress,
+  addSite,
   createAsset,
   createCustomer,
   getCustomer,
@@ -15,9 +16,11 @@ import {
   removeRequesterAddress,
   renameCustomer,
   retireAsset,
+  retireSite,
   startUsingService,
   stopUsingService,
   updateAsset,
+  updateSite,
   type CustomerDetail,
 } from './api/client'
 import { useI18n } from './i18n/context'
@@ -157,6 +160,7 @@ export function CustomerPage({ id, onChanged, onSignedOut }: PageProps) {
         <div><dt>{t('customer.requesters')}</dt><dd>{formatNumber(c.requesters)}</dd></div>
       </dl>
       <Domains customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
+      <Sites customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       <Requesters customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       <CustomerAssets customer={c} readOnly={catalogReadOnly} onSignedOut={onSignedOut} />
       <CustomerServices customer={c} readOnly={catalogReadOnly} onSignedOut={onSignedOut} />
@@ -262,6 +266,128 @@ function Domains({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
             <input value={domain} placeholder={t('customer.domainPlaceholder')} onChange={(e) => setDomain(e.target.value)} />
           </label>
           <button type="submit" disabled={action.busy || !domain.trim()}>{t('customer.addDomain')}</button>
+        </form>
+      )}
+      <Problem error={action.error} />
+    </section>
+  )
+}
+
+function Sites({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
+  const { t, formatTime } = useI18n()
+  const action = useAction(onSignedOut)
+  // The site being edited, with what is typed for it.
+  const [editing, setEditing] = useState<{ id: string; name: string; address: string } | null>(null)
+  const [name, setName] = useState('')
+  const [address, setAddress] = useState('')
+  const id = useId()
+
+  function add(event: FormEvent) {
+    event.preventDefault()
+    if (!name.trim() || !address.trim()) return
+    void action.run(() => addSite(c.id, name.trim(), address.trim())).then(async (ok) => {
+      if (!ok) return
+      setName('')
+      setAddress('')
+      await onChanged()
+    })
+  }
+
+  function save(event: FormEvent) {
+    event.preventDefault()
+    if (!editing || !editing.name.trim() || !editing.address.trim()) return
+    void action.run(() => updateSite(editing.id, editing.name.trim(), editing.address.trim())).then(async (ok) => {
+      if (!ok) return
+      setEditing(null)
+      await onChanged()
+    })
+  }
+
+  function retire(siteId: string, siteName: string) {
+    if (!window.confirm(t('sites.confirmRetire', { name: siteName }))) return
+    void action.run(() => retireSite(siteId)).then(async (ok) => { if (ok) await onChanged() })
+  }
+
+  return (
+    <section className="panel" aria-labelledby={`${id}-title`}>
+      <h2 id={`${id}-title`}>{t('sites.title')}</h2>
+      <p className="hint">{t('sites.hint')}</p>
+      {c.sites.length === 0 ? (
+        <p className="empty">{t('sites.empty')}</p>
+      ) : (
+        // The row being edited submits the form below by its id, so that the table sits in no form.
+        <table className="data">
+          <thead>
+            <tr>
+              <th>{t('sites.name')}</th><th>{t('sites.address')}</th>
+              <th><span className="visually-hidden">{t('table.actions')}</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {c.sites.map((s) => editing?.id === s.id ? (
+              // Its own key: reusing the shown row would turn the clicked Edit button into Save.
+              <tr key={`${s.id}-edit`}>
+                <td>
+                  <input form={`${id}-edit`} aria-label={t('sites.name')} required value={editing.name}
+                    onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+                </td>
+                <td>
+                  <input form={`${id}-edit`} aria-label={t('sites.address')} required value={editing.address}
+                    onChange={(e) => setEditing({ ...editing, address: e.target.value })} />
+                </td>
+                <td className="row-actions">
+                  <button type="submit" form={`${id}-edit`} disabled={action.busy}>{t('action.save')}</button>
+                  <button type="button" className="quiet" onClick={() => { setEditing(null); action.clear() }}>
+                    {t('action.cancel')}
+                  </button>
+                </td>
+              </tr>
+            ) : (
+              <tr key={s.id} className={s.retired_at ? 'retired' : ''}>
+                <td>
+                  {s.name}
+                  {s.retired_at && (
+                    <> <span className="marker retired">{t('sites.retired', { date: formatTime(s.retired_at) })}</span></>
+                  )}
+                </td>
+                <td>{s.address}</td>
+                <td className="row-actions">
+                  {!readOnly && (
+                    <>
+                      {/* A retired site can still be corrected; retiring is for good. */}
+                      <button type="button" className="link" disabled={action.busy}
+                        aria-label={t('sites.editNamed', { name: s.name })}
+                        onClick={() => { setEditing({ id: s.id, name: s.name, address: s.address }); action.clear() }}>
+                        {t('action.edit')}
+                      </button>
+                      {!s.retired_at && (
+                        <button type="button" className="link danger" disabled={action.busy}
+                          aria-label={t('sites.retireNamed', { name: s.name })}
+                          onClick={() => retire(s.id, s.name)}>
+                          {t('sites.retire')}
+                        </button>
+                      )}
+                    </>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {editing && <form id={`${id}-edit`} onSubmit={save} />}
+      {!readOnly && (
+        <form className="inline-form" onSubmit={add}>
+          <label>
+            {t('sites.name')}
+            <input required value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label>
+            {t('sites.address')}
+            <input required value={address} placeholder={t('sites.addressPlaceholder')}
+              onChange={(e) => setAddress(e.target.value)} />
+          </label>
+          <button type="submit" disabled={action.busy || !name.trim() || !address.trim()}>{t('sites.add')}</button>
         </form>
       )}
       <Problem error={action.error} />
