@@ -744,7 +744,7 @@ async fn sites_are_managed_through_the_api(db: PgPool) {
         .call(
             "POST",
             &format!("/api/customers/{brightfield}/sites"),
-            Some(serde_json::json!({ "name": "Head office", "address": "Via Roma 1, Torino" })),
+            Some(serde_json::json!({ "name": "Head office", "address": "Via dei Tigli 1, Valfiorita" })),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
@@ -754,7 +754,7 @@ async fn sites_are_managed_through_the_api(db: PgPool) {
         .call(
             "POST",
             &format!("/api/customers/{brightfield}/sites"),
-            Some(serde_json::json!({ "name": "head office", "address": "Corso Francia 9" })),
+            Some(serde_json::json!({ "name": "head office", "address": "Corso dei Mulini 9" })),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{json}");
@@ -764,7 +764,7 @@ async fn sites_are_managed_through_the_api(db: PgPool) {
             "PUT",
             &format!("/api/sites/{site}"),
             Some(
-                serde_json::json!({ "name": "Head office", "address": "Via Roma 1, 10121 Torino" }),
+                serde_json::json!({ "name": "Head office", "address": "Via dei Tigli 1A, Valfiorita" }),
             ),
         )
         .await;
@@ -777,7 +777,7 @@ async fn sites_are_managed_through_the_api(db: PgPool) {
     let customer = api.get(&format!("/api/customers/{brightfield}")).await;
     let sites = customer["sites"].as_array().unwrap();
     assert_eq!(sites.len(), 1);
-    assert_eq!(sites[0]["address"], "Via Roma 1, 10121 Torino");
+    assert_eq!(sites[0]["address"], "Via dei Tigli 1A, Valfiorita");
     assert!(sites[0]["retired_at"].is_string());
     let (status, _) = api
         .call("DELETE", &format!("/api/sites/{site}"), None)

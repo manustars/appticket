@@ -255,7 +255,7 @@ async fn update_site(
 }
 
 /// Retires a site: it stays visible but gets no new requesters or assets. Sites are never
-/// deleted, and a retired one does not come back.
+/// deleted.
 #[utoipa::path(post, path = "/api/sites/{id}/retire", tag = "customers",
     params(("id" = Uuid, Path, description = "The site")),
     responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),

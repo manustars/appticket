@@ -872,7 +872,7 @@ export interface paths {
         put?: never;
         /**
          * Retires a site: it stays visible but gets no new requesters or assets. Sites are never
-         *     deleted, and a retired one does not come back.
+         *     deleted.
          */
         post: operations["retire_site"];
         delete?: never;

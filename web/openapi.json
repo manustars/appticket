@@ -3107,7 +3107,7 @@
         "tags": [
           "customers"
         ],
-        "summary": "Retires a site: it stays visible but gets no new requesters or assets. Sites are never\ndeleted, and a retired one does not come back.",
+        "summary": "Retires a site: it stays visible but gets no new requesters or assets. Sites are never\ndeleted.",
         "operationId": "retire_site",
         "parameters": [
           {

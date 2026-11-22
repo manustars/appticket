@@ -4,8 +4,9 @@
 CREATE TABLE sites (
     id           uuid PRIMARY KEY,
     customer_id  uuid NOT NULL REFERENCES customers (id),
-    name         text NOT NULL CHECK (name = btrim(name) AND name <> ''),
-    address      text NOT NULL CHECK (btrim(address) <> ''),
+    -- Trimmed and not blank: no white space, line ends included, at either end.
+    name         text NOT NULL CHECK (name ~ '^\S(.*\S)?$'),
+    address      text NOT NULL CHECK (address ~ '^\S(.*\S)?$'),
     created_at   timestamptz NOT NULL DEFAULT now(),
     -- A retired site stays visible but gets no new requesters or assets.
     retired_at   timestamptz,

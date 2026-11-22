@@ -319,7 +319,7 @@ export async function updateSite(id: string, name: string, address: string): Pro
   await call('PUT', sitePath(id), request)
 }
 
-/** Retires a site for good: it stays visible but gets no new requesters or assets. */
+/** Retires a site: it stays visible but gets no new requesters or assets. */
 export async function retireSite(id: string): Promise<void> {
   await call('POST', `${sitePath(id)}/retire`)
 }

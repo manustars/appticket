@@ -54,7 +54,7 @@ async fn lock(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<(Uuid, boo
     Ok((customer, retired))
 }
 
-/// Retires a site: it stays visible but gets no new requesters or assets. It cannot come back.
+/// Retires a site: it stays visible but gets no new requesters or assets.
 pub async fn retire(db: &PgPool, id: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
     let (_, retired) = lock(&mut tx, id).await?;
@@ -142,12 +142,22 @@ mod tests {
     async fn a_customer_has_sites(db: PgPool) {
         let brightfield = testing::customer(&db, "Brightfield").await;
         let harbor = testing::customer(&db, "Harbor Lane").await;
-        create(&db, brightfield, " Head office ", "Via Roma 1, Torino")
-            .await
-            .unwrap();
-        create(&db, brightfield, "Warehouse", "Strada del Porto 4, Genova")
-            .await
-            .unwrap();
+        create(
+            &db,
+            brightfield,
+            " Head office ",
+            "Via dei Tigli 1, Valfiorita",
+        )
+        .await
+        .unwrap();
+        create(
+            &db,
+            brightfield,
+            "Warehouse",
+            "Strada delle Gru 4, Portoalto",
+        )
+        .await
+        .unwrap();
 
         let sites = of(&db, brightfield).await.unwrap();
         let names: Vec<(&str, &str)> = sites
@@ -157,8 +167,8 @@ mod tests {
         assert_eq!(
             names,
             [
-                ("Head office", "Via Roma 1, Torino"),
-                ("Warehouse", "Strada del Porto 4, Genova")
+                ("Head office", "Via dei Tigli 1, Valfiorita"),
+                ("Warehouse", "Strada delle Gru 4, Portoalto")
             ]
         );
         assert!(of(&db, harbor).await.unwrap().is_empty());
@@ -168,11 +178,16 @@ mod tests {
     async fn a_site_needs_a_name_and_an_address_and_its_own_name(db: PgPool) {
         let brightfield = testing::customer(&db, "Brightfield").await;
         let harbor = testing::customer(&db, "Harbor Lane").await;
-        create(&db, brightfield, "Head office", "Via Roma 1, Torino")
-            .await
-            .unwrap();
+        create(
+            &db,
+            brightfield,
+            "Head office",
+            "Via dei Tigli 1, Valfiorita",
+        )
+        .await
+        .unwrap();
 
-        for (name, address) in [(" ", "Via Roma 1"), ("Lab", "  ")] {
+        for (name, address) in [(" ", "Via dei Tigli 1"), ("Lab", "  ")] {
             assert!(
                 matches!(
                     create(&db, brightfield, name, address).await,
@@ -182,12 +197,12 @@ mod tests {
             );
         }
         let Err(Error::Rule(why)) =
-            create(&db, brightfield, "HEAD OFFICE", "Corso Francia 9").await
+            create(&db, brightfield, "HEAD OFFICE", "Corso dei Mulini 9").await
         else {
             panic!("a second active site with the same name was accepted");
         };
         assert!(why.contains("Head office"), "{why}");
-        create(&db, harbor, "Head office", "Molo Vecchio 2, Genova")
+        create(&db, harbor, "Head office", "Molo delle Reti 2, Portoalto")
             .await
             .unwrap();
     }
@@ -195,23 +210,23 @@ mod tests {
     #[sqlx::test]
     async fn a_site_is_corrected(db: PgPool) {
         let brightfield = testing::customer(&db, "Brightfield").await;
-        let head = create(&db, brightfield, "Head office", "Via Roma 1")
+        let head = create(&db, brightfield, "Head office", "Via dei Tigli 1")
             .await
             .unwrap();
-        create(&db, brightfield, "Warehouse", "Strada del Porto 4")
+        create(&db, brightfield, "Warehouse", "Strada delle Gru 4")
             .await
             .unwrap();
 
-        update(&db, head, "Head Office", " Via Roma 1, 10121 Torino ")
+        update(&db, head, "Head Office", " Via dei Tigli 1A, Valfiorita ")
             .await
             .unwrap();
         let site = &of(&db, brightfield).await.unwrap()[0];
         assert_eq!(
             (site.name.as_str(), site.address.as_str()),
-            ("Head Office", "Via Roma 1, 10121 Torino")
+            ("Head Office", "Via dei Tigli 1A, Valfiorita")
         );
         assert!(matches!(
-            update(&db, head, "warehouse", "Via Roma 1").await,
+            update(&db, head, "warehouse", "Via dei Tigli 1").await,
             Err(Error::Rule(_))
         ));
         assert!(matches!(
@@ -219,7 +234,7 @@ mod tests {
             Err(Error::Rule(_))
         ));
         assert!(matches!(
-            update(&db, Uuid::new_v4(), "Lab", "Via Po 3").await,
+            update(&db, Uuid::new_v4(), "Lab", "Via del Glicine 3").await,
             Err(Error::NotFound(_))
         ));
     }
@@ -227,16 +242,16 @@ mod tests {
     #[sqlx::test]
     async fn a_retired_site_stays_and_frees_its_name(db: PgPool) {
         let brightfield = testing::customer(&db, "Brightfield").await;
-        let old = create(&db, brightfield, "Head office", "Via Roma 1")
+        let old = create(&db, brightfield, "Head office", "Via dei Tigli 1")
             .await
             .unwrap();
-        create(&db, brightfield, "Warehouse", "Strada del Porto 4")
+        create(&db, brightfield, "Warehouse", "Strada delle Gru 4")
             .await
             .unwrap();
 
         retire(&db, old).await.unwrap();
         assert!(matches!(retire(&db, old).await, Err(Error::Rule(_))));
-        let new = create(&db, brightfield, "Head office", "Corso Francia 9")
+        let new = create(&db, brightfield, "Head office", "Corso dei Mulini 9")
             .await
             .unwrap();
         let sites = of(&db, brightfield).await.unwrap();
@@ -248,7 +263,7 @@ mod tests {
         assert_eq!(listed[2], (old, true), "retired sites stay, last");
 
         // A retired site can still be corrected, even under a name an active site now has.
-        update(&db, old, "Head office", "Via Roma 1, 10121 Torino")
+        update(&db, old, "Head office", "Via dei Tigli 1A, Valfiorita")
             .await
             .unwrap();
         assert!(matches!(
@@ -262,21 +277,24 @@ mod tests {
         let brightfield = crate::customers::create(&db, "Brightfield", &[])
             .await
             .unwrap();
-        let head = create(&db, brightfield, "Head office", "Via Roma 1")
+        let head = create(&db, brightfield, "Head office", "Via dei Tigli 1")
             .await
             .unwrap();
         crate::customers::offboard(&db, brightfield).await.unwrap();
 
         assert!(matches!(
-            create(&db, brightfield, "Lab", "Via Po 3").await,
+            create(&db, brightfield, "Lab", "Via del Glicine 3").await,
             Err(Error::Rule(_))
         ));
         assert!(matches!(
-            update(&db, head, "Head office", "Via Roma 2").await,
+            update(&db, head, "Head office", "Via dei Tigli 2").await,
             Err(Error::Rule(_))
         ));
         assert!(matches!(retire(&db, head).await, Err(Error::Rule(_))));
-        assert_eq!(of(&db, brightfield).await.unwrap()[0].address, "Via Roma 1");
+        assert_eq!(
+            of(&db, brightfield).await.unwrap()[0].address,
+            "Via dei Tigli 1"
+        );
     }
 
     /// The database keeps the rules even when the code above is bypassed.
@@ -297,12 +315,29 @@ mod tests {
                 .await
             }
         };
-        assert!(insert("Head office", "Via Roma 1").await.is_ok());
-        assert!(insert("", "Via Po 3").await.is_err(), "no name");
-        assert!(insert(" Lab", "Via Po 3").await.is_err(), "untrimmed name");
+        assert!(insert("Head office", "Via dei Tigli 1").await.is_ok());
+        assert!(insert("", "Via del Glicine 3").await.is_err(), "no name");
+        assert!(
+            insert(" Lab", "Via del Glicine 3").await.is_err(),
+            "untrimmed name"
+        );
         assert!(insert("Lab", " ").await.is_err(), "no address");
         assert!(
-            insert("HEAD OFFICE", "Corso Francia 9").await.is_err(),
+            insert("\t", "Via del Glicine 3").await.is_err(),
+            "a blank name"
+        );
+        assert!(
+            insert("Lab", "Via del Glicine 3\n").await.is_err(),
+            "an untrimmed address"
+        );
+        assert!(
+            insert("Lab", "Via del Glicine 3\nPiano terra")
+                .await
+                .is_ok(),
+            "an address on two lines"
+        );
+        assert!(
+            insert("HEAD OFFICE", "Corso dei Mulini 9").await.is_err(),
             "same active name"
         );
         sqlx::query("UPDATE sites SET retired_at = now() WHERE name = 'Head office'")
@@ -310,7 +345,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            insert("Head office", "Corso Francia 9").await.is_ok(),
+            insert("Head office", "Corso dei Mulini 9").await.is_ok(),
             "freed by retiring"
         );
     }
