@@ -33,6 +33,9 @@
 - **Agents have one role each;** the product defines the permissions, the help desk the roles,
   and every request that changes something checks its permission
   ([ADR 0007](docs/adr/0007-roles-and-permissions.md)).
+- **Installs** use the Helm chart or Compose, with the database standalone (the default),
+  through CloudNativePG (chart only) or external
+  ([ADR 0009](docs/adr/0009-two-ways-to-install-three-ways-to-get-the-database.md)).
 - **Local development** runs PostgreSQL and a test mail server (GreenMail) in containers with
   Podman. Agents sign in with e-mail and password managed by the core; OpenID Connect and LDAP
   are planned, with the identity provider authenticating and the product authorizing
