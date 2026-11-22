@@ -301,6 +301,8 @@ pub struct FailingReply {
     to_address: Option<String>,
     subject: String,
     attempts: i32,
+    /// The outbox has stopped trying (crate::outbound::MAX_ATTEMPTS); the message stays unsent.
+    given_up: bool,
     last_error: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     next_attempt_at: Option<OffsetDateTime>,
@@ -344,11 +346,12 @@ async fn mail_state(
     .await?;
     let failing = sqlx::query_as(
         "SELECT t.number AS ticket_number, m.to_address, m.subject, m.send_attempts AS attempts,
-                m.last_error, m.next_attempt_at
+                m.send_attempts >= $1 AS given_up, m.last_error, m.next_attempt_at
          FROM messages m LEFT JOIN tickets t ON t.id = m.ticket_id
          WHERE m.direction = 'outbound' AND m.sent_at IS NULL AND m.send_attempts > 0
          ORDER BY m.send_attempts DESC, m.created_at LIMIT 50",
     )
+    .bind(crate::outbound::MAX_ATTEMPTS)
     .fetch_all(&state.db)
     .await?;
     Ok(Json(MailState {

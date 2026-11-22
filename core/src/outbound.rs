@@ -120,7 +120,7 @@ pub async fn deliver(
     status: crate::mail_status::Tracker,
 ) {
     loop {
-        match deliver_due(&db, &transport).await {
+        match deliver_due_tracked(&db, &transport, Some(&status)).await {
             Ok(0) => {}
             Ok(n) => {
                 tracing::info!(messages = n, "sent mail");
@@ -151,7 +151,17 @@ struct Queued {
 
 /// Sends every due message, one transaction each, so that several cores can share the outbox.
 /// Returns how many were sent.
+#[cfg(test)]
 pub async fn deliver_due(db: &PgPool, transport: &Transport) -> anyhow::Result<usize> {
+    deliver_due_tracked(db, transport, None).await
+}
+
+/// Like [`deliver_due`], recording each message that could not be sent in `status`.
+async fn deliver_due_tracked(
+    db: &PgPool,
+    transport: &Transport,
+    status: Option<&crate::mail_status::Tracker>,
+) -> anyhow::Result<usize> {
     let mut sent = 0;
     loop {
         let mut tx = db.begin().await?;
@@ -194,6 +204,9 @@ pub async fn deliver_due(db: &PgPool, transport: &Transport) -> anyhow::Result<u
             Err(error) => {
                 let attempts = queued.send_attempts + 1;
                 tracing::warn!(message = %queued.id, attempts, error = format!("{error:#}"), "could not send a message");
+                if let Some(status) = status {
+                    status.failed(&error);
+                }
                 sqlx::query(
                     "UPDATE messages SET send_attempts = $2, last_error = $3,
                             next_attempt_at = now() + make_interval(secs => $4)
@@ -337,7 +350,17 @@ mod tests {
         .unwrap();
         // Nothing listens on port 9 of this machine.
         let broken = transport("smtp://127.0.0.1:9", None).unwrap();
-        assert_eq!(deliver_due(&db, &broken).await.unwrap(), 0);
+        let status = tracker("smtp://127.0.0.1:9").unwrap();
+        assert_eq!(
+            deliver_due_tracked(&db, &broken, Some(&status))
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(
+            status.snapshot().last_error.is_some(),
+            "the failure is recorded"
+        );
         let (attempts, error, later): (i32, Option<String>, bool) = sqlx::query_as(
             "SELECT send_attempts, last_error, next_attempt_at > now() FROM messages
              WHERE direction = 'outbound' AND sent_at IS NULL",
