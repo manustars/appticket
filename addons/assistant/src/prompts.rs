@@ -77,6 +77,8 @@ the agent signs it.
 comma and the body then continues in lowercase: \"Buongiorno Ada,\" then \"grazie per la \
 segnalazione…\", not \"Grazie per la segnalazione…\". Other languages follow their own \
 conventions.
+   - Write as the help desk, in the first person plural (in Italian \"ci indichi\", \
+\"verificheremo\", never \"mi indichi\"), and end every question with a question mark.
    - Keep the body short: two to five sentences.
    - Be polite and plain. Acknowledge the request and say what the help desk will look into.
    - Ask for the one or two details the agent needs to make progress, unless the messages \
@@ -459,6 +461,8 @@ mod tests {
              lowercase: \"Buongiorno Ada,\" then \"grazie per la segnalazione…\", not \"Grazie per \
              la segnalazione…\"",
             "Other languages follow their own conventions",
+            "Write as the help desk, in the first person plural (in Italian \"ci indichi\", \
+             \"verificheremo\", never \"mi indichi\"), and end every question with a question mark",
         ] {
             assert!(
                 ticket.contains(wanted),
