@@ -159,6 +159,30 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   desk's own organization never stops.
 - The links of a closed ticket do not change.
 
+## Add-ons
+
+- An add-on changes only what it is the source of: the assets it supplied (their name, kind,
+  serial number and site, and retiring them when they leave its system), never a holder, an asset
+  entered by hand or one another add-on supplied. Customers and requesters supplied by add-ons
+  will follow the same rule.
+- An asset has at most one source and can be linked to other add-ons, which only supply live
+  details and links. An add-on that finds an asset matching one it would supply (same name or
+  serial number) proposes the link instead of creating it; accepting needs managing the catalog,
+  and a discarded link lets the add-on create its own asset.
+- Agents who manage customers set a customer's external references in an add-on's system,
+  choosing from the names the add-on lists; the add-on only reads them. A name maps its subgroups
+  too, unless a subgroup is mapped to another customer. Anything of the external system that maps
+  to no customer, or to two, is not imported and is listed in the add-on's state.
+- The live details of an asset come from each add-on it is linked to, when the asset is shown;
+  when an add-on does not answer in time they are unavailable, and nothing else changes.
+- An add-on allowed to work tickets opens tickets without a requester for a customer, with a
+  priority, assets and services; it adds notes to any ticket and resolves the tickets it opened.
+  It never replies and changes nothing else on tickets.
+- An alert opens a ticket of the customer of the asset it is about, only when the monitoring
+  add-on's rules say so, and at most one ticket per problem of the monitoring system. When the
+  problem recovers, the add-on adds a note and resolves the ticket only if no agent has worked on
+  it (no assignee, no reply or note by an agent), unless its rule says otherwise.
+
 ## Assistant
 
 - It proposes on inbox messages (open a ticket for a customer, attach to a ticket, discard) and on

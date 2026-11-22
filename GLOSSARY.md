@@ -132,6 +132,16 @@ Something a customer owns that the help desk looks after, such as a computer, an
 licence.
 _Avoid_: Configuration item, CI, device, item, target
 
+**Source**:
+The add-on an asset comes from; only its source changes what it supplied, while other add-ons
+linked to the asset only show their live details.
+_Avoid_: Origin, owner, provider
+
+**Alert**:
+A problem that a monitoring add-on reports on an asset; it opens a ticket of the asset's customer
+when that add-on's rules say so.
+_Avoid_: Alarm, event, incident, notification
+
 **Asset kind**:
 A category of assets the help desk defines, such as laptop, desktop or printer; it says whether
 its assets move with their holder or stay at their site.

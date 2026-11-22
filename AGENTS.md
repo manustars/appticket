@@ -28,7 +28,9 @@
   actions through the core's API, reads with a short timeout; no message broker
   ([ADR 0005](docs/adr/0005-add-on-communication.md)).
 - **Add-ons** live in `addons/` (the Assistant: [ADR 0006](docs/adr/0006-assistant.md)) and are
-  built on the Rust SDK in `sdk/rust`; their contract with the core is `sdk/README.md`. The
+  built on the Rust SDK in `sdk/rust`; their contract with the core is `sdk/README.md`.
+  Monitoring add-ons open tickets by explicit rules, while the Assistant only proposes
+  ([ADR 0010](docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md)). The
   workspace has several binaries: run the core with `cargo run -p hd-core -- …`.
 - **Agents have one role each;** the product defines the permissions, the help desk the roles,
   and every request that changes something checks its permission
