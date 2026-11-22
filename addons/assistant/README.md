@@ -42,12 +42,16 @@ up in a draft reply.
 A draft reply is written as a letter the agent only has to check and sign:
 - natural wording in the requester's language, never a word-by-word rendering of English;
 - the formal register (in Italian, "Lei") unless the requester wrote informally;
-- a greeting with the requester's name when the ticket has one ("Buongiorno Ada,"), otherwise a
-  neutral one;
+- a greeting with the requester's first name when the ticket has one ("Buongiorno Ada,"; the
+  model is given only the first word of the name), otherwise a neutral one;
 - the body in short paragraphs, and a closing on its own line ("Cordiali saluti");
-- no signature: the agent signs it.
+- no signature: the agent signs it;
+- questions only about what is missing, never about what the requester already said, and no guessed
+  causes: the agent finds the cause.
 
 Neither drafts nor rationales mention the short references the model works with (C1, A1, S1).
+Rationales describe the message or ticket ("Ada non può lavorare…"), never what the Assistant does
+("Imposto alta…").
 For the priority, a workaround that works, such as the same thing working from the office, means
 normal unless something else raises it.
 
@@ -79,6 +83,7 @@ Environment variables, also read from a `.env` file in the working directory or 
 | `HD_ASSISTANT_API_KEY` | | The service's key; required by the hosted providers. |
 | `HD_ASSISTANT_MODEL_EFFORT` | `medium` | `anthropic` only: how much the model thinks before answering (`low` to `max`); set it empty to send none, for models that do not take it. |
 | `HD_ASSISTANT_MODEL_CONCURRENCY` | 1 for `ollama` and `openai-compatible`, 4 otherwise | At most this many model calls at the same time. Self-hosted servers often run on a single GPU, perhaps shared with other work, so they get one call at a time; events wait their turn in the order they came. |
+| `HD_ASSISTANT_THINKING` | not sent | `openai-compatible` only: `off` asks the model not to think before answering, `on` asks it to, sent as `chat_template_kwargs.enable_thinking` (honoured by vLLM and SGLang servers with a template such as Qwen's). Unset leaves it to the server. Thinking off answers in a fraction of the time; whether the proposals stay as good is for each help desk to judge. |
 | `HD_ASSISTANT_AZURE_API_VERSION` | the v1 API | `azure-openai` only: a dated `api-version` (`2024-08-01-preview` or later, for structured outputs) to use the deployments path instead of Azure's v1 API. |
 | `HD_ASSISTANT_LOG` | `info` | A `tracing` filter. |
 

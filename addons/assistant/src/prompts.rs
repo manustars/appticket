@@ -74,8 +74,11 @@ short paragraphs separated by a blank line, a blank line, and a closing formula 
 (in Italian \"Cordiali saluti\"). Nothing after the closing: no signature and no name, since \
 the agent signs it.
    - Keep the body short: two to five sentences.
-   - Be polite and plain. Acknowledge the request; ask for the specific information that is \
-missing, or say what the help desk will look into.
+   - Be polite and plain. Acknowledge the request and say what the help desk will look into.
+   - Ask only for what is missing. Never ask about something the messages already say: if the \
+requester wrote that nobody receives mail, do not ask whether all mailboxes are affected.
+   - Do not guess or state causes (in Italian: non ipotizzare cause), not even as a likely \
+explanation; the agent finds the cause.
    - Never invent facts: no diagnosis stated as certain, and no names, times, prices, ticket \
 states or actions that the ticket does not support. Never promise a fix, a deadline or a visit.
    - Use null when no reply is needed, for example when the latest message only says thank you.
@@ -169,8 +172,11 @@ pub fn system(base: &str, languages: &[String]) -> String {
         "{base}\n\nThe agents work in several languages, so every rationale is an object with one \
          short sentence per language: {listed}. Write each sentence directly in its language, \
          naturally, as a native speaker would put it; do not translate another one word by word, \
-         and avoid expressions copied from English. The draft reply is not a rationale: it stays \
-         in the requester's language.\n\n{INTERNALS}"
+         and avoid expressions copied from English. A rationale describes the message or the \
+         ticket, never what you do or propose: write \"Ada cannot work and has a presentation at \
+         15:00.\" (in Italian \"Ada non può lavorare e ha una presentazione alle 15:00.\"), not \
+         \"I set the priority to high because…\" (\"Imposto alta perché…\"). The draft reply is \
+         not a rationale: it stays in the requester's language.\n\n{INTERNALS}"
     )
 }
 
@@ -281,6 +287,16 @@ pub fn triage_input(
     out
 }
 
+/// The name a draft greets the requester by: the first word of their name, which is the first
+/// name for "Ada Ferrini" (a name written surname first cannot be told apart, so it stays simple);
+/// none for a requester without a name.
+pub fn greeting_name(name: Option<&str>) -> String {
+    match name.and_then(|n| n.split_whitespace().next()) {
+        Some(first) => framed(first),
+        None => "none (use a neutral greeting)".to_owned(),
+    }
+}
+
 /// What the model reads to make proposals on a ticket. Internal notes are left out: they are
 /// for agents only and must not find their way into a reply.
 pub fn ticket_input(ticket: &Ticket, assets: &[Asset], services: &[Service]) -> String {
@@ -292,10 +308,7 @@ pub fn ticket_input(ticket: &Ticket, assets: &[Asset], services: &[Service]) -> 
         None => "none".into(),
     };
     // The name the draft greets, said outright: models skip it when it only sits in an address.
-    let greet = match ticket.requester.as_ref().and_then(|r| r.name.as_deref()) {
-        Some(name) if !name.trim().is_empty() => framed(name.trim()),
-        _ => "none (use a neutral greeting)".to_owned(),
-    };
+    let greet = greeting_name(ticket.requester.as_ref().and_then(|r| r.name.as_deref()));
     let linked = if ticket.assets.is_empty() {
         "none".to_owned()
     } else {
@@ -412,6 +425,40 @@ mod tests {
             assert_eq!(properties.len(), required.len(), "{schema}");
             assert!(properties.keys().all(|k| required.contains(&k.as_str())));
             properties.values().for_each(assert_closed);
+        }
+    }
+
+    #[test]
+    fn the_greeting_uses_the_first_name_only() {
+        assert_eq!(greeting_name(Some("Ada Ferrini")), "Ada");
+        assert_eq!(greeting_name(Some("  Nora   Galli ")), "Nora");
+        assert_eq!(greeting_name(Some("Ivo")), "Ivo");
+        assert_eq!(greeting_name(Some("   ")), "none (use a neutral greeting)");
+        assert_eq!(greeting_name(None), "none (use a neutral greeting)");
+    }
+
+    #[test]
+    fn the_instructions_keep_rationales_impersonal_and_drafts_to_the_point() {
+        let languages = vec!["en".to_owned(), "it".to_owned()];
+        let ticket = system(TICKET_SYSTEM, &languages);
+        for wanted in [
+            "Ask only for what is missing",
+            "Never ask about something the messages already say",
+            "do not ask whether all mailboxes are affected",
+            "Do not guess or state causes (in Italian: non ipotizzare cause)",
+        ] {
+            assert!(
+                ticket.contains(wanted),
+                "the ticket instructions say: {wanted}"
+            );
+        }
+        for instructions in [ticket, system(TRIAGE_SYSTEM, &languages)] {
+            assert!(instructions.contains(
+                "A rationale describes the message or the ticket, never what you do or propose"
+            ));
+            assert!(instructions.contains(
+                "not \"I set the priority to high because…\" (\"Imposto alta perché…\")"
+            ));
         }
     }
 

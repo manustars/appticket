@@ -311,6 +311,7 @@ async fn world_with(provider: Provider, concurrency: usize) -> World {
         api_key: Some("model-test-key".into()),
         effort: anthropic.then(|| "medium".into()),
         azure_api_version: None,
+        thinking: None,
         concurrency,
     };
     let assistant = Arc::new(Assistant::new(
@@ -675,10 +676,7 @@ async fn a_new_ticket_gets_priority_assets_and_a_draft_reply() {
     assert!(input.contains("A2: printer \"Printer on the second floor\""));
     assert!(input.contains("Current priority: normal"));
     assert!(
-        input.contains(
-            "Name to greet: Ada Ferrini
-"
-        ),
+        input.contains("Name to greet: Ada\n"),
         "the requester's name is given for the greeting"
     );
     assert!(input.contains("schermo nero"));
@@ -759,11 +757,11 @@ async fn only_valid_and_useful_parts_are_proposed() {
         .iter()
         .map(|(_, b)| b["messages"][0]["content"].as_str().unwrap().to_owned())
         .collect();
-    assert!(inputs.iter().any(|i| i.contains(
-        "Requester: none
-Name to greet: none (use a neutral greeting)
-"
-    )));
+    assert!(
+        inputs
+            .iter()
+            .any(|i| i.contains("Requester: none\nName to greet: none (use a neutral greeting)\n"))
+    );
 
     // Bad JSON and a priority that does not exist.
     w.answer(claude_text("{\"priority\": \"high\", "));

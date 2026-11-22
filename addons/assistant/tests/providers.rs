@@ -333,3 +333,23 @@ async fn the_ticket_schema_carries_services_for_every_provider() {
         }
     }
 }
+
+#[tokio::test]
+async fn thinking_is_switched_only_when_set() {
+    let default = ask("openai-compatible", "m", "/v1", &[]).await;
+    assert!(
+        default.body.get("chat_template_kwargs").is_none(),
+        "nothing sent by default"
+    );
+    let off = ask(
+        "openai-compatible",
+        "m",
+        "/v1",
+        &[("HD_ASSISTANT_THINKING", "off")],
+    )
+    .await;
+    assert_eq!(
+        off.body["chat_template_kwargs"],
+        json!({"enable_thinking": false})
+    );
+}

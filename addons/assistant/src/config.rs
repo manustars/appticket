@@ -170,6 +170,10 @@ pub struct ModelSettings {
     pub azure_api_version: Option<String>,
     /// At most this many model calls at the same time.
     pub concurrency: usize,
+    /// `openai-compatible` only: whether the model thinks before answering, sent as
+    /// `chat_template_kwargs.enable_thinking` (vLLM, SGLang); `None` sends nothing, which leaves
+    /// it to the server.
+    pub thinking: Option<bool>,
 }
 
 impl ModelSettings {
@@ -283,6 +287,15 @@ impl Config {
             Provider::AzureOpenAi => get("HD_ASSISTANT_AZURE_API_VERSION"),
             _ => None,
         };
+        let thinking = match get("HD_ASSISTANT_THINKING").as_deref() {
+            None => None,
+            Some(value) if provider != Provider::OpenAiCompatible => bail!(
+                "HD_ASSISTANT_THINKING is {value:?}, but it applies only to openai-compatible"
+            ),
+            Some("on") => Some(true),
+            Some("off") => Some(false),
+            Some(other) => bail!("HD_ASSISTANT_THINKING is {other:?}: use on or off"),
+        };
         let concurrency = match get("HD_ASSISTANT_MODEL_CONCURRENCY") {
             None => provider.default_concurrency(),
             Some(v) => v.parse().ok().filter(|n| *n >= 1).with_context(|| {
@@ -304,6 +317,7 @@ impl Config {
             },
             azure_api_version,
             concurrency,
+            thinking,
         };
         Ok(Config {
             listen,
@@ -472,6 +486,35 @@ mod tests {
         assert_eq!(
             config(&vars).unwrap().model.endpoint(),
             "https://desk.openai.azure.com/openai/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn thinking_is_left_to_the_server_unless_set() {
+        let compatible = |extra: &[(&'static str, &'static str)]| {
+            let mut vars = with(&[
+                ("HD_ASSISTANT_MODEL_PROVIDER", "openai-compatible"),
+                ("HD_ASSISTANT_MODEL", "m"),
+                ("HD_ASSISTANT_MODEL_URL", "http://127.0.0.1:8000/v1"),
+            ]);
+            vars.extend_from_slice(extra);
+            config(&vars)
+        };
+        assert_eq!(compatible(&[]).unwrap().model.thinking, None);
+        let off = compatible(&[("HD_ASSISTANT_THINKING", "off")]).unwrap();
+        assert_eq!(off.model.thinking, Some(false));
+        let on = compatible(&[("HD_ASSISTANT_THINKING", "on")]).unwrap();
+        assert_eq!(on.model.thinking, Some(true));
+        assert!(compatible(&[("HD_ASSISTANT_THINKING", "low")]).is_err());
+        let elsewhere = error(&with(&[
+            ("HD_ASSISTANT_MODEL_PROVIDER", "openai"),
+            ("HD_ASSISTANT_MODEL", "m"),
+            ("HD_ASSISTANT_API_KEY", "k"),
+            ("HD_ASSISTANT_THINKING", "off"),
+        ]));
+        assert!(
+            elsewhere.contains("applies only to openai-compatible"),
+            "{elsewhere}"
         );
     }
 

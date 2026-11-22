@@ -210,7 +210,7 @@ impl Model {
         );
         // No temperature or token limit: reasoning models refuse some of them, and the
         // defaults suit short answers.
-        let body = json!({
+        let mut body = json!({
             "model": s.model,
             "stream": false,
             "messages": [
@@ -219,6 +219,10 @@ impl Model {
             ],
             "response_format": response_format,
         });
+        // Only when asked for: servers that do not know it may refuse the field.
+        if let Some(thinking) = s.thinking {
+            body["chat_template_kwargs"] = json!({ "enable_thinking": thinking });
+        }
         let mut request = self.http.post(s.endpoint());
         if let Some(key) = &s.api_key {
             request = match s.provider.auth() {
