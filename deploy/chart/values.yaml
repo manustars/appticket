@@ -75,16 +75,19 @@ service:
 
 ingress:
   enabled: false
+  # The IngressClass, such as nginx; empty: the cluster's default class.
   className: ""
+  # Extra annotations, such as nginx.ingress.kubernetes.io/force-ssl-redirect: "true", or a
+  # cert-manager issuer.
   annotations: {}
   host: helpdesk.example.com
   # The agents' sign-in cookie is marked Secure: the UI only works over HTTPS (or through a
   # port-forward to localhost). Terminate TLS here or in front of the cluster.
   tls:
     enabled: true
-    # A Secret of type kubernetes.io/tls, existing or created by cert-manager through an
-    # annotation above.
-    secretName: helpdesk-tls
+    # A Secret of type kubernetes.io/tls, existing or created by cert-manager. Empty: the host is
+    # listed for TLS without a Secret, and the ingress controller uses its default certificate.
+    secretName: ""
 
 # ---------------------------------------------------------------------------------------------
 # The Assistant add-on (optional). Register it on the core first (`hd addon add …`, see
@@ -184,10 +187,41 @@ postgresql:
       retentionPolicy: 30d
 
 # ---------------------------------------------------------------------------------------------
+# Database dumps (optional): a CronJob runs pg_dump on a schedule and keeps the latest dumps on a
+# volume. Works with the CloudNativePG cluster above or an external database, and needs no object
+# storage. The dumps are PostgreSQL's custom format, compressed; restore with pg_restore.
+# ---------------------------------------------------------------------------------------------
+dumps:
+  enabled: false
+  # Standard five-field cron: "30 2 * * *" is every day at 02:30 (the cluster's time zone).
+  schedule: "30 2 * * *"
+  # How many dumps to keep; older ones are deleted after each successful dump.
+  keep: 7
+  image:
+    # pg_dump must be at least as new as the server: keep its major version in step with the
+    # database's.
+    repository: docker.io/library/postgres
+    tag: "18.7-trixie"
+    pullPolicy: IfNotPresent
+  storage:
+    # Use an existing PersistentVolumeClaim; empty: the chart creates one, kept on uninstall.
+    existingClaim: ""
+    size: 5Gi
+    # Empty: the cluster's default StorageClass.
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------------------------
 # A test mail server for staging (off by default). GreenMail runs next to the core in the same
 # pod, because the core accepts plain imap:// and smtp:// only for a server on its own host. It
 # accepts any mail and keeps it in one mailbox; nothing leaves it. With it enabled and no IMAP or
-# SMTP Secret set, the core reads and sends through it.
+# SMTP Secret set, the core reads and sends through it. It keeps mail in memory only: a pod
+# restart empties the mailbox, and the core's next read starts over with what arrives after it.
 # ---------------------------------------------------------------------------------------------
 greenmail:
   enabled: false

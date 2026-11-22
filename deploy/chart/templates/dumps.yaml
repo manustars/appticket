@@ -1,0 +1,96 @@
+{{- if .Values.dumps.enabled }}
+{{- $d := .Values.dumps }}
+{{- $name := printf "%s-dumps" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }}
+{{- $claim := $d.storage.existingClaim | default $name }}
+{{- if lt (int $d.keep) 1 }}
+{{- fail "dumps.keep must be 1 or more" }}
+{{- end }}
+{{- if not $d.storage.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dumps
+  annotations:
+    # The dumps are backups: helm uninstall leaves them in place.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with $d.storage.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $d.storage.size }}
+---
+{{- end }}
+# pg_dump of the help desk's database on a schedule, keeping the latest dumps.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dumps
+spec:
+  schedule: {{ $d.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "hd.labels" . | nindent 12 }}
+            app.kubernetes.io/component: dumps
+        spec:
+          restartPolicy: Never
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- include "hd.podSecurityContext" . | nindent 12 }}
+          containers:
+            - name: pg-dump
+              image: {{ printf "%s:%s" $d.image.repository $d.image.tag }}
+              imagePullPolicy: {{ $d.image.pullPolicy }}
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "hd.databaseSecret" . }}
+                      key: {{ .Values.core.database.secretKey }}
+                - name: KEEP
+                  value: {{ $d.keep | quote }}
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  name="hd-$(date -u +%Y%m%dT%H%M%SZ).dump"
+                  # Written under a temporary name: an interrupted dump never counts as one.
+                  pg_dump --dbname="$DATABASE_URL" --format=custom --no-owner \
+                    --file="/dumps/$name.partial"
+                  mv "/dumps/$name.partial" "/dumps/$name"
+                  ls -1t /dumps/hd-*.dump | tail -n +$((KEEP + 1)) | while read -r old; do
+                    rm -f -- "$old"
+                  done
+                  rm -f /dumps/*.partial
+                  echo "dumped $name; kept:"
+                  ls -l /dumps
+              resources:
+                {{- toYaml $d.resources | nindent 16 }}
+              securityContext:
+                {{- include "hd.containerSecurityContext" . | nindent 16 }}
+              volumeMounts:
+                - name: dumps
+                  mountPath: /dumps
+          volumes:
+            - name: dumps
+              persistentVolumeClaim:
+                claimName: {{ $claim }}
+{{- end }}

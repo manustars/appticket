@@ -18,9 +18,11 @@ stop cleanly on SIGTERM.
 - Kubernetes 1.27 or later, Helm 3.
 - The CloudNativePG operator, unless you bring your own PostgreSQL (`postgresql.enabled=false`).
 - An ingress controller and TLS for the agents' UI: the sign-in cookie is marked `Secure`, so the
-  UI works only over HTTPS (or through a port-forward to `localhost`).
-- For backups, either a CSI driver with a `VolumeSnapshotClass`, or S3-compatible storage and the
-  Barman Cloud plugin of CloudNativePG (see [Backups](#backups)).
+  UI works only over HTTPS (or through a port-forward to `localhost`). A certificate of your own, or
+  the ingress controller's default certificate (see [HTTPS](#https)).
+- For backups, a StorageClass for the database dumps (see [Backups](#backups)); for CloudNativePG's
+  own backups, a CSI driver with a `VolumeSnapshotClass` or S3-compatible storage with the Barman
+  Cloud plugin.
 - For real mail: an IMAP mailbox and an SMTP server reachable over TLS (`imaps://`, `smtps://` or
   `smtp://…?tls=required`). Plain `imap://`/`smtp://` are accepted only for a server on the core's
   own host, which is how the staging test mail server works.
@@ -75,7 +77,8 @@ small staging install with the test mail server. The most common settings:
 | `core.image.tag` | The version to run (default: the chart's `appVersion`). |
 | `core.mail.from`, `core.mail.fromName` | The help desk's own address and display name, for replies. |
 | `core.mail.imap/smtp.existingSecret` | The mail Secrets above. |
-| `ingress.*` | Host, class, annotations (for example cert-manager) and TLS Secret. |
+| `ingress.*` | Host, class, annotations and TLS (see [HTTPS](#https)). |
+| `dumps.*` | Scheduled database dumps to a volume (see [Backups](#backups)). |
 | `postgresql.*` | Instances, storage size and class, backups. |
 | `assistant.*` | See [The Assistant](#the-assistant). |
 | `greenmail.enabled` | The staging test mail server. |
@@ -86,6 +89,18 @@ its Secret, usually within a minute or two. The core applies database migrations
 rolled, on upgrade: it reads the mailbox and sends the outbox, and two cores at once would do both
 twice. Its readiness follows `/api/health` (unready while the database is unreachable); liveness
 only checks that the port answers.
+
+### HTTPS
+
+The Ingress always lists its host for TLS when `ingress.tls.enabled` is true (the default):
+
+- with `ingress.tls.secretName` empty, the ingress controller serves its default certificate,
+  which suits a staging install where agents accept that certificate;
+- with a TLS Secret named there, or one created by cert-manager through an annotation in
+  `ingress.annotations`, the controller serves that certificate.
+
+To send plain HTTP to HTTPS with ingress-nginx, add the annotation
+`nginx.ingress.kubernetes.io/force-ssl-redirect: "true"`.
 
 ## First steps
 
@@ -155,9 +170,47 @@ curl smtp://127.0.0.1:3025 --mail-from ada@customer.example.com \
 
 A sender whose domain belongs to a customer opens a ticket; any other sender lands in the inbox.
 
+GreenMail keeps mail in memory only: a restart of the core's pod empties the test mailbox, and the
+core's next read starts over with the mail that arrives afterwards. It is for trying the help desk
+out, not for keeping anything.
+
 ## Backups
 
-Backups are off by default; turn them on with `postgresql.backup.enabled=true` and one method:
+Two independent kinds, both off by default.
+
+### Database dumps
+
+With `dumps.enabled=true`, a CronJob runs `pg_dump` on `dumps.schedule` (five-field cron, the
+cluster's time zone; default every day at 02:30). It writes a compressed dump in PostgreSQL's custom
+format to a volume, and keeps the latest `dumps.keep` (default 7). It needs no object storage and
+works with the CloudNativePG cluster or an external database; the volume (`dumps.storage.size`,
+`storageClass`, or `existingClaim`) is kept on `helm uninstall`. Keep the job's image
+(`dumps.image.tag`) at the database's major version or newer.
+
+To take one now and to list the dumps:
+
+```sh
+kubectl -n helpdesk create job --from=cronjob/hd-dumps hd-dump-now
+kubectl -n helpdesk logs job/hd-dump-now
+```
+
+To restore, stop the core, restore the chosen dump into the database with `pg_restore` from a pod
+that mounts the dumps volume (for example `pg_restore --clean --if-exists --no-owner
+--dbname="$DATABASE_URL" /dumps/hd-<date>.dump`), then start the core again:
+
+```sh
+kubectl -n helpdesk scale deploy/hd-core --replicas=0
+# … run pg_restore …
+kubectl -n helpdesk scale deploy/hd-core --replicas=1
+```
+
+A dump is as old as its schedule: anything after the last dump is lost on restore. Copy the
+dumps off the cluster too if the cluster's storage is the only place they live.
+
+### CloudNativePG backups
+
+For clusters with object storage or volume snapshots, CloudNativePG's own backups give
+point-in-time recovery. Turn them on with `postgresql.backup.enabled=true` and one method:
 
 - `method: volumeSnapshot` — CSI volume snapshots of the database volume, on the schedule in
   `postgresql.backup.schedule`. Set `volumeSnapshot.className` to your `VolumeSnapshotClass`

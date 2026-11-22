@@ -30,4 +30,11 @@ then put the printed token and event secret in a Secret and enable assistant.* i
 
 Staging mail: GreenMail runs next to the core and keeps all mail in {{ .Values.greenmail.address }}.
 Send test mail to it through svc/{{ printf "%s-greenmail" (include "hd.fullname" .) | trunc 63 | trimSuffix "-" }} port 3025.
+It keeps mail in memory: a restart of the core's pod empties the test mailbox.
+{{- end }}
+{{- if .Values.dumps.enabled }}
+
+Database dumps run on "{{ .Values.dumps.schedule }}", keeping {{ .Values.dumps.keep }}. To take one now:
+
+  kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ printf "%s-dumps" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }} {{ printf "%s-dump-now" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }}
 {{- end }}

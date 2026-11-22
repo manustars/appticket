@@ -18,11 +18,13 @@ ingress:
   className: nginx                         # your ingress class
   host: helpdesk-staging.example.com       # your host
   annotations:
-    # With cert-manager, a certificate for the host; the sign-in cookie needs HTTPS.
-    cert-manager.io/cluster-issuer: lab-issuer   # your issuer
+    # The sign-in cookie needs HTTPS: send plain HTTP to HTTPS.
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
   tls:
     enabled: true
-    secretName: helpdesk-staging-tls
+    # Empty: the ingress controller's default certificate. Name a TLS Secret (or add a
+    # cert-manager annotation above) for a certificate of your own.
+    secretName: ""
 
 postgresql:
   enabled: true
@@ -34,6 +36,15 @@ postgresql:
     # Off for a throwaway staging install; see values.yaml for volume snapshots or object storage.
     enabled: false
 
+# A daily dump of the database to a volume, keeping a week of them: backups without object
+# storage.
+dumps:
+  enabled: true
+  keep: 7
+  storage:
+    size: 2Gi
+
+# Mail stays in memory: a restart of the core's pod empties the test mailbox.
 greenmail:
   enabled: true
 
