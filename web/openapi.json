@@ -4268,7 +4268,7 @@
               "string",
               "null"
             ],
-            "description": "The address the requester last wrote from on the ticket, else the first they registered."
+            "description": "The address a reply goes to: the one the requester last wrote from on the ticket, else the\none an agent last picked there, else the first they registered."
           },
           "state": {
             "$ref": "#/components/schemas/TicketState"
@@ -5638,7 +5638,7 @@
           },
           "email": {
             "type": "string",
-            "description": "The address that stands for the requester on this ticket: the one they last wrote from on\nit, else the first they registered."
+            "description": "The address that stands for the requester on this ticket, where a reply goes: the one they\nlast wrote from on it, else the one an agent last picked there, else the first they\nregistered."
           },
           "id": {
             "type": "string",
@@ -6095,7 +6095,7 @@
               "string",
               "null"
             ],
-            "description": "The address the requester last wrote from on the ticket, else the first they registered."
+            "description": "The address a reply goes to: the one the requester last wrote from on the ticket, else the\none an agent last picked there, else the first they registered."
           },
           "state": {
             "$ref": "#/components/schemas/TicketState"

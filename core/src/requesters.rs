@@ -233,13 +233,8 @@ impl Recipient {
 pub async fn recipient(conn: &mut sqlx::PgConnection, ticket: Uuid) -> Result<Option<Recipient>> {
     type Row = (Option<Uuid>, Option<String>, Option<String>);
     let row: Option<Row> = sqlx::query_as(
-        "SELECT t.requester_id, ticket_reply_address(t.id),
-                (SELECT m.to_address FROM messages m
-                 JOIN requester_addresses a
-                   ON a.address = m.to_address AND a.requester_id = t.requester_id
-                 WHERE m.ticket_id = t.id AND m.direction = 'outbound'
-                 ORDER BY m.created_at DESC, m.id LIMIT 1)
-         FROM tickets t WHERE t.id = $1",
+        "SELECT requester_id, ticket_reply_address(id), ticket_picked_address(id)
+         FROM tickets WHERE id = $1",
     )
     .bind(ticket)
     .fetch_optional(&mut *conn)

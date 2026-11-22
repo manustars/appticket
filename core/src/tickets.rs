@@ -441,8 +441,9 @@ pub struct TicketCustomer {
 #[derive(Serialize, ToSchema)]
 pub struct Requester {
     pub id: Uuid,
-    /// The address that stands for the requester on this ticket: the one they last wrote from on
-    /// it, else the first they registered.
+    /// The address that stands for the requester on this ticket, where a reply goes: the one they
+    /// last wrote from on it, else the one an agent last picked there, else the first they
+    /// registered.
     pub email: String,
     /// All the requester's addresses, the first registered first.
     pub addresses: Vec<String>,
@@ -517,6 +518,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
         customer_name: String,
         customer_is_help_desk: bool,
         requester_id: Option<Uuid>,
+        requester_address: Option<String>,
         requester_name: Option<String>,
         requester_tickets: Option<i64>,
         assignee_id: Option<Uuid>,
@@ -527,7 +529,8 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
     let row: Row = sqlx::query_as(
         "SELECT t.id, t.title, t.state, t.priority, c.id AS customer_id, c.name AS customer_name,
                 c.is_help_desk AS customer_is_help_desk,
-                r.id AS requester_id, r.name AS requester_name,
+                r.id AS requester_id, ticket_requester_address(t.id) AS requester_address,
+                r.name AS requester_name,
                 (SELECT count(*) FROM tickets o WHERE o.requester_id = r.id) AS requester_tickets,
                 a.id AS assignee_id, a.name AS assignee_name, t.created_at, t.updated_at
          FROM tickets t
@@ -591,11 +594,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
             .zip(recipient)
             .map(|(id, recipient)| Requester {
                 id,
-                email: recipient
-                    .wrote_from
-                    .clone()
-                    .or_else(|| recipient.addresses.first().cloned())
-                    .unwrap_or_default(),
+                email: row.requester_address.unwrap_or_default(),
                 addresses: recipient.addresses,
                 last_picked: recipient
                     .last_picked

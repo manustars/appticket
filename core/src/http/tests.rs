@@ -673,6 +673,12 @@ async fn a_requester_with_several_addresses_through_the_api(db: PgPool) {
     let ticket = api.get(&format!("/api/tickets/{silent}")).await;
     assert_eq!(ticket["requester"]["last_picked"], "ada@home.test");
     assert!(ticket["requester"]["reply_to"].is_null());
+    assert_eq!(
+        ticket["requester"]["email"], "ada@home.test",
+        "the ticket shows where its replies go"
+    );
+    let listed = api.get(&format!("/api/tickets?q=%23{silent}")).await;
+    assert_eq!(listed[0]["requester_email"], "ada@home.test");
     let sent: Vec<(i64, String)> = sqlx::query_as(
         "SELECT t.number, m.to_address FROM messages m JOIN tickets t ON t.id = m.ticket_id
          WHERE m.direction = 'outbound' ORDER BY t.number",

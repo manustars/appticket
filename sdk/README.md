@@ -87,8 +87,9 @@ sentence saying which scope is missing.
 A requester has one or more e-mail addresses, each belonging to exactly one requester. A ticket's
 `requester` carries them all in `addresses`, the first registered first; `reply_to` is the address
 the requester last wrote from on that ticket, where a reply goes, and is empty when they have not
-written on it; `last_picked` is then the address an agent picked for the last reply there. `email`, there and in `requester_email` of the ticket lists, is `reply_to` when there
-is one, else the first address.
+written on it; `last_picked` is then the address an agent picked for the last reply there.
+`email`, there and in `requester_email` of the ticket lists, is the address a reply goes to:
+`reply_to` when there is one, else `last_picked`, else the first address.
 
 The full request and response shapes are in the core's OpenAPI specification
 (`hd openapi`, or `/api/openapi.json` on a running core).

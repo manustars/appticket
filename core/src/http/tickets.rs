@@ -40,7 +40,8 @@ pub struct TicketSummary {
     state: TicketState,
     priority: Priority,
     customer_name: String,
-    /// The address the requester last wrote from on the ticket, else the first they registered.
+    /// The address a reply goes to: the one the requester last wrote from on the ticket, else the
+    /// one an agent last picked there, else the first they registered.
     requester_email: Option<String>,
     assignee_name: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
@@ -115,8 +116,7 @@ async fn list_tickets(
 
     let tickets = sqlx::query_as(
         "SELECT t.id, t.number, t.title, t.state, t.priority, c.name AS customer_name,
-                coalesce(ticket_reply_address(t.id), requester_first_address(t.requester_id))
-                    AS requester_email,
+                ticket_requester_address(t.id) AS requester_email,
                 a.name AS assignee_name, t.updated_at
          FROM tickets t
          JOIN customers c ON c.id = t.customer_id

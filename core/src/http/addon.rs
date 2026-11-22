@@ -160,7 +160,8 @@ pub struct AddonTicketSummary {
     state: TicketState,
     priority: Priority,
     customer_id: Uuid,
-    /// The address the requester last wrote from on the ticket, else the first they registered.
+    /// The address a reply goes to: the one the requester last wrote from on the ticket, else the
+    /// one an agent last picked there, else the first they registered.
     requester_email: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
@@ -185,8 +186,7 @@ async fn open_tickets(
     Ok(Json(
         sqlx::query_as(
             "SELECT t.number, t.title, t.state, t.priority, t.customer_id,
-                    coalesce(ticket_reply_address(t.id), requester_first_address(t.requester_id))
-                        AS requester_email,
+                    ticket_requester_address(t.id) AS requester_email,
                     t.updated_at
              FROM tickets t
              WHERE t.state <> 'closed'

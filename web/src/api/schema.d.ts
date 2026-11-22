@@ -1129,7 +1129,10 @@ export interface components {
             /** Format: int64 */
             number: number;
             priority: components["schemas"]["Priority"];
-            /** @description The address the requester last wrote from on the ticket, else the first they registered. */
+            /**
+             * @description The address a reply goes to: the one the requester last wrote from on the ticket, else the
+             *     one an agent last picked there, else the first they registered.
+             */
             requester_email?: string | null;
             state: components["schemas"]["TicketState"];
             title: string;
@@ -1579,8 +1582,9 @@ export interface components {
             /** @description All the requester's addresses, the first registered first. */
             addresses: string[];
             /**
-             * @description The address that stands for the requester on this ticket: the one they last wrote from on
-             *     it, else the first they registered.
+             * @description The address that stands for the requester on this ticket, where a reply goes: the one they
+             *     last wrote from on it, else the one an agent last picked there, else the first they
+             *     registered.
              */
             email: string;
             /** Format: uuid */
@@ -1734,7 +1738,10 @@ export interface components {
              */
             number: number;
             priority: components["schemas"]["Priority"];
-            /** @description The address the requester last wrote from on the ticket, else the first they registered. */
+            /**
+             * @description The address a reply goes to: the one the requester last wrote from on the ticket, else the
+             *     one an agent last picked there, else the first they registered.
+             */
             requester_email?: string | null;
             state: components["schemas"]["TicketState"];
             title: string;

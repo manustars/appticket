@@ -87,7 +87,8 @@ pub struct TicketSummary {
     pub state: TicketState,
     pub priority: Priority,
     pub customer_id: Uuid,
-    /// The address the requester last wrote from on the ticket, else the first they registered.
+    /// The address a reply goes to: the one the requester last wrote from on the ticket, else the
+    /// one an agent last picked there, else the first they registered.
     #[serde(default)]
     pub requester_email: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
@@ -127,8 +128,9 @@ pub struct TicketCustomer {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Requester {
     pub id: Uuid,
-    /// The address that stands for the requester on this ticket: the one they last wrote from
-    /// on it, else the first they registered.
+    /// The address that stands for the requester on this ticket, where a reply goes: the one
+    /// they last wrote from on it, else the one an agent last picked there, else the first they
+    /// registered.
     pub email: String,
     /// All the requester's addresses, the first registered first.
     #[serde(default)]
