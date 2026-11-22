@@ -29,6 +29,9 @@
 - **Add-ons** live in `addons/` (the Assistant: [ADR 0006](docs/adr/0006-assistant.md)) and are
   built on the Rust SDK in `sdk/rust`; their contract with the core is `sdk/README.md`. The
   workspace has several binaries: run the core with `cargo run -p hd-core -- …`.
+- **Agents have one role each;** the product defines the permissions, the help desk the roles,
+  and every request that changes something checks its permission
+  ([ADR 0007](docs/adr/0007-roles-and-permissions.md)).
 - **Local development** runs PostgreSQL and a test mail server (GreenMail) in containers with
   Podman. Agents sign in with e-mail and password managed by the core; OIDC comes later.
 

@@ -115,7 +115,8 @@ kubectl -n helpdesk exec deploy/hd-core -- hd agent add agent@example.com --name
 ```
 
 To choose the password yourself instead, pass it through the environment of the command:
-`kubectl -n helpdesk exec deploy/hd-core -- env HD_AGENT_PASSWORD='…' hd agent add …`. Customers,
+`kubectl -n helpdesk exec deploy/hd-core -- env HD_AGENT_PASSWORD='…' hd agent add …` (at least 12
+characters). Customers,
 their domains, assets and services can then be managed in the UI, and so can agents and roles,
 under Administration.
 
