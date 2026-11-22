@@ -8,6 +8,8 @@ pub enum Error {
     NotFound(&'static str),
     /// The operation would break a rule of docs/domain-rules.md; the text says which.
     Rule(String),
+    /// The agent's role does not allow it; the text says what.
+    Forbidden(String),
     Internal(anyhow::Error),
 }
 
@@ -27,7 +29,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::NotFound(what) => write!(f, "{what} not found"),
-            Error::Rule(why) => f.write_str(why),
+            Error::Rule(why) | Error::Forbidden(why) => f.write_str(why),
             Error::Internal(error) => write!(f, "{error:#}"),
         }
     }

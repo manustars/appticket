@@ -5,6 +5,9 @@ use clap::Subcommand;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::agents;
+use crate::roles::{self, Grant, Permission};
+
 #[derive(Subcommand)]
 pub enum CustomerCommand {
     /// Add a customer, optionally with the mail domains that identify its requesters.
@@ -75,53 +78,225 @@ pub async fn customer(db: &PgPool, command: CustomerCommand) -> anyhow::Result<(
 #[derive(Subcommand)]
 pub enum AgentCommand {
     /// Add an agent. The password is read from the HD_AGENT_PASSWORD environment variable, or
-    /// generated and printed once when that is unset.
+    /// generated and printed once when that is unset. Without --role, the very first agent gets
+    /// the Administrator role and later ones the default role.
     Add {
         /// The agent's e-mail address, used to sign in.
         email: String,
         /// The agent's display name.
         #[arg(long)]
         name: String,
+        /// The role's name.
+        #[arg(long)]
+        role: Option<String>,
     },
-    /// List agents.
+    /// List agents with their roles.
     List,
+    /// Give an agent another role, such as Administrator.
+    SetRole {
+        /// The agent's e-mail address.
+        email: String,
+        /// The role's name.
+        role: String,
+    },
+    /// Set an agent's password, from HD_AGENT_PASSWORD or generated and printed once, and end
+    /// the agent's sessions.
+    SetPassword {
+        /// The agent's e-mail address.
+        email: String,
+    },
+    /// Deactivate an agent who left the help desk: they can no longer sign in, and their tickets
+    /// that are not closed lose their assignee.
+    Deactivate {
+        /// The agent's e-mail address.
+        email: String,
+    },
+    /// Let a deactivated agent sign in again.
+    Reactivate {
+        /// The agent's e-mail address.
+        email: String,
+    },
+}
+
+fn password_from_env() -> Option<String> {
+    std::env::var("HD_AGENT_PASSWORD")
+        .ok()
+        .filter(|password| !password.is_empty())
 }
 
 pub async fn agent(db: &PgPool, command: AgentCommand) -> anyhow::Result<()> {
+    let fail = |e: crate::error::Error| anyhow::anyhow!("{e}");
+    let cli = Grant::command_line();
     match command {
-        AgentCommand::Add { email, name } => {
-            let (password, generated) = match std::env::var("HD_AGENT_PASSWORD") {
-                Ok(password) if !password.is_empty() => (password, false),
-                _ => (format!("{}", Uuid::new_v4().simple()), true),
+        AgentCommand::Add { email, name, role } => {
+            let role = match role {
+                Some(role) => Some(roles::id_by_name(db, &role).await.map_err(fail)?),
+                None => None,
             };
-            let id = Uuid::new_v4();
-            sqlx::query(
-                "INSERT INTO agents (id, email, name, password_hash) VALUES ($1, $2, $3, $4)",
-            )
-            .bind(id)
-            .bind(email.trim().to_lowercase())
-            .bind(name.trim())
-            .bind(crate::auth::hash_password(&password)?)
-            .execute(db)
-            .await
-            .context("adding the agent (is the e-mail already used?)")?;
-            println!("{id}");
-            if generated {
+            let password = password_from_env();
+            let added = agents::add(db, &cli, &email, &name, role, password.as_deref())
+                .await
+                .map_err(fail)?;
+            println!("{}", added.id);
+            if let Some(password) = added.generated_password {
                 println!("password: {password}");
             }
-            Ok(())
         }
         AgentCommand::List => {
-            let rows: Vec<(Uuid, String, String)> =
-                sqlx::query_as("SELECT id, email, name FROM agents ORDER BY name")
-                    .fetch_all(db)
-                    .await?;
-            for (id, email, name) in rows {
-                println!("{id}  {name}  {email}");
+            for a in agents::list(db).await.map_err(fail)? {
+                let state = if a.deactivated_at.is_some() {
+                    "  (deactivated)"
+                } else {
+                    ""
+                };
+                println!("{}  {}  {}  {}{state}", a.id, a.name, a.email, a.role_name);
             }
-            Ok(())
+        }
+        AgentCommand::SetRole { email, role } => {
+            let agent = agents::id_by_email(db, &email).await.map_err(fail)?;
+            let role = roles::id_by_name(db, &role).await.map_err(fail)?;
+            agents::set_role(db, &cli, agent, role)
+                .await
+                .map_err(fail)?;
+        }
+        AgentCommand::SetPassword { email } => {
+            let agent = agents::id_by_email(db, &email).await.map_err(fail)?;
+            let password = password_from_env();
+            if let Some(generated) = agents::reset_password(db, &cli, agent, password.as_deref())
+                .await
+                .map_err(fail)?
+            {
+                println!("password: {generated}");
+            }
+        }
+        AgentCommand::Deactivate { email } => {
+            let agent = agents::id_by_email(db, &email).await.map_err(fail)?;
+            let unassigned = agents::deactivate(db, &cli, agent).await.map_err(fail)?;
+            println!("deactivated; {unassigned} ticket(s) lost their assignee");
+        }
+        AgentCommand::Reactivate { email } => {
+            let agent = agents::id_by_email(db, &email).await.map_err(fail)?;
+            agents::reactivate(db, &cli, agent).await.map_err(fail)?;
         }
     }
+    Ok(())
+}
+
+#[derive(Subcommand)]
+pub enum RoleCommand {
+    /// List roles with their permissions.
+    List,
+    /// List the permissions a role can hold.
+    Permissions,
+    /// Create a role.
+    Add {
+        /// The role's name.
+        name: String,
+        /// A permission, such as tickets.reply; repeat for several.
+        #[arg(long = "permission")]
+        permissions: Vec<String>,
+    },
+    /// Replace a role's permissions.
+    Set {
+        /// The role's name.
+        name: String,
+        /// A permission, such as tickets.reply; repeat for several, none for a role that only reads.
+        #[arg(long = "permission")]
+        permissions: Vec<String>,
+    },
+    /// Rename a role.
+    Rename { name: String, new_name: String },
+    /// Make a role the one new agents get when none is named.
+    Default { name: String },
+    /// Remove a role no agent has.
+    Remove { name: String },
+}
+
+fn parse_permissions(names: &[String]) -> anyhow::Result<Vec<Permission>> {
+    names
+        .iter()
+        .map(|name| {
+            Permission::parse(name.trim()).ok_or_else(|| {
+                anyhow::anyhow!("unknown permission {name:?}: see `hd role permissions`")
+            })
+        })
+        .collect()
+}
+
+pub async fn role(db: &PgPool, command: RoleCommand) -> anyhow::Result<()> {
+    let fail = |e: crate::error::Error| anyhow::anyhow!("{e}");
+    let cli = Grant::command_line();
+    match command {
+        RoleCommand::List => {
+            for r in roles::list(db).await.map_err(fail)? {
+                let mut marks = Vec::new();
+                if r.default {
+                    marks.push("default");
+                }
+                let permissions = if r.administrator {
+                    "every permission".to_owned()
+                } else {
+                    r.permissions
+                        .iter()
+                        .map(|p| p.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                };
+                let marks = if marks.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", marks.join(", "))
+                };
+                println!("{}{marks}  agents: {}  {permissions}", r.name, r.agents);
+            }
+        }
+        RoleCommand::Permissions => {
+            for p in Permission::ALL {
+                println!("{:<18}{}", p.as_str(), p.doing());
+            }
+        }
+        RoleCommand::Add { name, permissions } => {
+            let permissions = parse_permissions(&permissions)?;
+            let id = roles::create(db, &cli, &name, &permissions)
+                .await
+                .map_err(fail)?;
+            println!("{id}");
+        }
+        RoleCommand::Set { name, permissions } => {
+            let permissions = parse_permissions(&permissions)?;
+            let id = roles::id_by_name(db, &name).await.map_err(fail)?;
+            let current = roles::list(db).await.map_err(fail)?;
+            let name = current
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| r.name.clone())
+                .unwrap_or(name);
+            roles::update(db, &cli, id, &name, &permissions)
+                .await
+                .map_err(fail)?;
+        }
+        RoleCommand::Rename { name, new_name } => {
+            let id = roles::id_by_name(db, &name).await.map_err(fail)?;
+            let current = roles::list(db).await.map_err(fail)?;
+            let permissions = current
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| r.permissions.clone())
+                .unwrap_or_default();
+            roles::update(db, &cli, id, &new_name, &permissions)
+                .await
+                .map_err(fail)?;
+        }
+        RoleCommand::Default { name } => {
+            let id = roles::id_by_name(db, &name).await.map_err(fail)?;
+            roles::make_default(db, &cli, id).await.map_err(fail)?;
+        }
+        RoleCommand::Remove { name } => {
+            let id = roles::id_by_name(db, &name).await.map_err(fail)?;
+            roles::remove(db, &cli, id).await.map_err(fail)?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Subcommand)]

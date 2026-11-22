@@ -19,9 +19,11 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::auth::{self, SESSION_COOKIE, SESSION_DAYS, SignedIn};
+use crate::mail_status::MailStatus;
 use crate::outbound::Sender;
 
 mod addon;
+mod admin;
 mod catalog;
 mod customers;
 mod directory;
@@ -44,6 +46,19 @@ pub struct AppState {
     pub db: PgPool,
     /// The help desk's own address, when sending mail is configured.
     pub sender: Option<Sender>,
+    /// What reading and sending mail last did.
+    pub mail: MailStatus,
+}
+
+#[cfg(test)]
+impl AppState {
+    pub fn for_tests(db: &PgPool) -> AppState {
+        AppState {
+            db: db.clone(),
+            sender: Some(crate::testing::sender()),
+            mail: MailStatus::default(),
+        }
+    }
 }
 
 /// Serves the API on `listen`, and the built UI from `web_dir` when given.
@@ -100,12 +115,14 @@ fn api_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(health))
         .routes(routes!(current_session, sign_in, sign_out))
+        .routes(routes!(change_password))
         .merge(tickets::routes())
         .merge(inbox::routes())
         .merge(directory::routes())
         .merge(customers::routes())
         .merge(catalog::routes())
         .merge(addon::routes())
+        .merge(admin::routes())
 }
 
 pub fn router(state: AppState) -> Router {
@@ -124,6 +141,8 @@ pub enum ApiError {
     NotFound(&'static str),
     /// The request is well formed but breaks a rule; the text says which.
     Conflict(String),
+    /// The agent's role does not allow the request; the text says what.
+    Forbidden(String),
     Internal(anyhow::Error),
 }
 
@@ -140,6 +159,7 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(why) => (StatusCode::BAD_REQUEST, why),
             ApiError::NotFound(what) => (StatusCode::NOT_FOUND, format!("{what} not found")),
             ApiError::Conflict(why) => (StatusCode::CONFLICT, why),
+            ApiError::Forbidden(why) => (StatusCode::FORBIDDEN, why),
             ApiError::Internal(error) => {
                 tracing::error!(error = format!("{error:#}"), "request failed");
                 (
@@ -228,6 +248,11 @@ struct Agent {
     id: Uuid,
     email: String,
     name: String,
+    role_name: String,
+    /// Whether the agent's role is the Administrator role.
+    administrator: bool,
+    /// Everything the agent's role allows beyond reading; every permission for an Administrator.
+    permissions: Vec<crate::roles::Permission>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -236,15 +261,44 @@ struct SignInRequest {
     password: String,
 }
 
-/// The signed-in agent.
+/// The signed-in agent, with what their role allows.
 #[utoipa::path(get, path = "/api/session", tag = "session",
     responses((status = OK, body = Agent), (status = UNAUTHORIZED, body = Problem)))]
 async fn current_session(agent: SignedIn) -> Json<Agent> {
     Json(Agent {
         id: agent.id,
+        permissions: agent.grant.effective(),
+        administrator: agent.grant.administrator,
         email: agent.email,
         name: agent.name,
+        role_name: agent.role_name,
     })
+}
+
+#[derive(Deserialize, ToSchema)]
+struct PasswordChange {
+    current_password: String,
+    new_password: String,
+}
+
+/// Changes the signed-in agent's password; their other sessions end.
+#[utoipa::path(put, path = "/api/session/password", tag = "session", request_body = PasswordChange,
+    responses((status = NO_CONTENT), (status = CONFLICT, body = Problem),
+        (status = FORBIDDEN, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn change_password(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Json(change): Json<PasswordChange>,
+) -> Result<StatusCode, ApiError> {
+    crate::agents::change_own_password(
+        &state.db,
+        agent.id,
+        &agent.token,
+        &change.current_password,
+        &change.new_password,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Signs an agent in and sets the session cookie.
@@ -287,6 +341,7 @@ impl From<crate::error::Error> for ApiError {
         match error {
             crate::error::Error::NotFound(what) => ApiError::NotFound(what),
             crate::error::Error::Rule(why) => ApiError::Conflict(why),
+            crate::error::Error::Forbidden(why) => ApiError::Forbidden(why),
             crate::error::Error::Internal(error) => ApiError::Internal(error),
         }
     }

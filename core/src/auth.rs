@@ -11,6 +11,8 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::roles::Grant;
+
 /// Name of the cookie that carries an agent's session token.
 pub const SESSION_COOKIE: &str = "hd_session";
 /// How long a session lasts.
@@ -33,17 +35,18 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn token_hash(token: &str) -> Vec<u8> {
+pub(crate) fn token_hash(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
 
 /// Checks the credentials and opens a session. Returns the session token.
 pub async fn sign_in(db: &PgPool, email: &str, password: &str) -> anyhow::Result<Option<String>> {
-    let agent: Option<(Uuid, String)> =
-        sqlx::query_as("SELECT id, password_hash FROM agents WHERE email = $1")
-            .bind(email.trim().to_lowercase())
-            .fetch_optional(db)
-            .await?;
+    let agent: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, password_hash FROM agents WHERE email = $1 AND deactivated_at IS NULL",
+    )
+    .bind(email.trim().to_lowercase())
+    .fetch_optional(db)
+    .await?;
     let Some((agent_id, hash)) = agent else {
         // Spend the same time as a wrong password, so that timing does not reveal addresses.
         let _ = verify_password(password, &DUMMY_HASH);
@@ -52,8 +55,7 @@ pub async fn sign_in(db: &PgPool, email: &str, password: &str) -> anyhow::Result
     if !verify_password(password, &hash) {
         return Ok(None);
     }
-    // Two v4 UUIDs: 244 random bits from the operating system's generator.
-    let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let token = crate::agents::generate_password();
     sqlx::query(
         "INSERT INTO agent_sessions (token_hash, agent_id, expires_at)
          VALUES ($1, $2, now() + make_interval(days => $3))",
@@ -74,22 +76,41 @@ pub async fn sign_out(db: &PgPool, token: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The agent a session token belongs to, if the session is still valid.
+/// The agent a session token belongs to, with what their role allows now, if the session is
+/// still valid and the agent not deactivated.
 pub async fn agent_for(db: &PgPool, token: &str) -> anyhow::Result<Option<SignedIn>> {
-    Ok(sqlx::query_as(
-        "SELECT a.id, a.email, a.name FROM agent_sessions s JOIN agents a ON a.id = s.agent_id
-         WHERE s.token_hash = $1 AND s.expires_at > now()",
+    let row: Option<SessionRow> = sqlx::query_as(
+        "SELECT a.id, a.email, a.name, r.name, r.is_administrator, r.permissions
+         FROM agent_sessions s JOIN agents a ON a.id = s.agent_id JOIN roles r ON r.id = a.role_id
+         WHERE s.token_hash = $1 AND s.expires_at > now() AND a.deactivated_at IS NULL",
     )
     .bind(token_hash(token))
     .fetch_optional(db)
-    .await?)
+    .await?;
+    Ok(row.map(
+        |(id, email, name, role_name, administrator, permissions)| SignedIn {
+            id,
+            email,
+            name,
+            role_name,
+            grant: Grant::from_stored(administrator, &permissions),
+            token: token.to_owned(),
+        },
+    ))
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+type SessionRow = (Uuid, String, String, String, bool, Vec<String>);
+
+#[derive(Debug, Clone)]
 pub struct SignedIn {
     pub id: Uuid,
     pub email: String,
     pub name: String,
+    pub role_name: String,
+    /// What the agent's role allows, read with the session on every request.
+    pub grant: Grant,
+    /// The session's token, so that changing one's password can keep this session.
+    pub token: String,
 }
 
 /// A hash with the same cost as real ones, checked when the e-mail is unknown.

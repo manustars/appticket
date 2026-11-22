@@ -98,7 +98,14 @@ mod tests {
     #[sqlx::test]
     async fn the_ui_is_served_next_to_the_api(db: PgPool) {
         let dir = built_ui();
-        let app = with_web(router(AppState { db, sender: None }), &dir);
+        let app = with_web(
+            router(AppState {
+                db,
+                sender: None,
+                mail: Default::default(),
+            }),
+            &dir,
+        );
 
         let (status, cache, body) = get(&app, "/").await;
         assert_eq!(status, StatusCode::OK);

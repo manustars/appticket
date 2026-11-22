@@ -22,7 +22,7 @@ pub struct AgentEntry {
     email: String,
 }
 
-/// All agents, by name.
+/// Agents who are not deactivated, by name: those a ticket can be assigned to.
 #[utoipa::path(get, path = "/api/agents", tag = "directory",
     responses((status = OK, body = Vec<AgentEntry>), (status = UNAUTHORIZED, body = Problem)))]
 async fn list_agents(
@@ -30,9 +30,11 @@ async fn list_agents(
     _agent: SignedIn,
 ) -> Result<Json<Vec<AgentEntry>>, ApiError> {
     Ok(Json(
-        sqlx::query_as("SELECT id, name, email FROM agents ORDER BY name")
-            .fetch_all(&state.db)
-            .await?,
+        sqlx::query_as(
+            "SELECT id, name, email FROM agents WHERE deactivated_at IS NULL ORDER BY name",
+        )
+        .fetch_all(&state.db)
+        .await?,
     ))
 }
 

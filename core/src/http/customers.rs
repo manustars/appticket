@@ -13,6 +13,7 @@ use uuid::Uuid;
 use super::{ApiError, AppState, Problem};
 use crate::auth::SignedIn;
 use crate::customers::{self, CustomerDetail, CustomerSummary};
+use crate::roles::Permission;
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -53,9 +54,10 @@ pub struct CreatedCustomer {
         (status = UNAUTHORIZED, body = Problem)))]
 async fn create(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Json(new): Json<NewCustomer>,
 ) -> Result<(StatusCode, Json<CreatedCustomer>), ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
     let id = customers::create(&state.db, &new.name, &new.domains).await?;
     Ok((StatusCode::CREATED, Json(CreatedCustomer { id })))
 }
@@ -85,10 +87,11 @@ pub struct Rename {
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn rename(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(id): Path<Uuid>,
     Json(rename): Json<Rename>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
     customers::rename(&state.db, id, &rename.name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -105,10 +108,11 @@ pub struct NewDomain {
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn add_domain(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(id): Path<Uuid>,
     Json(new): Json<NewDomain>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
     customers::add_domain(&state.db, id, &new.domain).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -121,9 +125,10 @@ async fn add_domain(
         (status = UNAUTHORIZED, body = Problem)))]
 async fn remove_domain(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path((id, domain)): Path<(Uuid, String)>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
     customers::remove_domain(&state.db, id, &domain).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -146,10 +151,11 @@ pub struct CreatedRequester {
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn add_requester(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(id): Path<Uuid>,
     Json(new): Json<NewRequester>,
 ) -> Result<(StatusCode, Json<CreatedRequester>), ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
     let requester =
         customers::add_requester(&state.db, id, &new.email, new.name.as_deref()).await?;
     Ok((
@@ -165,9 +171,10 @@ async fn add_requester(
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn offboard(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
     customers::offboard(&state.db, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

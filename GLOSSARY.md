@@ -35,6 +35,25 @@ _Avoid_: User, contact, end user
 A member of the help desk's staff who handles tickets.
 _Avoid_: Operator, technician, user
 
+**Deactivated**:
+Said of an agent who no longer works at the help desk; their history stays, but they cannot sign in
+and no ticket can be assigned to them.
+_Avoid_: Deleted, offboarded, disabled, suspended
+
+**Role**:
+A named set of permissions the help desk defines; every agent has exactly one.
+_Avoid_: Group, profile, access level
+
+**Permission**:
+Something beyond reading that a role allows, such as replying to requesters or managing customers;
+the product defines which permissions exist.
+_Avoid_: Right, privilege, grant, scope
+
+**Administrator**:
+The role that allows everything the product can do, now and in later versions; it can be neither
+changed nor removed.
+_Avoid_: Superuser, root, owner, admin
+
 ## Work
 
 **Ticket**:

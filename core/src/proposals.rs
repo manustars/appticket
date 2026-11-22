@@ -444,6 +444,22 @@ pub async fn accept(db: &PgPool, id: Uuid, agent: Uuid) -> Result<Accepted> {
     Ok(accepted)
 }
 
+/// The permission deciding on the proposal needs (docs/domain-rules.md, "Agents, roles and
+/// permissions"): sorting the inbox for triage, replying for a draft reply when accepting it,
+/// working tickets otherwise.
+pub async fn needs(db: &PgPool, id: Uuid, accepting: bool) -> Result<crate::roles::Permission> {
+    use crate::roles::Permission;
+    let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM proposals WHERE id = $1")
+        .bind(id)
+        .fetch_optional(db)
+        .await?;
+    Ok(match kind.ok_or(Error::NotFound("proposal"))?.as_str() {
+        "triage" => Permission::SortInbox,
+        "reply" if accepting => Permission::Reply,
+        _ => Permission::WorkTickets,
+    })
+}
+
 pub async fn discard(db: &PgPool, id: Uuid, agent: Uuid) -> Result<()> {
     let state: Option<String> = sqlx::query_scalar("SELECT state FROM proposals WHERE id = $1")
         .bind(id)

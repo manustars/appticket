@@ -8,6 +8,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 
 mod addons;
+mod agents;
 mod auth;
 mod catalog;
 mod cli;
@@ -17,9 +18,11 @@ mod error;
 mod http;
 mod imap;
 mod mail;
+mod mail_status;
 mod outbound;
 mod parents;
 mod proposals;
+mod roles;
 #[cfg(test)]
 mod testing;
 mod tickets;
@@ -82,6 +85,9 @@ enum Command {
     /// Manage agents.
     #[command(subcommand)]
     Agent(cli::AgentCommand),
+    /// Manage roles and their permissions.
+    #[command(subcommand)]
+    Role(cli::RoleCommand),
     /// Manage add-ons.
     #[command(subcommand)]
     Addon(cli::AddonCommand),
@@ -123,6 +129,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Migrate | Command::Openapi => Ok(()),
         Command::Customer(command) => cli::customer(&db, command).await,
         Command::Agent(command) => cli::agent(&db, command).await,
+        Command::Role(command) => cli::role(&db, command).await,
         Command::Addon(command) => cli::addon(&db, command).await,
         Command::Serve {
             listen,
@@ -149,15 +156,22 @@ async fn main() -> anyhow::Result<()> {
             if sender.is_none() {
                 tracing::warn!("HD_MAIL_FROM is not set: agents cannot reply");
             }
+            let mut mail = mail_status::MailStatus::default();
             match imap_url {
                 Some(url) => {
                     let mut config = imap::MailboxConfig::from_url(&url, mail_ca_file.clone())?;
                     config.import_existing = imap_import_existing;
                     tracing::info!(host = %config.host, tls = config.tls, mailbox = %config.mailbox, "reading mail");
+                    let tracker = mail_status::Tracker::new(
+                        format!("{}:{} ({})", config.host, config.port, config.mailbox),
+                        vec![config.password.clone()],
+                    );
+                    mail.reading = Some(tracker.clone());
                     tokio::spawn(imap::poll(
                         db.clone(),
                         config,
                         Duration::from_secs(imap_poll_seconds.max(1)),
+                        tracker,
                     ));
                 }
                 None => tracing::warn!("HD_IMAP_URL is not set: no mail will be read"),
@@ -165,10 +179,13 @@ async fn main() -> anyhow::Result<()> {
             match smtp_url {
                 Some(url) => {
                     let transport = outbound::transport(&url, mail_ca_file.as_ref())?;
+                    let tracker = outbound::tracker(&url)?;
+                    mail.sending = Some(tracker.clone());
                     tokio::spawn(outbound::deliver(
                         db.clone(),
                         transport,
                         Duration::from_secs(5),
+                        tracker,
                     ));
                 }
                 None => tracing::warn!("HD_SMTP_URL is not set: replies stay in the outbox"),
@@ -178,7 +195,7 @@ async fn main() -> anyhow::Result<()> {
                 addons::http_client()?,
                 Duration::from_secs(5),
             ));
-            http::serve(http::AppState { db, sender }, listen, web_dir).await
+            http::serve(http::AppState { db, sender, mail }, listen, web_dir).await
         }
     }
 }

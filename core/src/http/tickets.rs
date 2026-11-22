@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use super::{ApiError, AppState, Problem};
 use crate::auth::SignedIn;
+use crate::roles::Permission;
 use crate::tickets::{self, Moved, Priority, RequesterMove, TicketDetail, TicketState};
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -168,6 +169,7 @@ async fn add_note(
     Path(number): Path<i64>,
     Json(note): Json<NewNote>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::WorkTickets)?;
     tickets::add_note(&state.db, number, agent.id, &note.body).await?;
     Ok(StatusCode::CREATED)
 }
@@ -192,6 +194,7 @@ async fn reply(
     Path(number): Path<i64>,
     Json(reply): Json<NewReply>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::Reply)?;
     let Some(sender) = &state.sender else {
         return Err(ApiError::Conflict(
             "sending mail is not configured on this help desk".into(),
@@ -222,10 +225,11 @@ pub struct StateChange {
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn set_state(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(number): Path<i64>,
     Json(change): Json<StateChange>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::WorkTickets)?;
     tickets::set_state(&state.db, number, change.state).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -244,10 +248,27 @@ pub struct AssigneeChange {
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn set_assignee(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(number): Path<i64>,
     Json(change): Json<AssigneeChange>,
 ) -> Result<StatusCode, ApiError> {
+    // Taking a ticket for oneself, or giving back one's own, is working on it; anything else is
+    // assigning to others.
+    let current: Option<Option<Uuid>> =
+        sqlx::query_scalar("SELECT assignee_id FROM tickets WHERE number = $1")
+            .bind(number)
+            .fetch_optional(&state.db)
+            .await?;
+    let current = current.ok_or(ApiError::NotFound("ticket"))?;
+    let own = match change.agent_id {
+        Some(target) => target == agent.id,
+        None => current.is_none_or(|assignee| assignee == agent.id),
+    };
+    agent.grant.require(if own {
+        Permission::WorkTickets
+    } else {
+        Permission::AssignTickets
+    })?;
     tickets::assign(&state.db, number, change.agent_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -268,10 +289,11 @@ pub struct CustomerChange {
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn move_ticket(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(number): Path<i64>,
     Json(change): Json<CustomerChange>,
 ) -> Result<Json<Moved>, ApiError> {
+    agent.grant.require(Permission::MoveTickets)?;
     Ok(Json(
         tickets::move_to_customer(&state.db, number, change.customer_id, change.requester).await?,
     ))
@@ -291,10 +313,11 @@ pub struct ParentChange {
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn set_parent(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(number): Path<i64>,
     Json(change): Json<ParentChange>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::WorkTickets)?;
     crate::parents::attach(&state.db, number, change.parent_number).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -306,9 +329,10 @@ async fn set_parent(
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn clear_parent(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(number): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::WorkTickets)?;
     crate::parents::detach(&state.db, number).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -332,6 +356,8 @@ async fn resolve_children(
     Path(number): Path<i64>,
     Json(request): Json<ResolveChildren>,
 ) -> Result<Json<crate::parents::ResolvedChildren>, ApiError> {
+    agent.grant.require(Permission::WorkTickets)?;
+    agent.grant.require(Permission::Reply)?;
     let Some(sender) = &state.sender else {
         return Err(ApiError::Conflict(
             "sending mail is not configured on this help desk".into(),
@@ -368,6 +394,7 @@ async fn open_ticket(
     agent: SignedIn,
     Json(new): Json<NewTicket>,
 ) -> Result<(StatusCode, Json<OpenedTicket>), ApiError> {
+    agent.grant.require(Permission::OpenTickets)?;
     let number = tickets::open(
         &state.db,
         new.customer_id,
@@ -393,10 +420,11 @@ pub struct PriorityChange {
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn set_priority(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(number): Path<i64>,
     Json(change): Json<PriorityChange>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::WorkTickets)?;
     tickets::set_priority(&state.db, number, change.priority).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -412,6 +440,9 @@ async fn accept_proposal(
     agent: SignedIn,
     Path(id): Path<Uuid>,
 ) -> Result<Json<crate::proposals::Accepted>, ApiError> {
+    agent
+        .grant
+        .require(crate::proposals::needs(&state.db, id, true).await?)?;
     Ok(Json(
         crate::proposals::accept(&state.db, id, agent.id).await?,
     ))
@@ -427,6 +458,9 @@ async fn discard_proposal(
     agent: SignedIn,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    agent
+        .grant
+        .require(crate::proposals::needs(&state.db, id, false).await?)?;
     crate::proposals::discard(&state.db, id, agent.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -463,6 +497,10 @@ async fn save_draft(
     Path(number): Path<i64>,
     Json(change): Json<DraftChange>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(match change.mode {
+        crate::drafts::DraftMode::Reply => Permission::Reply,
+        crate::drafts::DraftMode::Note => Permission::WorkTickets,
+    })?;
     crate::drafts::save(&state.db, number, agent.id, change.mode, &change.body).await?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -51,6 +51,20 @@ pub type Transport = AsyncSmtpTransport<Tokio1Executor>;
 /// Builds the SMTP transport from `smtps://user:password@host[:port]` (TLS from the start, port
 /// 465 by default), `smtp://…?tls=required` (STARTTLS, port 587 by default) or plain `smtp://…`
 /// (port 25 by default, only for a server on this machine). `ca_file` adds trusted authorities.
+/// Where the outbox records what it does: the server, never the credentials.
+pub fn tracker(raw: &str) -> anyhow::Result<crate::mail_status::Tracker> {
+    let url = url::Url::parse(raw).context("HD_SMTP_URL is not a valid URL")?;
+    let host = url.host_str().context("HD_SMTP_URL has no host")?;
+    let server = match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    };
+    let password = percent_encoding::percent_decode_str(url.password().unwrap_or_default())
+        .decode_utf8_lossy()
+        .into_owned();
+    Ok(crate::mail_status::Tracker::new(server, vec![password]))
+}
+
 pub fn transport(raw: &str, ca_file: Option<&PathBuf>) -> anyhow::Result<Transport> {
     let url = url::Url::parse(raw).context("HD_SMTP_URL is not a valid URL")?;
     let host = url
@@ -99,12 +113,23 @@ pub fn transport(raw: &str, ca_file: Option<&PathBuf>) -> anyhow::Result<Transpo
 }
 
 /// Sends what is due in the outbox every `interval`, forever.
-pub async fn deliver(db: PgPool, transport: Transport, interval: Duration) {
+pub async fn deliver(
+    db: PgPool,
+    transport: Transport,
+    interval: Duration,
+    status: crate::mail_status::Tracker,
+) {
     loop {
         match deliver_due(&db, &transport).await {
             Ok(0) => {}
-            Ok(n) => tracing::info!(messages = n, "sent mail"),
-            Err(error) => tracing::warn!(error = format!("{error:#}"), "sending mail failed"),
+            Ok(n) => {
+                tracing::info!(messages = n, "sent mail");
+                status.succeeded();
+            }
+            Err(error) => {
+                tracing::warn!(error = format!("{error:#}"), "sending mail failed");
+                status.failed(&error);
+            }
         }
         tokio::time::sleep(interval).await;
     }

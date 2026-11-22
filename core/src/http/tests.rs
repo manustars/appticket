@@ -20,25 +20,35 @@ pub struct Client {
 }
 
 impl Client {
+    /// Signed in as an Administrator.
     pub async fn new(db: &PgPool) -> Client {
+        let admin: Uuid = sqlx::query_scalar("SELECT id FROM roles WHERE is_administrator")
+            .fetch_one(db)
+            .await
+            .unwrap();
+        Client::with_role(db, "marco@northgate.test", admin).await
+    }
+
+    /// Signed in as a new agent with `role`.
+    pub async fn with_role(db: &PgPool, email: &str, role: Uuid) -> Client {
         let agent = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO agents (id, email, name, password_hash) VALUES ($1, 'marco@northgate.test', 'Marco Lenti', $2)",
+            "INSERT INTO agents (id, email, name, password_hash, role_id) VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(agent)
+        .bind(email)
+        .bind(email.split('@').next().unwrap())
         .bind(crate::auth::hash_password("pw").unwrap())
+        .bind(role)
         .execute(db)
         .await
         .unwrap();
-        let token = crate::auth::sign_in(db, "marco@northgate.test", "pw")
+        let token = crate::auth::sign_in(db, email, "pw")
             .await
             .unwrap()
             .unwrap();
         Client {
-            state: AppState {
-                db: db.clone(),
-                sender: Some(testing::sender()),
-            },
+            state: AppState::for_tests(db),
             cookie: format!("{}={token}", crate::auth::SESSION_COOKIE),
             bearer: None,
             agent,
@@ -48,10 +58,7 @@ impl Client {
     /// A client that authenticates with an add-on's bearer token instead of a session.
     pub fn new_with_token(db: &PgPool, token: &str, agent: Uuid) -> Client {
         Client {
-            state: AppState {
-                db: db.clone(),
-                sender: Some(testing::sender()),
-            },
+            state: AppState::for_tests(db),
             cookie: String::new(),
             bearer: Some(token.to_owned()),
             agent,
@@ -348,4 +355,260 @@ async fn an_addon_proposes_and_an_agent_accepts(db: PgPool) {
     assert_eq!(ticket["customer"]["name"], "Brightfield");
     assert_eq!(ticket["priority"], "normal");
     assert!(api.get("/api/inbox").await.as_array().unwrap().is_empty());
+}
+
+/// A request body that the extractors accept, built from the OpenAPI schema: every property
+/// filled with a plain value of its type.
+fn sample(spec: &Value, schema: &Value) -> Value {
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        let name = reference.rsplit('/').next().unwrap();
+        return sample(spec, &spec["components"]["schemas"][name]);
+    }
+    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+        return values[0].clone();
+    }
+    for key in ["oneOf", "anyOf", "allOf"] {
+        if let Some(first) = schema.get(key).and_then(|list| list.get(0)) {
+            return sample(spec, first);
+        }
+    }
+    let kind = match &schema["type"] {
+        Value::String(kind) => kind.clone(),
+        Value::Array(kinds) => kinds
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|kind| *kind != "null")
+            .unwrap_or("null")
+            .to_owned(),
+        _ => "object".to_owned(),
+    };
+    match kind.as_str() {
+        "object" => Value::Object(
+            schema["properties"]
+                .as_object()
+                .map(|properties| {
+                    properties
+                        .iter()
+                        .map(|(name, property)| (name.clone(), sample(spec, property)))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ),
+        "array" => Value::Array(Vec::new()),
+        "string" if schema["format"] == "uuid" => Value::String(Uuid::nil().to_string()),
+        "string" => Value::String("someone@example.com".into()),
+        "integer" | "number" => Value::from(1),
+        "boolean" => Value::Bool(true),
+        _ => Value::Null,
+    }
+}
+
+async fn role_with(db: &PgPool, name: &str, permissions: &[crate::roles::Permission]) -> Uuid {
+    crate::roles::create(db, &crate::roles::Grant::command_line(), name, permissions)
+        .await
+        .unwrap()
+}
+
+/// Every request that changes something needs a permission: an agent whose role has none is
+/// refused all of them. A new route without a check fails here.
+#[sqlx::test]
+async fn an_agent_without_permissions_changes_nothing(db: PgPool) {
+    let reader = role_with(&db, "Reader", &[]).await;
+    let api = Client::with_role(&db, "rita@northgate.test", reader).await;
+    let customer = testing::customer(&db, "Brightfield").await;
+    let number = testing::ticket(&db, customer, None, "<one@brightfield.test>").await;
+    let addon = crate::addons::register(&db, "assistant", "http://127.0.0.1:1", &[], &[])
+        .await
+        .unwrap();
+    let proposal = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO proposals (id, addon_id, ticket_id, kind, content)
+         SELECT $1, $2, id, 'priority', '{\"kind\": \"priority\", \"priority\": \"high\"}'
+         FROM tickets WHERE number = $3",
+    )
+    .bind(proposal)
+    .bind(addon.id)
+    .bind(number)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let spec = serde_json::to_value(super::openapi()).unwrap();
+    let mut checked = 0;
+    for (path, operations) in spec["paths"].as_object().unwrap() {
+        // Signing in and out and one's own password are for everyone; add-ons use tokens.
+        if path.starts_with("/api/session") || path.starts_with("/api/addon/") {
+            continue;
+        }
+        for (method, operation) in operations.as_object().unwrap() {
+            if method == "get" {
+                continue;
+            }
+            let uri = path
+                .replace("{number}", &number.to_string())
+                .replace("{name}", "assistant")
+                .replace("{domain}", "brightfield.test")
+                .replace(
+                    "{id}",
+                    &if path.starts_with("/api/proposals/") {
+                        proposal
+                    } else {
+                        Uuid::new_v4()
+                    }
+                    .to_string(),
+                )
+                .replace("{asset}", &Uuid::new_v4().to_string())
+                .replace("{service}", &Uuid::new_v4().to_string())
+                .replace("{customer}", &Uuid::new_v4().to_string());
+            let body = operation
+                .pointer("/requestBody/content/application~1json/schema")
+                .map(|schema| sample(&spec, schema));
+            let (status, json) = api.call(&method.to_uppercase(), &uri, body).await;
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "{} {uri} answered {status}: {json}",
+                method.to_uppercase()
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 40, "only {checked} routes checked");
+
+    for uri in [
+        "/api/admin/agents",
+        "/api/admin/roles",
+        "/api/admin/addons",
+        "/api/admin/mail",
+    ] {
+        let (status, _) = api.call("GET", uri, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "GET {uri}");
+    }
+    // Reading stays open to every agent.
+    api.get("/api/tickets").await;
+    api.get(&format!("/api/tickets/{number}")).await;
+    api.get("/api/inbox").await;
+    let me = api.get("/api/session").await;
+    assert_eq!(me["role_name"], "Reader");
+    assert_eq!(me["permissions"], serde_json::json!([]));
+}
+
+#[sqlx::test]
+async fn a_role_allows_what_it_holds_and_changes_apply_at_once(db: PgPool) {
+    use crate::roles::Permission;
+    let sorter = role_with(&db, "Sorter", &[Permission::SortInbox]).await;
+    let api = Client::with_role(&db, "sara@northgate.test", sorter).await;
+    let message = testing::inbox_message(&db, "someone@elsewhere.test").await;
+    let customer = testing::customer(&db, "Brightfield").await;
+    let number = testing::ticket(&db, customer, None, "<two@brightfield.test>").await;
+
+    let (status, _) = api
+        .call("POST", &format!("/api/inbox/{message}/discard"), None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let note = serde_json::json!({"body": "Called back."});
+    let (status, json) = api
+        .call(
+            "POST",
+            &format!("/api/tickets/{number}/notes"),
+            Some(note.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        json["error"],
+        "Your role does not allow working on tickets."
+    );
+
+    crate::roles::update(
+        &db,
+        &crate::roles::Grant::command_line(),
+        sorter,
+        "Sorter",
+        &[Permission::SortInbox, Permission::WorkTickets],
+    )
+    .await
+    .unwrap();
+    let (status, _) = api
+        .call("POST", &format!("/api/tickets/{number}/notes"), Some(note))
+        .await;
+    assert!(status.is_success(), "{status}");
+
+    // Taking a ticket is working on it; giving it to someone else is assigning.
+    let me = serde_json::json!({"agent_id": api.agent});
+    let (status, _) = api
+        .call("PUT", &format!("/api/tickets/{number}/assignee"), Some(me))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let admin = Client::new(&db).await;
+    let other = serde_json::json!({"agent_id": admin.agent});
+    let (status, _) = api
+        .call(
+            "PUT",
+            &format!("/api/tickets/{number}/assignee"),
+            Some(other),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[sqlx::test]
+async fn administrators_manage_agents_through_the_api(db: PgPool) {
+    let admin = Client::new(&db).await;
+    let roles = admin.get("/api/admin/roles").await;
+    let agent_role = roles
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["default"] == true)
+        .unwrap()["id"]
+        .clone();
+    let (status, added) = admin
+        .call(
+            "POST",
+            "/api/admin/agents",
+            Some(serde_json::json!({"email": "Nina@Northgate.test", "name": "Nina", "role_id": agent_role})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let password = added["password"].as_str().unwrap().to_owned();
+    assert!(
+        crate::auth::sign_in(&db, "nina@northgate.test", &password)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let id = added["id"].as_str().unwrap();
+    let (status, _) = admin
+        .call("POST", &format!("/api/admin/agents/{id}/deactivate"), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let agents = admin.get("/api/admin/agents").await;
+    assert!(
+        agents
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["email"] == "nina@northgate.test" && a["deactivated_at"].is_string())
+    );
+    assert!(
+        !admin
+            .get("/api/agents")
+            .await
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["email"] == "nina@northgate.test")
+    );
+    // The last Administrator cannot step down.
+    let (status, json) = admin
+        .call(
+            "PUT",
+            &format!("/api/admin/agents/{}/role", admin.agent),
+            Some(serde_json::json!({"role_id": agent_role})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    let mail = admin.get("/api/admin/mail").await;
+    assert!(mail["reading"].is_null() && mail["outbox"]["waiting"] == 0);
 }

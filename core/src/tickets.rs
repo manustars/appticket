@@ -114,12 +114,17 @@ pub async fn assign(db: &PgPool, number: i64, agent: Option<Uuid>) -> Result<()>
     let (ticket_id, state) = lock(&mut tx, number).await?;
     not_closed(state)?;
     if let Some(agent) = agent {
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM agents WHERE id = $1)")
-            .bind(agent)
-            .fetch_one(&mut *tx)
-            .await?;
-        if !exists {
-            return Err(Error::NotFound("agent"));
+        let active: Option<bool> =
+            sqlx::query_scalar("SELECT deactivated_at IS NULL FROM agents WHERE id = $1")
+                .bind(agent)
+                .fetch_optional(&mut *tx)
+                .await?;
+        match active {
+            None => return Err(Error::NotFound("agent")),
+            Some(false) => {
+                return rule("the agent is deactivated: tickets cannot be assigned to them");
+            }
+            Some(true) => {}
         }
     }
     sqlx::query("UPDATE tickets SET assignee_id = $2, updated_at = now() WHERE id = $1")

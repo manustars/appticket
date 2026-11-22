@@ -84,7 +84,12 @@ pub fn is_local(host: &str) -> bool {
 }
 
 /// Reads the mailbox every `interval`, forever. Errors are logged and retried on the next round.
-pub async fn poll(db: PgPool, config: MailboxConfig, interval: Duration) {
+pub async fn poll(
+    db: PgPool,
+    config: MailboxConfig,
+    interval: Duration,
+    status: crate::mail_status::Tracker,
+) {
     let tls = match config
         .tls
         .then(|| tls_connector(config.ca_file.as_ref()))
@@ -96,14 +101,22 @@ pub async fn poll(db: PgPool, config: MailboxConfig, interval: Duration) {
                 error = format!("{error:#}"),
                 "cannot read mail: TLS setup failed"
             );
+            status.failed(&error.context("cannot read mail: TLS setup failed"));
             return;
         }
     };
     loop {
         match read_new(&db, &config, tls.as_ref()).await {
-            Ok(0) => {}
-            Ok(n) => tracing::info!(messages = n, "read new mail"),
-            Err(error) => tracing::warn!(error = format!("{error:#}"), "reading mail failed"),
+            Ok(n) => {
+                status.succeeded();
+                if n > 0 {
+                    tracing::info!(messages = n, "read new mail");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(error = format!("{error:#}"), "reading mail failed");
+                status.failed(&error);
+            }
         }
         tokio::time::sleep(interval).await;
     }

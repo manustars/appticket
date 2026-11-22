@@ -13,6 +13,7 @@ use uuid::Uuid;
 use super::{ApiError, AppState, Problem};
 use crate::auth::SignedIn;
 use crate::catalog::{self, Asset, Service, ServiceDetail};
+use crate::roles::Permission;
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -60,10 +61,11 @@ pub struct AssetFields {
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn create_asset(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(id): Path<Uuid>,
     Json(fields): Json<AssetFields>,
 ) -> Result<(StatusCode, Json<Created>), ApiError> {
+    agent.grant.require(Permission::ManageCatalog)?;
     let id = catalog::create_asset(&state.db, id, &fields.kind, &fields.name).await?;
     Ok((StatusCode::CREATED, Json(Created { id })))
 }
@@ -87,10 +89,11 @@ async fn customer_services(
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn update_asset(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(id): Path<Uuid>,
     Json(fields): Json<AssetFields>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCatalog)?;
     catalog::update_asset(&state.db, id, &fields.kind, &fields.name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -102,9 +105,10 @@ async fn update_asset(
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn retire_asset(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCatalog)?;
     catalog::retire_asset(&state.db, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -132,9 +136,10 @@ pub struct NewService {
         (status = UNAUTHORIZED, body = Problem)))]
 async fn create_service(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Json(new): Json<NewService>,
 ) -> Result<(StatusCode, Json<Created>), ApiError> {
+    agent.grant.require(Permission::ManageCatalog)?;
     let id = catalog::create_service(&state.db, &new.name, &new.description).await?;
     Ok((StatusCode::CREATED, Json(Created { id })))
 }
@@ -160,9 +165,10 @@ async fn get_service(
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn use_service(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path((id, customer)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCatalog)?;
     catalog::use_service(&state.db, id, customer).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -175,9 +181,10 @@ async fn use_service(
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn stop_using_service(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path((id, customer)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCatalog)?;
     catalog::stop_using_service(&state.db, id, customer).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -190,9 +197,10 @@ async fn stop_using_service(
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn runs_on(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path((id, asset)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCatalog)?;
     catalog::runs_on(&state.db, id, asset, true).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -204,9 +212,10 @@ async fn runs_on(
     responses((status = NO_CONTENT), (status = UNAUTHORIZED, body = Problem)))]
 async fn stops_running_on(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path((id, asset)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCatalog)?;
     catalog::runs_on(&state.db, id, asset, false).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -219,9 +228,10 @@ async fn stops_running_on(
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn link_ticket_asset(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path((number, asset)): Path<(i64, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::WorkTickets)?;
     catalog::link_asset(&state.db, number, asset, true).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -234,9 +244,10 @@ async fn link_ticket_asset(
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn unlink_ticket_asset(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path((number, asset)): Path<(i64, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::WorkTickets)?;
     catalog::link_asset(&state.db, number, asset, false).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -249,9 +260,10 @@ async fn unlink_ticket_asset(
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn link_ticket_service(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path((number, service)): Path<(i64, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::WorkTickets)?;
     catalog::link_service(&state.db, number, service, true).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -264,9 +276,10 @@ async fn link_ticket_service(
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn unlink_ticket_service(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path((number, service)): Path<(i64, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::WorkTickets)?;
     catalog::link_service(&state.db, number, service, false).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -278,10 +291,11 @@ async fn unlink_ticket_service(
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn update_service(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(id): Path<Uuid>,
     Json(fields): Json<NewService>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCatalog)?;
     catalog::update_service(&state.db, id, &fields.name, &fields.description).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -293,9 +307,10 @@ async fn update_service(
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn retire_service(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCatalog)?;
     catalog::retire_service(&state.db, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

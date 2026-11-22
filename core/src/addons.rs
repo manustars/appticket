@@ -123,22 +123,34 @@ pub async fn set_enabled(db: &PgPool, name: &str, enabled: bool) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, sqlx::FromRow)]
+/// An add-on as the command line and those who manage add-ons see it; never its secrets.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema, sqlx::FromRow)]
 pub struct AddonRow {
     pub name: String,
     pub url: String,
+    /// Event kinds it receives.
     pub events: Vec<String>,
+    /// What its token may do.
     pub scopes: Vec<String>,
     pub enabled: bool,
     /// Events not yet delivered.
     pub pending: i64,
+    /// Undelivered events whose delivery has failed at least once.
+    pub failing: i64,
+    /// Why the latest failed delivery failed.
+    pub last_error: Option<String>,
 }
 
 pub async fn list(db: &PgPool) -> Result<Vec<AddonRow>> {
     Ok(sqlx::query_as(
         "SELECT a.name, a.url, a.events, a.scopes, a.enabled,
                 (SELECT count(*) FROM event_deliveries d
-                 WHERE d.addon_id = a.id AND d.delivered_at IS NULL) AS pending
+                 WHERE d.addon_id = a.id AND d.delivered_at IS NULL) AS pending,
+                (SELECT count(*) FROM event_deliveries d
+                 WHERE d.addon_id = a.id AND d.delivered_at IS NULL AND d.attempts > 0) AS failing,
+                (SELECT d.last_error FROM event_deliveries d
+                 WHERE d.addon_id = a.id AND d.delivered_at IS NULL AND d.last_error IS NOT NULL
+                 ORDER BY d.next_attempt_at DESC NULLS LAST LIMIT 1) AS last_error
          FROM addons a ORDER BY a.name",
     )
     .fetch_all(db)

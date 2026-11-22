@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use super::{ApiError, AppState, Problem};
 use crate::auth::SignedIn;
+use crate::roles::Permission;
 use crate::triage;
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -79,10 +80,11 @@ pub struct OpenedTicket {
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn open_ticket(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(id): Path<Uuid>,
     Json(request): Json<OpenTicket>,
 ) -> Result<(StatusCode, Json<OpenedTicket>), ApiError> {
+    agent.grant.require(Permission::SortInbox)?;
     let number = triage::open_ticket(&state.db, id, request.customer_id).await?;
     Ok((StatusCode::CREATED, Json(OpenedTicket { number })))
 }
@@ -101,10 +103,11 @@ pub struct Attach {
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn attach(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(id): Path<Uuid>,
     Json(request): Json<Attach>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::SortInbox)?;
     triage::attach(&state.db, id, request.ticket_number).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -116,9 +119,10 @@ async fn attach(
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn discard(
     State(state): State<AppState>,
-    _agent: SignedIn,
+    agent: SignedIn,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::SortInbox)?;
     triage::discard(&state.db, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

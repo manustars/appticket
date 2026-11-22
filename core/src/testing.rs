@@ -30,13 +30,16 @@ pub async fn requester(db: &PgPool, customer: Uuid, email: &str) -> Uuid {
 
 pub async fn agent(db: &PgPool, email: &str) -> Uuid {
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO agents (id, email, name, password_hash) VALUES ($1, $2, $3, 'x')")
-        .bind(id)
-        .bind(email)
-        .bind(email.split('@').next().unwrap())
-        .execute(db)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO agents (id, email, name, password_hash, role_id)
+         VALUES ($1, $2, $3, 'x', (SELECT id FROM roles WHERE is_administrator))",
+    )
+    .bind(id)
+    .bind(email)
+    .bind(email.split('@').next().unwrap())
+    .execute(db)
+    .await
+    .unwrap();
     id
 }
 

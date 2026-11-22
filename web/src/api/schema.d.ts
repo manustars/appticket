@@ -129,6 +129,213 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/addons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every add-on with its deliveries; never its token or event secret. */
+        get: operations["list_addons"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/addons/{name}/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Switches an add-on on (its token works, its waiting events go out) or off. */
+        put: operations["set_addon_enabled"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every agent, deactivated ones last. */
+        get: operations["list_agents"];
+        put?: never;
+        /** Adds an agent with a generated password. */
+        post: operations["add_agent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/agents/{id}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Deactivates an agent who left the help desk. */
+        post: operations["deactivate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/agents/{id}/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Gives the agent a new, generated password and ends their sessions. */
+        post: operations["reset_password"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/agents/{id}/reactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Lets a deactivated agent sign in again. */
+        post: operations["reactivate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/agents/{id}/role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Gives the agent another role. */
+        put: operations["set_role"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/mail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What reading and sending mail last did since the core started, and the outbox. */
+        get: operations["mail_state"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every permission a role can hold, in the product's order. */
+        get: operations["list_permissions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every role, the Administrator first. Those who manage agents need it to give roles. */
+        get: operations["list_roles"];
+        put?: never;
+        /** Creates a role. */
+        post: operations["create_role"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/roles/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Renames a role and replaces its permissions. */
+        put: operations["update_role"];
+        post?: never;
+        /** Removes a role no agent has. */
+        delete: operations["remove_role"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/roles/{id}/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Makes the role the one new agents get when none is named. */
+        post: operations["make_default"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents": {
         parameters: {
             query?: never;
@@ -136,7 +343,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** All agents, by name. */
+        /** Agents who are not deactivated, by name: those a ticket can be assigned to. */
         get: operations["list_agents"];
         put?: never;
         post?: never;
@@ -554,13 +761,30 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The signed-in agent. */
+        /** The signed-in agent, with what their role allows. */
         get: operations["current_session"];
         put?: never;
         /** Signs an agent in and sets the session cookie. */
         post: operations["sign_in"];
         /** Signs the agent out. */
         delete: operations["sign_out"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/session/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Changes the signed-in agent's password; their other sessions end. */
+        put: operations["change_password"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -806,6 +1030,26 @@ export interface components {
              */
             ticket_number?: number | null;
         };
+        /** @description The last outcome of reading or sending mail. */
+        Activity: {
+            /** @description The last failure since the core started, with any credentials taken out. */
+            last_error?: string | null;
+            /** Format: date-time */
+            last_error_at?: string | null;
+            /**
+             * Format: date-time
+             * @description Reading: the last read that worked. Sending: the last message sent.
+             */
+            last_success_at?: string | null;
+            /** @description The server's host and port; never the credentials. */
+            server: string;
+        };
+        AddedAgent: {
+            /** Format: uuid */
+            id: string;
+            /** @description The new agent's first password, generated; it is not shown again. */
+            password: string;
+        };
         AddonCustomer: {
             /** @description Mail domains that identify the customer's requesters. */
             domains: string[];
@@ -820,6 +1064,28 @@ export interface components {
             name: string;
             scopes: string[];
         };
+        /** @description An add-on as the command line and those who manage add-ons see it; never its secrets. */
+        AddonRow: {
+            enabled: boolean;
+            /** @description Event kinds it receives. */
+            events: string[];
+            /**
+             * Format: int64
+             * @description Undelivered events whose delivery has failed at least once.
+             */
+            failing: number;
+            /** @description Why the latest failed delivery failed. */
+            last_error?: string | null;
+            name: string;
+            /**
+             * Format: int64
+             * @description Events not yet delivered.
+             */
+            pending: number;
+            /** @description What its token may do. */
+            scopes: string[];
+            url: string;
+        };
         AddonTicketSummary: {
             /** Format: uuid */
             customer_id: string;
@@ -833,10 +1099,32 @@ export interface components {
             updated_at: string;
         };
         Agent: {
+            /** @description Whether the agent's role is the Administrator role. */
+            administrator: boolean;
             email: string;
             /** Format: uuid */
             id: string;
             name: string;
+            /** @description Everything the agent's role allows beyond reading; every permission for an Administrator. */
+            permissions: components["schemas"]["Permission"][];
+            role_name: string;
+        };
+        /** @description An agent as those who manage agents see them. */
+        AgentAccount: {
+            /** @description Whether the agent's role is the Administrator role. */
+            administrator: boolean;
+            /**
+             * Format: date-time
+             * @description When the agent was deactivated; empty while they work at the help desk.
+             */
+            deactivated_at?: string | null;
+            email: string;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: uuid */
+            role_id: string;
+            role_name: string;
         };
         AgentEntry: {
             email: string;
@@ -955,6 +1243,13 @@ export interface components {
             /** Format: int64 */
             requesters: number;
         };
+        Deactivated: {
+            /**
+             * Format: int64
+             * @description Tickets that lost the agent as their assignee.
+             */
+            unassigned: number;
+        };
         /**
          * @description Whether the help desk received a message or sent it.
          * @enum {string}
@@ -976,6 +1271,22 @@ export interface components {
          * @enum {string}
          */
         DraftMode: "reply" | "note";
+        /** @description A reply the outbox has not managed to send yet. */
+        FailingReply: {
+            /** Format: int32 */
+            attempts: number;
+            last_error?: string | null;
+            /** Format: date-time */
+            next_attempt_at?: string | null;
+            subject: string;
+            /** Format: int64 */
+            ticket_number?: number | null;
+            to_address?: string | null;
+        };
+        /** @description A password made by the core, shown once to the agent who asked for it. */
+        GeneratedPassword: {
+            password: string;
+        };
         Health: {
             status: string;
         };
@@ -1000,6 +1311,13 @@ export interface components {
             /** Format: uuid */
             id: string;
             name: string;
+        };
+        MailState: {
+            /** @description The address replies come from; null when agents cannot reply. */
+            from_address?: string | null;
+            outbox: components["schemas"]["OutboxState"];
+            reading?: components["schemas"]["Activity"] | null;
+            sending?: components["schemas"]["Activity"] | null;
         };
         MessageEntry: {
             /** @description The agent who wrote an outbound message. */
@@ -1036,6 +1354,15 @@ export interface components {
              * @description How many asset and service links were removed because they did not fit the new customer.
              */
             unlinked: number;
+        };
+        NewAgent: {
+            email: string;
+            name: string;
+            /**
+             * Format: uuid
+             * @description The role; omitted, the default role.
+             */
+            role_id?: string | null;
         };
         NewCustomer: {
             /** @description Mail domains of the customer's requesters, e.g. `brightfield.test`. */
@@ -1109,6 +1436,17 @@ export interface components {
             /** Format: int64 */
             number: number;
         };
+        OutboxState: {
+            /** @description Replies that failed at least once, most attempted first (at most 50). */
+            failing: components["schemas"]["FailingReply"][];
+            /** Format: date-time */
+            oldest_waiting_at?: string | null;
+            /**
+             * Format: int64
+             * @description Replies not sent yet.
+             */
+            waiting: number;
+        };
         ParentChange: {
             /**
              * Format: int64
@@ -1121,6 +1459,16 @@ export interface components {
             id: string;
             name: string;
         };
+        PasswordChange: {
+            current_password: string;
+            new_password: string;
+        };
+        /**
+         * @description Something beyond reading that a role allows. The list is the product's; the database checks
+         *     stored permissions against it (migration 0012), so a new one needs a migration too.
+         * @enum {string}
+         */
+        Permission: "tickets.work" | "tickets.reply" | "tickets.open" | "tickets.assign" | "tickets.move" | "inbox.triage" | "customers.manage" | "catalog.manage" | "agents.manage" | "roles.manage" | "addons.manage" | "mail.view";
         /**
          * @description How soon a ticket needs attention.
          * @enum {string}
@@ -1219,6 +1567,31 @@ export interface components {
              */
             resolved: number;
         };
+        /** @description A role as the agents' UI and the command line show it. */
+        Role: {
+            /** @description The built-in Administrator role: every permission, cannot be changed or removed. */
+            administrator: boolean;
+            /**
+             * Format: int64
+             * @description How many agents, deactivated ones included, have it.
+             */
+            agents: number;
+            /** @description The role new agents get when none is named. */
+            default: boolean;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description Empty for the Administrator role, which allows every permission. */
+            permissions: components["schemas"]["Permission"][];
+        };
+        RoleChange: {
+            /** Format: uuid */
+            role_id: string;
+        };
+        RoleRequest: {
+            name: string;
+            permissions: components["schemas"]["Permission"][];
+        };
         Service: {
             /**
              * Format: int64
@@ -1243,6 +1616,9 @@ export interface components {
         };
         StateChange: {
             state: components["schemas"]["TicketState"];
+        };
+        Switch: {
+            enabled: boolean;
         };
         TicketCustomer: {
             /** Format: uuid */
@@ -1598,6 +1974,675 @@ export interface operations {
                 };
             };
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_addons: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddonRow"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    set_addon_enabled: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The add-on's name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Switch"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_agents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAccount"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    add_agent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewAgent"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddedAgent"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deactivate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Deactivated"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    reset_password: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratedPassword"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    reactivate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    set_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleChange"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    mail_state: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailState"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_permissions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Permission"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_roles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Role"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Created"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    update_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The role */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleRequest"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    remove_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The role */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    make_default: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The role */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2915,6 +3960,51 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    change_password: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordChange"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
             };
         };
     };

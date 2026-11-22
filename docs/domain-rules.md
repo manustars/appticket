@@ -24,6 +24,38 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
 - Agents are always staff of the help desk and see every customer.
 - A ticket has at most one assignee; other agents can still write messages and notes on it.
 
+## Agents, roles and permissions
+
+- Every agent has exactly one role. Every signed-in agent can read tickets, the inbox, customers,
+  assets and services; anything else needs a permission of the agent's role.
+- The product defines the permissions: work tickets (notes, state, priority, links to assets and
+  services, parent and child tickets, taking a ticket for oneself), reply to requesters, open
+  tickets by hand, assign tickets to others, move tickets to another customer, sort the inbox,
+  manage customers, manage the catalog (assets and services), manage agents, manage roles, manage
+  add-ons, and view the state of the mail. The help desk defines the roles.
+- Permissions apply to every customer.
+- The Administrator role exists exactly once and allows everything, including permissions later
+  versions add; it is never changed or removed.
+- At least one agent who is not deactivated has the Administrator role at all times; a change that
+  would leave none is refused. The command line can always give an agent the Administrator role.
+- An agent cannot hand out more than they hold: a role can be given to an agent, created or changed
+  only by an agent who holds every permission it has (before and after the change), and an agent's
+  role can be changed, their password reset or the agent deactivated only by an agent who holds
+  every permission of that agent's role. Only an Administrator acts on Administrators.
+- One role, not the Administrator, is the default for new agents. The first agent of an
+  installation gets the Administrator role.
+- A role that some agent has cannot be removed, nor can the default role.
+- Changes to a role or to an agent apply from the agent's next request, without signing in again.
+- A deactivated agent cannot sign in, their sessions end at once and the tickets assigned to them
+  that are not closed lose their assignee. No ticket can be assigned to a deactivated agent. A
+  deactivated agent can be reactivated.
+- Accepting a proposal needs the permission of what it does: sorting the inbox for an inbox
+  message, working tickets for priority, assets and services, replying to requesters for a draft
+  reply. Discarding one needs sorting the inbox or working tickets in the same way.
+- Agents change their own password by giving the current one. An agent who manages agents resets
+  another agent's password to a generated one, shown once. Either way the agent's other sessions
+  end.
+
 ## Tickets
 
 - A ticket has a priority: low, normal (the default), high or urgent. Agents change it, except on
