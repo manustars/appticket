@@ -1,0 +1,222 @@
+# Values of the help desk chart. Secrets are never values here: the chart refers to Kubernetes
+# Secrets by name, which you create before installing (see docs/deploy.md).
+
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+# ---------------------------------------------------------------------------------------------
+# The core: API, agents' UI, mail reading and sending, add-on events.
+# ---------------------------------------------------------------------------------------------
+core:
+  image:
+    repository: ghcr.io/manustars/hd-core
+    # Empty: the chart's appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # Keep 1: the core reads one mailbox and runs its outbox; the chart also replaces the pod
+  # rather than rolling it, so that two cores never run at once.
+  replicas: 1
+
+  # Where HD_DATABASE_URL comes from. With postgresql.enabled the chart uses the app Secret the
+  # CloudNativePG cluster creates; otherwise name an existing Secret holding a postgres:// URL.
+  database:
+    existingSecret: ""
+    secretKey: uri
+
+  mail:
+    # HD_MAIL_FROM: the help desk's own address, which replies come from. Without it agents
+    # cannot reply. With greenmail.enabled and nothing set, the test mailbox's address.
+    from: ""
+    fromName: "Help desk"
+    # HD_IMAP_URL (imaps://user:password@host/INBOX), from a Secret. Without it no mail is read,
+    # unless greenmail.enabled.
+    imap:
+      existingSecret: ""
+      secretKey: imap-url
+    # HD_SMTP_URL (smtps://user:password@host or smtp://…?tls=required), from a Secret. Without
+    # it replies wait in the outbox, unless greenmail.enabled.
+    smtp:
+      existingSecret: ""
+      secretKey: smtp-url
+    # A Secret with a PEM file of extra certificate authorities for the mail servers
+    # (HD_MAIL_CA_FILE), for servers with a private CA.
+    ca:
+      existingSecret: ""
+      secretKey: ca.crt
+    # Seconds between two reads of the mailbox.
+    pollSeconds: 30
+    # Import the mail already in the mailbox on the very first read (normally left alone).
+    importExisting: false
+
+  # HD_LOG: a tracing filter.
+  log: "info,sqlx=warn"
+
+  # More environment variables, as a list of EnvVar objects.
+  extraEnv: []
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: helpdesk.example.com
+  # The agents' sign-in cookie is marked Secure: the UI only works over HTTPS (or through a
+  # port-forward to localhost). Terminate TLS here or in front of the cluster.
+  tls:
+    enabled: true
+    # A Secret of type kubernetes.io/tls, existing or created by cert-manager through an
+    # annotation above.
+    secretName: helpdesk-tls
+
+# ---------------------------------------------------------------------------------------------
+# The Assistant add-on (optional). Register it on the core first (`hd addon add …`, see
+# docs/deploy.md), put the printed token and event secret in a Secret, then enable it.
+# ---------------------------------------------------------------------------------------------
+assistant:
+  enabled: false
+  image:
+    repository: ghcr.io/manustars/hd-assistant
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # A Secret with the add-on's credentials and, for hosted providers, the model service's key.
+  secret:
+    existingSecret: ""
+    tokenKey: token
+    eventSecretKey: event-secret
+    # Optional in the Secret: self-hosted servers often need no key.
+    apiKeyKey: api-key
+
+  # The model: there is no default provider or model, both are required when enabled.
+  model:
+    # anthropic, openai, mistral, gemini, azure-openai, ollama or openai-compatible.
+    provider: ""
+    # The model's id; for azure-openai, the deployment's name.
+    name: ""
+    # The service's base URL; required for azure-openai and openai-compatible.
+    url: ""
+    # Optional settings, sent only when set: HD_ASSISTANT_MODEL_CONCURRENCY,
+    # HD_ASSISTANT_MODEL_EFFORT (anthropic), HD_ASSISTANT_THINKING (openai-compatible: on|off),
+    # HD_ASSISTANT_AZURE_API_VERSION (azure-openai).
+    concurrency: ""
+    effort: ""
+    thinking: ""
+    azureApiVersion: ""
+
+  # The core's URL as the Assistant calls it. Empty: the core's Service in this release.
+  coreUrl: ""
+  # HD_ASSISTANT_LOG
+  log: "info"
+  extraEnv: []
+
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------------------------------------------------------------------------------------------
+# PostgreSQL through CloudNativePG (the operator must be installed in the cluster). When
+# disabled, point core.database.existingSecret at a Secret with the database URL.
+# ---------------------------------------------------------------------------------------------
+postgresql:
+  enabled: true
+  # Leave the database cluster, and so its data, in place on `helm uninstall`. Delete it by hand
+  # (kubectl delete cluster <release>-db) when you really mean to.
+  keepOnUninstall: true
+  instances: 1
+  # An exact PostgreSQL image for the cluster; empty: the operator's default.
+  imageName: ""
+  database: hd
+  owner: hd
+  storage:
+    size: 5Gi
+    # Empty: the cluster's default StorageClass.
+    storageClass: ""
+  resources: {}
+
+  # Scheduled backups, off by default. Pick one method:
+  # - volumeSnapshot: CSI volume snapshots of the database volume (needs a VolumeSnapshotClass);
+  # - objectStore: base backups and WAL archiving to S3-compatible storage through the Barman
+  #   Cloud plugin (needs the plugin installed next to the operator).
+  backup:
+    enabled: false
+    method: volumeSnapshot
+    # Six fields, seconds first: "0 0 2 * * *" is every day at 02:00.
+    schedule: "0 0 2 * * *"
+    volumeSnapshot:
+      # Required with this method: the VolumeSnapshotClass of the database volume.
+      className: ""
+    objectStore:
+      # s3://bucket/path/
+      destinationPath: ""
+      # For S3-compatible services other than AWS, such as MinIO.
+      endpointURL: ""
+      # A Secret with the access key id and secret access key.
+      credentialsSecret: ""
+      accessKeyIdKey: ACCESS_KEY_ID
+      secretAccessKeyKey: ACCESS_SECRET_KEY
+      # How long backups are kept, such as 30d, 4w or 6m.
+      retentionPolicy: 30d
+
+# ---------------------------------------------------------------------------------------------
+# A test mail server for staging (off by default). GreenMail runs next to the core in the same
+# pod, because the core accepts plain imap:// and smtp:// only for a server on its own host. It
+# accepts any mail and keeps it in one mailbox; nothing leaves it. With it enabled and no IMAP or
+# SMTP Secret set, the core reads and sends through it.
+# ---------------------------------------------------------------------------------------------
+greenmail:
+  enabled: false
+  image:
+    repository: docker.io/greenmail/standalone
+    tag: "2.1.8"
+    pullPolicy: IfNotPresent
+  # The test mailbox: login, password and address (made up, not real accounts).
+  user: helpdesk
+  password: helpdesk
+  address: helpdesk@helpdesk.test
+  # A Service for testers to send mail in (SMTP 3025) and read it (IMAP 3143).
+  service:
+    type: ClusterIP
+  resources:
+    requests:
+      cpu: 20m
+      memory: 128Mi
+    limits:
+      memory: 384Mi
+
+# ---------------------------------------------------------------------------------------------
+# Optional NetworkPolicies, ingress only: the core accepts traffic from the peers below and from
+# the Assistant; the Assistant accepts traffic only from the core.
+# ---------------------------------------------------------------------------------------------
+networkPolicy:
+  enabled: false
+  # Peers allowed to reach the core's HTTP port, such as the ingress controller's namespace:
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         kubernetes.io/metadata.name: ingress-nginx
+  coreFrom: []

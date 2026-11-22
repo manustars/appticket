@@ -1,0 +1,54 @@
+# An example of a staging install in a lab cluster: one small database, a test mail server, the
+# Assistant on a self-hosted model. Copy it, change what is marked, and install with
+#
+#   helm install hd deploy/chart -n helpdesk-staging -f values-staging.yaml
+#
+# Names below (hosts, classes, Secrets) are examples: replace them with your cluster's.
+
+core:
+  image:
+    # A released version, or `latest` while trying things out.
+    tag: "0.1.0"
+  mail:
+    # The test mail server below provides the mailbox; the replies come from its address.
+    pollSeconds: 5
+
+ingress:
+  enabled: true
+  className: nginx                         # your ingress class
+  host: helpdesk-staging.example.com       # your host
+  annotations:
+    # With cert-manager, a certificate for the host; the sign-in cookie needs HTTPS.
+    cert-manager.io/cluster-issuer: lab-issuer   # your issuer
+  tls:
+    enabled: true
+    secretName: helpdesk-staging-tls
+
+postgresql:
+  enabled: true
+  instances: 1
+  storage:
+    size: 2Gi
+    storageClass: ""                       # empty: the cluster's default
+  backup:
+    # Off for a throwaway staging install; see values.yaml for volume snapshots or object storage.
+    enabled: false
+
+greenmail:
+  enabled: true
+
+assistant:
+  # Enable after registering the add-on and creating the Secret (docs/deploy.md).
+  enabled: false
+  secret:
+    existingSecret: hd-assistant           # keys: token, event-secret, api-key
+  model:
+    provider: openai-compatible
+    name: my-local-model                   # your model's id
+    url: http://models.example.com/v1      # your model server
+    # One call at a time: a self-hosted model is often a single shared GPU (the default for
+    # openai-compatible already).
+    concurrency: "1"
+
+networkPolicy:
+  enabled: false

@@ -1,6 +1,7 @@
 //! The HTTP API the agents' UI uses. Its OpenAPI specification is served at /api/openapi.json.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use anyhow::Context;
 use axum::{
@@ -26,6 +27,9 @@ mod customers;
 mod directory;
 mod inbox;
 mod tickets;
+mod web;
+
+pub use web::with_web;
 
 #[derive(OpenApi)]
 #[openapi(info(
@@ -42,17 +46,50 @@ pub struct AppState {
     pub sender: Option<Sender>,
 }
 
-pub async fn serve(state: AppState, listen: SocketAddr) -> anyhow::Result<()> {
+/// Serves the API on `listen`, and the built UI from `web_dir` when given.
+pub async fn serve(
+    state: AppState,
+    listen: SocketAddr,
+    web_dir: Option<PathBuf>,
+) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("binding {listen}"))?;
+    let app = match &web_dir {
+        Some(dir) => {
+            tracing::info!(dir = %dir.display(), "serving the UI");
+            with_web(router(state), dir)
+        }
+        None => router(state),
+    };
     tracing::info!(%listen, "serving the HTTP API");
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .context("serving the HTTP API")
+}
+
+/// Ctrl-C, or SIGTERM where there is one: a container's stop signal.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 pub fn openapi() -> utoipa::openapi::OpenApi {

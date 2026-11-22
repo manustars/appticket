@@ -1,0 +1,110 @@
+{{- if .Values.postgresql.enabled }}
+{{- $pg := .Values.postgresql }}
+{{- $b := $pg.backup }}
+{{- $cluster := include "hd.dbName" . }}
+{{- $objectStore := printf "%s-backup" $cluster }}
+{{- if $b.enabled }}
+{{- if not (has $b.method (list "volumeSnapshot" "objectStore")) }}
+{{- fail "postgresql.backup.method must be volumeSnapshot or objectStore" }}
+{{- end }}
+{{- if and (eq $b.method "volumeSnapshot") (not $b.volumeSnapshot.className) }}
+{{- fail "postgresql.backup.volumeSnapshot.className is required: the VolumeSnapshotClass to use" }}
+{{- end }}
+{{- if and (eq $b.method "objectStore") (or (not $b.objectStore.destinationPath) (not $b.objectStore.credentialsSecret)) }}
+{{- fail "postgresql.backup.objectStore needs destinationPath and credentialsSecret" }}
+{{- end }}
+{{- end }}
+# PostgreSQL managed by CloudNativePG. The operator creates the Secret <name>-app, whose `uri` the
+# core uses as its database URL.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $cluster }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+  {{- if $pg.keepOnUninstall }}
+  annotations:
+    # helm uninstall leaves the database (and its data) in place.
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  instances: {{ $pg.instances }}
+  {{- with $pg.imageName }}
+  imageName: {{ . }}
+  {{- end }}
+  bootstrap:
+    initdb:
+      database: {{ $pg.database }}
+      owner: {{ $pg.owner }}
+  storage:
+    size: {{ $pg.storage.size }}
+    {{- with $pg.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  {{- with $pg.resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if and $b.enabled (eq $b.method "volumeSnapshot") }}
+  backup:
+    volumeSnapshot:
+      className: {{ $b.volumeSnapshot.className }}
+  {{- end }}
+  {{- if and $b.enabled (eq $b.method "objectStore") }}
+  # WAL archiving and base backups through the Barman Cloud plugin.
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ $objectStore }}
+  {{- end }}
+{{- if and $b.enabled (eq $b.method "objectStore") }}
+---
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: {{ $objectStore }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  retentionPolicy: {{ $b.objectStore.retentionPolicy | quote }}
+  configuration:
+    destinationPath: {{ $b.objectStore.destinationPath | quote }}
+    {{- with $b.objectStore.endpointURL }}
+    endpointURL: {{ . | quote }}
+    {{- end }}
+    s3Credentials:
+      accessKeyId:
+        name: {{ $b.objectStore.credentialsSecret }}
+        key: {{ $b.objectStore.accessKeyIdKey }}
+      secretAccessKey:
+        name: {{ $b.objectStore.credentialsSecret }}
+        key: {{ $b.objectStore.secretAccessKeyKey }}
+    wal:
+      compression: gzip
+{{- end }}
+{{- if $b.enabled }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ printf "%s-scheduled" $cluster }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  schedule: {{ $b.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: {{ $cluster }}
+  {{- if eq $b.method "objectStore" }}
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
+  {{- else }}
+  method: volumeSnapshot
+  {{- end }}
+{{- end }}
+{{- end }}

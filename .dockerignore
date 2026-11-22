@@ -1,0 +1,12 @@
+# Kept out of the image build context: build output, dependencies, local settings, history.
+.git
+.github
+.githooks
+target
+web/node_modules
+web/dist
+.env
+.env.*
+*.local
+deploy/chart
+docs

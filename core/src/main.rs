@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -68,6 +69,10 @@ enum Command {
         /// Seconds between two reads of the mailbox.
         #[arg(long, env = "HD_IMAP_POLL_SECONDS", default_value_t = 30)]
         imap_poll_seconds: u64,
+        /// The built UI (`web/dist`) to serve next to the API. Without it only the API is
+        /// served, as in development, where Vite serves the UI.
+        #[arg(long, env = "HD_WEB_DIR")]
+        web_dir: Option<PathBuf>,
     },
     /// Apply pending database migrations and exit.
     Migrate,
@@ -92,6 +97,8 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(
             EnvFilter::try_from_env("HD_LOG").unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn")),
         )
+        // Colours only on a terminal: container logs stay plain text.
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
         .init();
 
     let cli = Cli::parse();
@@ -126,7 +133,16 @@ async fn main() -> anyhow::Result<()> {
             mail_from_name,
             imap_import_existing,
             imap_poll_seconds,
+            web_dir,
         } => {
+            if let Some(dir) = &web_dir
+                && !dir.join("index.html").is_file()
+            {
+                anyhow::bail!(
+                    "HD_WEB_DIR is {}, which has no index.html: point it at the built UI (web/dist)",
+                    dir.display()
+                );
+            }
             let sender = mail_from
                 .map(|address| outbound::Sender::new(&address, &mail_from_name))
                 .transpose()?;
@@ -162,7 +178,7 @@ async fn main() -> anyhow::Result<()> {
                 addons::http_client()?,
                 Duration::from_secs(5),
             ));
-            http::serve(http::AppState { db, sender }, listen).await
+            http::serve(http::AppState { db, sender }, listen, web_dir).await
         }
     }
 }

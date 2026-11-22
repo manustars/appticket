@@ -15,6 +15,8 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(
             EnvFilter::try_from_env("HD_ASSISTANT_LOG").unwrap_or_else(|_| EnvFilter::new("info")),
         )
+        // Colours only on a terminal: container logs stay plain text.
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
         .init();
 
     let model = &config.model;
@@ -64,10 +66,31 @@ async fn main() -> anyhow::Result<()> {
         "the Assistant is waiting for events"
     );
     axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await?;
     worker.abort();
     Ok(())
+}
+
+/// Ctrl-C, or SIGTERM where there is one: a container's stop signal.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }

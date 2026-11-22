@@ -1,0 +1,245 @@
+{{- $core := .Values.core }}
+{{- $gm := .Values.greenmail }}
+{{- $name := include "hd.coreName" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: core
+spec:
+  replicas: {{ $core.replicas }}
+  # Never two cores at once: each reads the mailbox and runs the outbox.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "hd.selectorLabels" (dict "root" . "component" "core") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hd.labels" . | nindent 8 }}
+        app.kubernetes.io/component: core
+      {{- with $core.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "hd.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: core
+          image: {{ include "hd.image" (dict "image" $core.image "root" .) }}
+          imagePullPolicy: {{ $core.image.pullPolicy }}
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: HD_LISTEN
+              value: "0.0.0.0:8080"
+            - name: HD_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hd.databaseSecret" . }}
+                  key: {{ $core.database.secretKey }}
+            {{- if $core.mail.imap.existingSecret }}
+            - name: HD_IMAP_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $core.mail.imap.existingSecret }}
+                  key: {{ $core.mail.imap.secretKey }}
+            {{- else if $gm.enabled }}
+            - name: HD_IMAP_URL
+              value: {{ printf "imap://%s:%s@127.0.0.1:3143/INBOX" $gm.user $gm.password | quote }}
+            {{- end }}
+            {{- if $core.mail.smtp.existingSecret }}
+            - name: HD_SMTP_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $core.mail.smtp.existingSecret }}
+                  key: {{ $core.mail.smtp.secretKey }}
+            {{- else if $gm.enabled }}
+            - name: HD_SMTP_URL
+              value: "smtp://127.0.0.1:3025"
+            {{- end }}
+            {{- $from := $core.mail.from | default (ternary $gm.address "" $gm.enabled) }}
+            {{- if $from }}
+            - name: HD_MAIL_FROM
+              value: {{ $from | quote }}
+            {{- end }}
+            - name: HD_MAIL_FROM_NAME
+              value: {{ $core.mail.fromName | quote }}
+            - name: HD_IMAP_POLL_SECONDS
+              value: {{ $core.mail.pollSeconds | quote }}
+            {{- if $core.mail.importExisting }}
+            - name: HD_IMAP_IMPORT_EXISTING
+              value: "true"
+            {{- end }}
+            {{- if $core.mail.ca.existingSecret }}
+            - name: HD_MAIL_CA_FILE
+              value: {{ printf "/etc/hd/mail-ca/%s" $core.mail.ca.secretKey | quote }}
+            {{- end }}
+            - name: HD_LOG
+              value: {{ $core.log | quote }}
+            {{- with $core.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # Migrations run at start: give them time before the other probes count.
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          # /api/health answers 503 while the database is unreachable: out of the Service then,
+          # but not restarted for it.
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            {{- toYaml $core.resources | nindent 12 }}
+          securityContext:
+            {{- include "hd.containerSecurityContext" . | nindent 12 }}
+          {{- if $core.mail.ca.existingSecret }}
+          volumeMounts:
+            - name: mail-ca
+              mountPath: /etc/hd/mail-ca
+              readOnly: true
+          {{- end }}
+        {{- if $gm.enabled }}
+        # Staging only: a test mail server on the pod's loopback (see values: greenmail).
+        - name: greenmail
+          image: {{ printf "%s:%s" $gm.image.repository $gm.image.tag }}
+          imagePullPolicy: {{ $gm.image.pullPolicy }}
+          env:
+            - name: GREENMAIL_OPTS
+              value: >-
+                -Dgreenmail.setup.test.smtp -Dgreenmail.setup.test.imap
+                -Dgreenmail.hostname=0.0.0.0
+                -Dgreenmail.api.hostname=127.0.0.1 -Dgreenmail.api.port=18080
+                -Dgreenmail.users={{ $gm.user }}:{{ $gm.password }}@{{ splitList "@" $gm.address | last }}
+                -Dgreenmail.users.login=local_part
+          ports:
+            - name: smtp
+              containerPort: 3025
+            - name: imap
+              containerPort: 3143
+          readinessProbe:
+            tcpSocket:
+              port: imap
+            periodSeconds: 10
+          resources:
+            {{- toYaml $gm.resources | nindent 12 }}
+          securityContext:
+            # The image's own user (greenmail, uid 999); Java needs a writable /tmp.
+            runAsUser: 999
+            runAsGroup: 999
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+        {{- end }}
+      {{- if $core.mail.ca.existingSecret }}
+      volumes:
+        - name: mail-ca
+          secret:
+            secretName: {{ $core.mail.ca.existingSecret }}
+      {{- end }}
+      {{- with $core.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $core.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $core.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: core
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "hd.selectorLabels" (dict "root" . "component" "core") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+{{- if $gm.enabled }}
+---
+# Staging only: the test mail server, for sending mail in and reading what the help desk sent.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ printf "%s-greenmail" (include "hd.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: greenmail
+spec:
+  type: {{ $gm.service.type }}
+  selector:
+    {{- include "hd.selectorLabels" (dict "root" . "component" "core") | nindent 4 }}
+  ports:
+    - name: smtp
+      port: 3025
+      targetPort: smtp
+    - name: imap
+      port: 3143
+      targetPort: imap
+{{- end }}
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: core
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  name: http
+{{- end }}

@@ -1,0 +1,141 @@
+{{- if .Values.assistant.enabled }}
+{{- $a := .Values.assistant }}
+{{- if not $a.secret.existingSecret }}
+{{- fail "assistant.secret.existingSecret is required: a Secret with the token and event secret that `hd addon add` printed" }}
+{{- end }}
+{{- if or (not $a.model.provider) (not $a.model.name) }}
+{{- fail "assistant.model.provider and assistant.model.name are required: there is no default model service" }}
+{{- end }}
+{{- $name := include "hd.assistantName" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: assistant
+spec:
+  replicas: 1
+  # One instance: it remembers which events it has handled in memory only.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "hd.selectorLabels" (dict "root" . "component" "assistant") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hd.labels" . | nindent 8 }}
+        app.kubernetes.io/component: assistant
+      {{- with $a.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "hd.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: assistant
+          image: {{ include "hd.image" (dict "image" $a.image "root" .) }}
+          imagePullPolicy: {{ $a.image.pullPolicy }}
+          ports:
+            - name: events
+              containerPort: 8090
+          env:
+            - name: HD_ASSISTANT_LISTEN
+              value: "0.0.0.0:8090"
+            - name: HD_ASSISTANT_CORE_URL
+              value: {{ $a.coreUrl | default (printf "http://%s:%v" (include "hd.coreName" .) .Values.service.port) | quote }}
+            - name: HD_ASSISTANT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $a.secret.existingSecret }}
+                  key: {{ $a.secret.tokenKey }}
+            - name: HD_ASSISTANT_EVENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $a.secret.existingSecret }}
+                  key: {{ $a.secret.eventSecretKey }}
+            - name: HD_ASSISTANT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $a.secret.existingSecret }}
+                  key: {{ $a.secret.apiKeyKey }}
+                  optional: true
+            - name: HD_ASSISTANT_MODEL_PROVIDER
+              value: {{ $a.model.provider | quote }}
+            - name: HD_ASSISTANT_MODEL
+              value: {{ $a.model.name | quote }}
+            {{- with $a.model.url }}
+            - name: HD_ASSISTANT_MODEL_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $a.model.concurrency }}
+            - name: HD_ASSISTANT_MODEL_CONCURRENCY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $a.model.effort }}
+            - name: HD_ASSISTANT_MODEL_EFFORT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $a.model.thinking }}
+            - name: HD_ASSISTANT_THINKING
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $a.model.azureApiVersion }}
+            - name: HD_ASSISTANT_AZURE_API_VERSION
+              value: {{ . | quote }}
+            {{- end }}
+            - name: HD_ASSISTANT_LOG
+              value: {{ $a.log | quote }}
+            {{- with $a.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # It has no health endpoint: an open port is the sign of life.
+          readinessProbe:
+            tcpSocket:
+              port: events
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: events
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            {{- toYaml $a.resources | nindent 12 }}
+          securityContext:
+            {{- include "hd.containerSecurityContext" . | nindent 12 }}
+      {{- with $a.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $a.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $a.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+# The core sends events here: register the add-on with --url http://<this service>:8090.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: assistant
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "hd.selectorLabels" (dict "root" . "component" "assistant") | nindent 4 }}
+  ports:
+    - name: events
+      port: 8090
+      targetPort: events
+{{- end }}

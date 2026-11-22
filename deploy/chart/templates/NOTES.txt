@@ -1,0 +1,33 @@
+The help desk is installed as {{ include "hd.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+{{- if .Values.ingress.enabled }}
+
+Agents sign in at https://{{ .Values.ingress.host }}/
+{{- else }}
+
+Agents sign in through a port-forward (the sign-in cookie needs HTTPS or localhost):
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "hd.coreName" . }} 8080:{{ .Values.service.port }}
+  then open http://localhost:8080/
+{{- end }}
+
+First steps, with the `hd` command inside the core's pod (docs/deploy.md has the details):
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "hd.coreName" . }} -- hd customer add "<help desk>" --help-desk --domain <domain>
+  kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ include "hd.coreName" . }} -- hd agent add <agent e-mail> --name "<name>"
+{{- if not .Values.assistant.enabled }}
+
+To add the Assistant, register it first:
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "hd.coreName" . }} -- hd addon add assistant \
+    --url http://{{ include "hd.assistantName" . }}:8090 \
+    --event message.received --event ticket.opened \
+    --scope directory:read --scope tickets:read --scope proposals:write
+
+then put the printed token and event secret in a Secret and enable assistant.* in the values.
+{{- end }}
+{{- if .Values.greenmail.enabled }}
+
+Staging mail: GreenMail runs next to the core and keeps all mail in {{ .Values.greenmail.address }}.
+Send test mail to it through svc/{{ printf "%s-greenmail" (include "hd.fullname" .) | trunc 63 | trimSuffix "-" }} port 3025.
+{{- end }}
