@@ -34,7 +34,9 @@
   and every request that changes something checks its permission
   ([ADR 0007](docs/adr/0007-roles-and-permissions.md)).
 - **Local development** runs PostgreSQL and a test mail server (GreenMail) in containers with
-  Podman. Agents sign in with e-mail and password managed by the core; OIDC comes later.
+  Podman. Agents sign in with e-mail and password managed by the core; OpenID Connect and LDAP
+  are planned, with the identity provider authenticating and the product authorizing
+  ([ADR 0008](docs/adr/0008-identity-providers-authenticate-the-product-authorizes.md)).
 
 ## Clean repository
 

@@ -56,6 +56,11 @@ _Avoid_: Deleted, offboarded, deactivated, inactive
 A member of the help desk's staff who handles tickets.
 _Avoid_: Operator, technician, user
 
+**Identity provider**:
+A system outside the product that confirms who an agent is when they sign in, such as the
+organization's sign-in service or its directory; it never decides what the agent may do.
+_Avoid_: SSO, IdP, directory, authentication server
+
 **Deactivated**:
 Said of an agent who no longer works at the help desk; their history stays, but they cannot sign in
 and no ticket can be assigned to them.

@@ -71,6 +71,34 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
   another agent's password to a generated one, shown once. Either way the agent's other sessions
   end.
 
+## Signing in
+
+Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-authorizes.md).
+
+- An agent signs in with a local password, or through an identity provider: at most one OpenID
+  Connect provider and one LDAP directory per installation. The identity provider says who the
+  agent is and whether they may enter; what they may do is always their role in the product.
+- Signing in through an identity provider needs, when an authorized group is configured, that the
+  agent belongs to it, checked at every sign-in (nested groups count in Active Directory). Someone
+  in the group who is not an agent yet becomes one, with the default role; without an authorized
+  group, only existing agents can sign in. A deactivated agent cannot sign in through an identity
+  provider either, and signing in never reactivates or recreates them.
+- An identity is linked to an existing agent by e-mail the first time, only when the identity
+  provider says the address is verified; from then on by the identity provider's stable
+  identifier. A linked agent's name and e-mail come from the identity provider at every sign-in
+  and are not edited in the product; a sign-in whose e-mail belongs to another agent is refused.
+- Agents created through an identity provider have no local password; existing agents keep
+  theirs. Local sign-in can be switched off for the installation, which ends every session opened
+  with a local password; the command line can always switch it back on and set a password.
+- A password is checked by one system only: a linked agent's against the directory, an agent
+  without a link against the local password, an unknown name against the directory.
+- A session opened through an identity provider lasts 12 hours by default; one opened with a
+  local password lasts 14 days. Signing out ends only the product's session.
+- Repeated failed sign-ins, local or LDAP, are slowed and then refused for a while, per account
+  and per address, before a directory's own lockout would trigger.
+- Unlinking an agent's identity or removing their local password follows the rules for acting on
+  an agent above.
+
 ## Tickets
 
 - A ticket has a priority: low, normal (the default), high or urgent. Agents change it, except on
