@@ -219,6 +219,11 @@ struct ModelServer {
     answers: VecDeque<(u16, Value)>,
     /// What each request carried.
     requests: Vec<(HeaderMap, Value)>,
+    /// How long each answer takes.
+    delay: Duration,
+    /// Calls being answered now, and the most there ever were at once.
+    in_flight: usize,
+    max_in_flight: usize,
 }
 
 type SharedModel = Arc<Mutex<ModelServer>>;
@@ -229,13 +234,20 @@ async fn fake_model(model: SharedModel) -> String {
         headers: HeaderMap,
         Json(body): Json<Value>,
     ) -> (StatusCode, Json<Value>) {
-        let mut model = model.lock().unwrap();
-        model.requests.push((headers, body));
-        let (status, body) = model.answers.pop_front().unwrap_or((
-            500,
-            json!({"type": "error", "error": {"type": "api_error",
-                "message": "no answer queued"}}),
-        ));
+        let (status, body, delay) = {
+            let mut m = model.lock().unwrap();
+            m.requests.push((headers, body));
+            m.in_flight += 1;
+            m.max_in_flight = m.max_in_flight.max(m.in_flight);
+            let (status, body) = m.answers.pop_front().unwrap_or((
+                500,
+                json!({"type": "error", "error": {"type": "api_error",
+                    "message": "no answer queued"}}),
+            ));
+            (status, body, m.delay)
+        };
+        tokio::time::sleep(delay).await;
+        model.lock().unwrap().in_flight -= 1;
         (StatusCode::from_u16(status).unwrap(), Json(body))
     }
     let app = Router::new()
@@ -270,10 +282,15 @@ fn claude(answer: Value) -> (u16, Value) {
 struct World {
     core: SharedCore,
     model: SharedModel,
-    assistant: Assistant,
+    assistant: Arc<Assistant>,
 }
 
 async fn world(provider: Provider) -> World {
+    world_with(provider, 4).await
+}
+
+/// A world whose Assistant makes at most `concurrency` model calls at once.
+async fn world_with(provider: Provider, concurrency: usize) -> World {
     let core: SharedCore = Arc::default();
     let model: SharedModel = Arc::default();
     let core_url = fake_core(core.clone()).await;
@@ -294,13 +311,14 @@ async fn world(provider: Provider) -> World {
         api_key: Some("model-test-key".into()),
         effort: anthropic.then(|| "medium".into()),
         azure_api_version: None,
+        concurrency,
     };
-    let assistant = Assistant::new(
+    let assistant = Arc::new(Assistant::new(
         Client::new(&core_url, TOKEN).unwrap(),
         Model::new(settings)
             .unwrap()
             .with_retry_delays(vec![Duration::ZERO]),
-    );
+    ));
     World {
         core,
         model,
@@ -656,6 +674,13 @@ async fn a_new_ticket_gets_priority_assets_and_a_draft_reply() {
     assert!(input.contains("A1: computer \"PC-0042\""));
     assert!(input.contains("A2: printer \"Printer on the second floor\""));
     assert!(input.contains("Current priority: normal"));
+    assert!(
+        input.contains(
+            "Name to greet: Ada Ferrini
+"
+        ),
+        "the requester's name is given for the greeting"
+    );
     assert!(input.contains("schermo nero"));
     assert!(
         !input.contains("late with payments"),
@@ -727,6 +752,18 @@ async fn only_valid_and_useful_parts_are_proposed() {
             .await
             .is_empty()
     );
+
+    // A ticket without a requester gives no name to greet.
+    let inputs: Vec<String> = w
+        .requests()
+        .iter()
+        .map(|(_, b)| b["messages"][0]["content"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(inputs.iter().any(|i| i.contains(
+        "Requester: none
+Name to greet: none (use a neutral greeting)
+"
+    )));
 
     // Bad JSON and a priority that does not exist.
     w.answer(claude_text("{\"priority\": \"high\", "));
@@ -1034,4 +1071,58 @@ async fn services_are_proposed_by_reference_and_checked() {
         .to_owned();
     assert!(input.contains("Services already linked: Posta ospitata"));
     assert_eq!(w.posted().len(), 1);
+}
+
+// ----- how many model calls at once -----
+
+#[tokio::test]
+async fn with_one_slot_two_events_never_call_the_model_together() {
+    for (concurrency, expected) in [(1, 1), (2, 2)] {
+        let w = world_with(Provider::Anthropic, concurrency).await;
+        {
+            let mut core = w.core.lock().unwrap();
+            core.tickets
+                .insert(50, ticket_json(50, "open", true, &[], "requester"));
+            core.tickets
+                .insert(51, ticket_json(51, "open", true, &[], "requester"));
+        }
+        w.model.lock().unwrap().delay = Duration::from_millis(300);
+        w.answer(claude(ticket_answer(Some("high"), &[], None)));
+        w.answer(claude(ticket_answer(Some("high"), &[], None)));
+
+        // Through the real queue and workers, as events arrive.
+        let (sender, receiver) = server::queue();
+        let worker = tokio::spawn(server::work(
+            w.assistant.clone(),
+            receiver,
+            vec![],
+            concurrency,
+        ));
+        for number in [50, 51] {
+            sender
+                .send(envelope("ticket.opened", json!({"ticket_number": number})))
+                .await
+                .unwrap();
+        }
+        let start = std::time::Instant::now();
+        while w.posted().len() < 2 && start.elapsed() < Duration::from_secs(10) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        worker.abort();
+        assert_eq!(w.posted().len(), 2, "both events handled");
+        let model = w.model.lock().unwrap();
+        assert_eq!(model.requests.len(), 2);
+        assert_eq!(
+            model.max_in_flight, expected,
+            "with {concurrency} slot(s), at most {expected} call(s) at once"
+        );
+        if concurrency == 1 {
+            // One after the other, in the order the events came.
+            let first = model.requests[0].1["messages"][0]["content"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            assert!(first.contains("Number: 50"));
+        }
+    }
 }

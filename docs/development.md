@@ -102,6 +102,11 @@ There is no default provider or model; the Assistant does not start until both a
 README lists what each provider needs. With a hosted provider every message costs a model call;
 `HD_ASSISTANT_MODEL_PROVIDER=ollama` keeps the mail on this machine.
 
+A self-hosted model (`ollama`, `openai-compatible`) gets one call at a time, since such servers are
+often a single GPU shared with other work; a hosted provider gets four.
+`HD_ASSISTANT_MODEL_CONCURRENCY` changes that. A model that thinks before answering can take tens
+of seconds per message, so proposals appear accordingly later.
+
 ## Tests
 
 ```sh

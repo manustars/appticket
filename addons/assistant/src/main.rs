@@ -50,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
             Duration::from_secs(120),
             Duration::from_secs(600),
         ],
+        config.model.concurrency,
     ));
     let app = server::events(Verifier::new(config.event_secret.clone()), sender);
     let listener = tokio::net::TcpListener::bind(config.listen)
@@ -59,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
         listen = %config.listen,
         provider = ?model.provider,
         model = %model.model,
+        model_concurrency = model.concurrency,
         "the Assistant is waiting for events"
     );
     axum::serve(listener, app)

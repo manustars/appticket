@@ -49,8 +49,9 @@ or reaches the requester, without an agent.
    - urgent: many people cannot work, a security incident, data being lost, a production system \
 down.
    - high: one person cannot work, or a business deadline is at risk.
-   - normal: something is broken or needed, but there is a workaround or no hurry. Most tickets \
-are normal.
+   - normal: something is broken or needed, but there is a workaround or no hurry. A workaround \
+that works, such as the same thing working from the office or from another computer, makes a \
+ticket normal unless something else raises it, such as a deadline. Most tickets are normal.
    - low: questions, small requests, cosmetic problems, planned work without a date.
    Use null when the messages do not say enough to judge.
 2. `assets`: the customer's assets the ticket is about, by their reference in the list (such as \
@@ -61,9 +62,18 @@ their reference in the list (such as S2): for example hosted mail when mail does
 Include a service only when the messages clearly concern it. Use an empty list when unsure.
 4. `reply`: a draft reply to the requester's latest message, which an agent will read, edit and \
 send.
-   - Write it in the language of the requester's latest message.
-   - Keep it short: a greeting, two to five sentences, and a closing without a personal name \
-(the agent signs it).
+   - Write it in the language of the requester's latest message, as a native speaker of that \
+language would write it: natural, idiomatic wording, never a word-by-word rendering of English.
+   - Address the requester formally (in Italian with \"Lei\"; in other languages the \
+equivalent formal register), unless the requester clearly wrote to the help desk informally.
+   - Greet the requester by name when the ticket gives one (see `Name to greet`), for example \
+\"Buongiorno Ada,\" in Italian; when it gives none, use a neutral greeting such as \
+\"Buongiorno,\".
+   - Lay it out as a letter: the greeting on its own line, a blank line, the body in one or two \
+short paragraphs separated by a blank line, a blank line, and a closing formula on its own line \
+(in Italian \"Cordiali saluti\"). Nothing after the closing: no signature and no name, since \
+the agent signs it.
+   - Keep the body short: two to five sentences.
    - Be polite and plain. Acknowledge the request; ask for the specific information that is \
 missing, or say what the help desk will look into.
    - Never invent facts: no diagnosis stated as certain, and no names, times, prices, ticket \
@@ -158,10 +168,18 @@ pub fn system(base: &str, languages: &[String]) -> String {
     format!(
         "{base}\n\nThe agents work in several languages, so every rationale is an object with one \
          short sentence per language: {listed}. Write each sentence directly in its language, \
-         naturally, as a native speaker would put it; do not translate another one word by word. \
-         The draft reply is not a rationale: it stays in the requester's language."
+         naturally, as a native speaker would put it; do not translate another one word by word, \
+         and avoid expressions copied from English. The draft reply is not a rationale: it stays \
+         in the requester's language.\n\n{INTERNALS}"
     )
 }
+
+/// Keeps the prompt's own machinery out of what people read.
+pub const INTERNALS: &str = "\
+The short references in this prompt (such as C1, A1 or S1), the field names and the other \
+internals are for your answer's structured fields only. Never mention them in a rationale or in \
+the draft reply: name things as people do, for example \"PC-0042\" or \"the hosted mail \
+service\".";
 
 /// The reference the model sees for the customer at `index` in the list.
 pub fn customer_ref(index: usize) -> String {
@@ -273,6 +291,11 @@ pub fn ticket_input(ticket: &Ticket, assets: &[Asset], services: &[Service]) -> 
         },
         None => "none".into(),
     };
+    // The name the draft greets, said outright: models skip it when it only sits in an address.
+    let greet = match ticket.requester.as_ref().and_then(|r| r.name.as_deref()) {
+        Some(name) if !name.trim().is_empty() => framed(name.trim()),
+        _ => "none (use a neutral greeting)".to_owned(),
+    };
     let linked = if ticket.assets.is_empty() {
         "none".to_owned()
     } else {
@@ -294,7 +317,8 @@ pub fn ticket_input(ticket: &Ticket, assets: &[Asset], services: &[Service]) -> 
             .join(", ")
     };
     let mut out = format!(
-        "<ticket>\nNumber: {}\nTitle: {}\nCustomer: {}\nRequester: {requester}\nState: {}\n\
+        "<ticket>\nNumber: {}\nTitle: {}\nCustomer: {}\nRequester: {requester}\n\
+         Name to greet: {greet}\nState: {}\n\
          Current priority: {}\nAssets already linked: {linked}\n\
          Services already linked: {linked_services}\n</ticket>\n\n<customer_assets>\n",
         ticket.number,
@@ -388,6 +412,37 @@ mod tests {
             assert_eq!(properties.len(), required.len(), "{schema}");
             assert!(properties.keys().all(|k| required.contains(&k.as_str())));
             properties.values().for_each(assert_closed);
+        }
+    }
+
+    #[test]
+    fn the_instructions_ask_for_a_proper_letter_and_no_internals() {
+        let languages = vec!["en".to_owned(), "it".to_owned()];
+        let ticket = system(TICKET_SYSTEM, &languages);
+        for wanted in [
+            "Address the requester formally (in Italian with \"Lei\"",
+            "unless the requester clearly wrote to the help desk informally",
+            "Greet the requester by name when the ticket gives one",
+            "\"Buongiorno Ada,\"",
+            "a neutral greeting such as \"Buongiorno,\"",
+            "the greeting on its own line",
+            "a closing formula on its own line (in Italian \"Cordiali saluti\")",
+            "no signature and no name",
+            "never a word-by-word rendering of English",
+            "such as the same thing working from the office",
+            "makes a ticket normal unless something else raises it",
+        ] {
+            assert!(
+                ticket.contains(wanted),
+                "the ticket instructions say: {wanted}"
+            );
+        }
+        for instructions in [ticket, system(TRIAGE_SYSTEM, &languages)] {
+            assert!(instructions.contains("(such as C1, A1 or S1)"));
+            assert!(
+                instructions.contains("Never mention them in a rationale or in the draft reply")
+            );
+            assert!(instructions.contains("avoid expressions copied from English"));
         }
     }
 

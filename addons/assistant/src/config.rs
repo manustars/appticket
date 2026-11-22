@@ -112,6 +112,15 @@ impl Provider {
     }
 
     /// Whether `HD_ASSISTANT_API_KEY` is required.
+    /// How many model calls run at once unless `HD_ASSISTANT_MODEL_CONCURRENCY` says otherwise:
+    /// one for self-hosted servers, which are often a single GPU, four for hosted services.
+    pub fn default_concurrency(self) -> usize {
+        match self {
+            Provider::Ollama | Provider::OpenAiCompatible => 1,
+            _ => 4,
+        }
+    }
+
     pub fn needs_key(self) -> bool {
         !matches!(self, Provider::Ollama | Provider::OpenAiCompatible)
     }
@@ -159,6 +168,8 @@ pub struct ModelSettings {
     /// Azure OpenAI only: a dated `api-version` for the deployments path; `None` or `v1` for
     /// the v1 API.
     pub azure_api_version: Option<String>,
+    /// At most this many model calls at the same time.
+    pub concurrency: usize,
 }
 
 impl ModelSettings {
@@ -272,6 +283,12 @@ impl Config {
             Provider::AzureOpenAi => get("HD_ASSISTANT_AZURE_API_VERSION"),
             _ => None,
         };
+        let concurrency = match get("HD_ASSISTANT_MODEL_CONCURRENCY") {
+            None => provider.default_concurrency(),
+            Some(v) => v.parse().ok().filter(|n| *n >= 1).with_context(|| {
+                format!("HD_ASSISTANT_MODEL_CONCURRENCY is {v:?}: give a whole number, 1 or more")
+            })?,
+        };
         let model = ModelSettings {
             provider,
             url: model_url(provider, &raw_url)?,
@@ -286,6 +303,7 @@ impl Config {
                 _ => None,
             },
             azure_api_version,
+            concurrency,
         };
         Ok(Config {
             listen,
@@ -455,6 +473,41 @@ mod tests {
             config(&vars).unwrap().model.endpoint(),
             "https://desk.openai.azure.com/openai/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn self_hosted_servers_get_one_model_call_at_a_time() {
+        let with_provider = |provider: &'static str, extra: &[(&'static str, &'static str)]| {
+            let mut vars = with(&[
+                ("HD_ASSISTANT_MODEL_PROVIDER", provider),
+                ("HD_ASSISTANT_MODEL", "m"),
+                ("HD_ASSISTANT_MODEL_URL", "http://127.0.0.1:8000/v1"),
+                ("HD_ASSISTANT_API_KEY", "k"),
+            ]);
+            vars.extend_from_slice(extra);
+            config(&vars)
+        };
+        assert_eq!(with_provider("ollama", &[]).unwrap().model.concurrency, 1);
+        assert_eq!(
+            with_provider("openai-compatible", &[])
+                .unwrap()
+                .model
+                .concurrency,
+            1
+        );
+        assert_eq!(
+            with_provider("anthropic", &[]).unwrap().model.concurrency,
+            4
+        );
+        assert_eq!(with_provider("openai", &[]).unwrap().model.concurrency, 4);
+        let two = with_provider("ollama", &[("HD_ASSISTANT_MODEL_CONCURRENCY", "2")]);
+        assert_eq!(two.unwrap().model.concurrency, 2);
+        for bad in ["0", "many", "-1"] {
+            let refused = with_provider("ollama", &[("HD_ASSISTANT_MODEL_CONCURRENCY", bad)]);
+            assert!(
+                format!("{:#}", refused.unwrap_err()).contains("HD_ASSISTANT_MODEL_CONCURRENCY")
+            );
+        }
     }
 
     #[test]

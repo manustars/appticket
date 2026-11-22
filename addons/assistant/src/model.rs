@@ -2,9 +2,11 @@
 //! completions protocol, which the other providers speak.
 
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 
 use crate::config::{Auth, JsonOutput, ModelSettings, Protocol};
 
@@ -71,6 +73,9 @@ pub struct Model {
     http: reqwest::Client,
     /// Waits before the second and third attempt of a request that met a busy service.
     retry_delays: Vec<Duration>,
+    /// One permit per model call allowed at the same time (`ModelSettings::concurrency`); a call
+    /// waits its turn, first come first served.
+    slots: Arc<Semaphore>,
 }
 
 impl fmt::Debug for Model {
@@ -86,6 +91,7 @@ impl fmt::Debug for Model {
 impl Model {
     pub fn new(settings: ModelSettings) -> anyhow::Result<Model> {
         Ok(Model {
+            slots: Arc::new(Semaphore::new(settings.concurrency.max(1))),
             settings,
             http: hd_addon_sdk::http_client(REQUEST_TIMEOUT)?,
             retry_delays: vec![Duration::from_secs(5), Duration::from_secs(20)],
@@ -106,10 +112,13 @@ impl Model {
     pub async fn answer(&self, task: &Task<'_>) -> Result<Value, ModelError> {
         let mut attempt = 0;
         loop {
+            // The permit is held for the call only, not while waiting to try again.
+            let permit = self.slots.acquire().await.expect("never closed");
             let outcome = match self.settings.provider.protocol() {
                 Protocol::Messages => self.anthropic(task).await,
                 Protocol::ChatCompletions => self.chat_completions(task).await,
             };
+            drop(permit);
             match outcome {
                 Err(Attempt::Busy { why, retry_after }) => {
                     let Some(delay) = self.retry_delays.get(attempt) else {

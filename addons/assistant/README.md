@@ -39,6 +39,18 @@ The prompts are in [`src/prompts.rs`](src/prompts.rs). The model sees messages a
 never to follow instructions inside them; internal notes are never shown to it, so they cannot end
 up in a draft reply.
 
+A draft reply is written as a letter the agent only has to check and sign:
+- natural wording in the requester's language, never a word-by-word rendering of English;
+- the formal register (in Italian, "Lei") unless the requester wrote informally;
+- a greeting with the requester's name when the ticket has one ("Buongiorno Ada,"), otherwise a
+  neutral one;
+- the body in short paragraphs, and a closing on its own line ("Cordiali saluti");
+- no signature: the agent signs it.
+
+Neither drafts nor rationales mention the short references the model works with (C1, A1, S1).
+For the priority, a workaround that works, such as the same thing working from the office, means
+normal unless something else raises it.
+
 ## Registering it on the core
 
 ```sh
@@ -66,6 +78,7 @@ Environment variables, also read from a `.env` file in the working directory or 
 | `HD_ASSISTANT_MODEL_URL` | the provider's | The service's base URL; required for `azure-openai` and `openai-compatible`. |
 | `HD_ASSISTANT_API_KEY` | | The service's key; required by the hosted providers. |
 | `HD_ASSISTANT_MODEL_EFFORT` | `medium` | `anthropic` only: how much the model thinks before answering (`low` to `max`); set it empty to send none, for models that do not take it. |
+| `HD_ASSISTANT_MODEL_CONCURRENCY` | 1 for `ollama` and `openai-compatible`, 4 otherwise | At most this many model calls at the same time. Self-hosted servers often run on a single GPU, perhaps shared with other work, so they get one call at a time; events wait their turn in the order they came. |
 | `HD_ASSISTANT_AZURE_API_VERSION` | the v1 API | `azure-openai` only: a dated `api-version` (`2024-08-01-preview` or later, for structured outputs) to use the deployments path instead of Azure's v1 API. |
 | `HD_ASSISTANT_LOG` | `info` | A `tracing` filter. |
 
@@ -123,7 +136,9 @@ in house, run a model on your own servers.
 
 The core waits at most 10 seconds for an answer to an event, while the model can take longer. So
 the Assistant checks each event's signature and timestamp, answers at once, and works on it in the
-background, at most four at a time. The core may deliver an event more than once; the Assistant
+background, as many at a time as `HD_ASSISTANT_MODEL_CONCURRENCY` allows (one for a self-hosted
+model, four for a hosted one), in the order they came. The core may deliver an event more than once;
+the Assistant
 remembers the ids of the last 10,000 events it took and skips repeats. Since the core considers an
 answered event delivered, the Assistant itself retries an event whose work meets an unavailable
 core or model (after 30 seconds, 2 minutes and 10 minutes); events are not kept across restarts.

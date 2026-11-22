@@ -20,8 +20,6 @@ use crate::assistant::{Assistant, Failure};
 const REMEMBERED: usize = 10_000;
 /// How many events may wait for a worker; beyond that the core is asked to retry later.
 const QUEUE: usize = 1_000;
-/// How many events are worked on at once.
-const WORKERS: usize = 4;
 
 /// Event ids already taken, the oldest forgotten first.
 #[derive(Default)]
@@ -78,7 +76,9 @@ pub fn queue() -> (mpsc::Sender<Envelope>, mpsc::Receiver<Envelope>) {
     mpsc::channel(QUEUE)
 }
 
-/// Works on queued events until the queue closes, at most [`WORKERS`] at once. An event that
+/// Works on queued events until the queue closes, `workers` at once and in the order they came;
+/// with the model's concurrency as `workers`, events never wait for each other out of order. An
+/// event that
 /// meets an unavailable core or model is tried again after each of `retry_delays`, without
 /// holding a worker while it waits; the core does not deliver it again, since it was already
 /// answered.
@@ -86,8 +86,9 @@ pub async fn work(
     assistant: Arc<Assistant>,
     mut queue: mpsc::Receiver<Envelope>,
     retry_delays: Vec<Duration>,
+    workers: usize,
 ) {
-    let slots = Arc::new(Semaphore::new(WORKERS));
+    let slots = Arc::new(Semaphore::new(workers.max(1)));
     let retry_delays = Arc::new(retry_delays);
     while let Some(envelope) = queue.recv().await {
         let permit = slots.clone().acquire_owned().await.expect("never closed");
