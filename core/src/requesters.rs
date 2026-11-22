@@ -66,7 +66,9 @@ pub async fn create(
             .execute(&mut **tx)
             .await;
     match inserted {
-        Err(e) if taken(&e) => rule(format!("{address} already belongs to a requester")),
+        Err(e) if taken(&e) => rule(format!(
+            "the address {address} already belongs to a requester"
+        )),
         Err(e) => Err(e.into()),
         Ok(_) => Ok(id),
     }
@@ -90,7 +92,7 @@ pub async fn find_or_create(
             Ok(owner.requester_id)
         }
         Some(owner) => rule(format!(
-            "{address} is already a requester of {}, and a requester belongs to one customer",
+            "the address {address} is already a requester of {}, and a requester belongs to one customer",
             owner.customer_name
         )),
         None => create(tx, customer, address, name).await,
@@ -132,11 +134,13 @@ pub async fn add_address(db: &PgPool, requester: Uuid, address: &str) -> Result<
     lock(&mut tx, requester).await?;
     match owner_of(&mut tx, &address).await? {
         Some(owner) if owner.requester_id == requester => {
-            return rule(format!("{address} is already an address of this requester"));
+            return rule(format!(
+                "the address {address} already belongs to this requester"
+            ));
         }
         Some(owner) => {
             return rule(format!(
-                "{address} already belongs to a requester of {}, and an address belongs to one requester",
+                "the address {address} already belongs to a requester of {}, and an address belongs to one requester",
                 owner.customer_name
             ));
         }
@@ -149,7 +153,11 @@ pub async fn add_address(db: &PgPool, requester: Uuid, address: &str) -> Result<
             .execute(&mut *tx)
             .await;
     match inserted {
-        Err(e) if taken(&e) => return rule(format!("{address} already belongs to a requester")),
+        Err(e) if taken(&e) => {
+            return rule(format!(
+                "the address {address} already belongs to a requester"
+            ));
+        }
         Err(e) => return Err(e.into()),
         Ok(_) => {}
     }
@@ -206,7 +214,9 @@ impl Recipient {
         }
         match (to, self.addresses.as_slice()) {
             (Some(to), addresses) if addresses.contains(&to) => Ok(to),
-            (Some(to), _) => rule(format!("{to} is not an address of the ticket's requester")),
+            (Some(to), _) => rule(format!(
+                "the address {to} does not belong to the ticket's requester"
+            )),
             (None, [only]) => Ok(only.clone()),
             (None, _) => match &self.last_picked {
                 Some(picked) => Ok(picked.clone()),
