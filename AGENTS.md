@@ -45,3 +45,20 @@ noreply address.
 `scripts/scan-clean.sh` enforces this; the hooks in `.githooks/` run it on every commit, commit
 message and push (enable them with `git config core.hooksPath .githooks`). When it reports a hit,
 rewrite the content. Widening its allowlists is the maintainer's call.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues on this repository, handled with the `gh` CLI. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles use their default names (`needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md`, `docs/domain-rules.md` and `docs/adr/` at the repo root. See
+`docs/agents/domain.md`.
