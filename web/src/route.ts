@@ -31,7 +31,7 @@ export type Route =
   | { view: 'admin'; tab: AdminTab | null }
   | { view: 'account' }
 
-export const adminTabs = ['agents', 'roles', 'addons', 'mail'] as const
+export const adminTabs = ['agents', 'roles', 'kinds', 'addons', 'mail'] as const
 export type AdminTab = (typeof adminTabs)[number]
 
 export const ticketHref = (number: number) => `#/tickets/${number}`

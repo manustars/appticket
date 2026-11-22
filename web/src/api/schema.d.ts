@@ -353,6 +353,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/asset-kinds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every asset kind the help desk manages, by name. */
+        get: operations["list_asset_kinds"];
+        put?: never;
+        /** Adds an asset kind; no two kinds have names that differ only in case. */
+        post: operations["create_asset_kind"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/asset-kinds/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Renames an asset kind or changes whether its assets move with their holder. */
+        put: operations["update_asset_kind"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assets/{id}": {
         parameters: {
             query?: never;
@@ -1233,8 +1268,10 @@ export interface components {
             customer_name: string;
             /** Format: uuid */
             id: string;
-            /** @description What sort of thing it is: computer, printer, application, licence… */
+            /** @description The name of its asset kind: laptop, printer, application, licence… */
             kind: string;
+            /** Format: uuid */
+            kind_id: string;
             name: string;
             /** Format: date-time */
             retired_at?: string | null;
@@ -1242,8 +1279,23 @@ export interface components {
             source_addon?: string | null;
         };
         AssetFields: {
-            /** @description What sort of thing it is: computer, printer, application, licence… */
-            kind: string;
+            /**
+             * Format: uuid
+             * @description Its asset kind, one of the list the help desk manages.
+             */
+            kind_id: string;
+            name: string;
+        };
+        AssetKind: {
+            /** Format: uuid */
+            id: string;
+            /** @description Whether its assets move with their holder; otherwise they stay at their site. */
+            moves_with_holder: boolean;
+            name: string;
+        };
+        AssetKindFields: {
+            /** @description Whether its assets move with their holder; otherwise they stay at their site. */
+            moves_with_holder: boolean;
             name: string;
         };
         AssigneeChange: {
@@ -1407,6 +1459,7 @@ export interface components {
         LinkedAsset: {
             /** Format: uuid */
             id: string;
+            /** @description The name of its asset kind. */
             kind: string;
             name: string;
         };
@@ -2820,6 +2873,120 @@ export interface operations {
                 };
             };
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_asset_kinds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetKind"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_asset_kind: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssetKindFields"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Created"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    update_asset_kind: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The asset kind */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssetKindFields"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

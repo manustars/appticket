@@ -14,7 +14,8 @@ pub struct Asset {
     pub id: Uuid,
     pub customer_id: Uuid,
     pub customer_name: String,
-    /// What sort of thing it is: computer, printer, application, licence…
+    pub kind_id: Uuid,
+    /// The name of its asset kind: laptop, printer, application, licence…
     pub kind: String,
     pub name: String,
     /// The add-on it came from, when an add-on supplies it.
@@ -61,19 +62,21 @@ fn text(value: &str, what: &str) -> Result<String> {
 /// The customer's assets, active ones first.
 pub async fn assets_of(db: &PgPool, customer: Uuid) -> Result<Vec<Asset>> {
     Ok(sqlx::query_as(
-        "SELECT a.id, a.customer_id, c.name AS customer_name, a.kind, a.name,
+        "SELECT a.id, a.customer_id, c.name AS customer_name, a.kind_id, k.name AS kind, a.name,
                 a.source_addon, a.retired_at
          FROM assets a JOIN customers c ON c.id = a.customer_id
+         JOIN asset_kinds k ON k.id = a.kind_id
          WHERE a.customer_id = $1
-         ORDER BY a.retired_at IS NOT NULL, a.kind, a.name",
+         ORDER BY a.retired_at IS NOT NULL, lower(k.name), a.name",
     )
     .bind(customer)
     .fetch_all(db)
     .await?)
 }
 
-pub async fn create_asset(db: &PgPool, customer: Uuid, kind: &str, name: &str) -> Result<Uuid> {
-    let (kind, name) = (text(kind, "kind")?, text(name, "name")?);
+pub async fn create_asset(db: &PgPool, customer: Uuid, kind: Uuid, name: &str) -> Result<Uuid> {
+    let name = text(name, "name")?;
+    kind_exists(db, kind).await?;
     let offboarded: Option<bool> =
         sqlx::query_scalar("SELECT offboarded_at IS NOT NULL FROM customers WHERE id = $1")
             .bind(customer)
@@ -85,7 +88,7 @@ pub async fn create_asset(db: &PgPool, customer: Uuid, kind: &str, name: &str) -
         Some(false) => {}
     }
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO assets (id, customer_id, kind, name) VALUES ($1, $2, $3, $4)")
+    sqlx::query("INSERT INTO assets (id, customer_id, kind_id, name) VALUES ($1, $2, $3, $4)")
         .bind(id)
         .bind(customer)
         .bind(kind)
@@ -95,9 +98,10 @@ pub async fn create_asset(db: &PgPool, customer: Uuid, kind: &str, name: &str) -
     Ok(id)
 }
 
-pub async fn update_asset(db: &PgPool, id: Uuid, kind: &str, name: &str) -> Result<()> {
-    let (kind, name) = (text(kind, "kind")?, text(name, "name")?);
-    let updated = sqlx::query("UPDATE assets SET kind = $2, name = $3 WHERE id = $1")
+pub async fn update_asset(db: &PgPool, id: Uuid, kind: Uuid, name: &str) -> Result<()> {
+    let name = text(name, "name")?;
+    kind_exists(db, kind).await?;
+    let updated = sqlx::query("UPDATE assets SET kind_id = $2, name = $3 WHERE id = $1")
         .bind(id)
         .bind(kind)
         .bind(name)
@@ -106,6 +110,19 @@ pub async fn update_asset(db: &PgPool, id: Uuid, kind: &str, name: &str) -> Resu
         .rows_affected();
     if updated == 0 {
         return Err(Error::NotFound("asset"));
+    }
+    Ok(())
+}
+
+/// Refuses a kind that is not on the list; kinds are never removed, so the check holds.
+async fn kind_exists(db: &PgPool, kind: Uuid) -> Result<()> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM asset_kinds WHERE id = $1)")
+            .bind(kind)
+            .fetch_one(db)
+            .await?;
+    if !exists {
+        return Err(Error::NotFound("asset kind"));
     }
     Ok(())
 }
@@ -172,9 +189,10 @@ pub async fn service_detail(db: &PgPool, id: Uuid) -> Result<ServiceDetail> {
     .fetch_all(db)
     .await?;
     let runs_on = sqlx::query_as(
-        "SELECT a.id, a.customer_id, c.name AS customer_name, a.kind, a.name,
+        "SELECT a.id, a.customer_id, c.name AS customer_name, a.kind_id, k.name AS kind, a.name,
                 a.source_addon, a.retired_at
          FROM assets a JOIN customers c ON c.id = a.customer_id
+         JOIN asset_kinds k ON k.id = a.kind_id
          JOIN service_assets sa ON sa.asset_id = a.id
          WHERE sa.service_id = $1 ORDER BY a.name",
     )
@@ -519,6 +537,7 @@ pub async fn unlink_for_move(
 #[derive(Serialize, ToSchema, sqlx::FromRow)]
 pub struct LinkedAsset {
     pub id: Uuid,
+    /// The name of its asset kind.
     pub kind: String,
     pub name: String,
 }
@@ -534,8 +553,9 @@ pub async fn ticket_links(
     ticket: Uuid,
 ) -> Result<(Vec<LinkedAsset>, Vec<LinkedService>)> {
     let assets = sqlx::query_as(
-        "SELECT a.id, a.kind, a.name FROM assets a JOIN ticket_assets ta ON ta.asset_id = a.id
-         WHERE ta.ticket_id = $1 ORDER BY a.kind, a.name",
+        "SELECT a.id, k.name AS kind, a.name FROM assets a JOIN ticket_assets ta ON ta.asset_id = a.id
+         JOIN asset_kinds k ON k.id = a.kind_id
+         WHERE ta.ticket_id = $1 ORDER BY lower(k.name), a.name",
     )
     .bind(ticket)
     .fetch_all(db)
@@ -572,12 +592,8 @@ mod tests {
     async fn a_ticket_links_only_assets_of_its_customer(db: PgPool) {
         let brightfield = testing::customer(&db, "Brightfield").await;
         let harbor = testing::customer(&db, "Harbor Lane").await;
-        let pc = create_asset(&db, brightfield, "computer", "PC-0042")
-            .await
-            .unwrap();
-        let other = create_asset(&db, harbor, "printer", "Printer 2F")
-            .await
-            .unwrap();
+        let pc = testing::asset(&db, brightfield, "computer", "PC-0042").await;
+        let other = testing::asset(&db, harbor, "printer", "Printer 2F").await;
         let n = testing::ticket(&db, brightfield, None, "a@brightfield.test").await;
 
         link_asset(&db, n, pc, true).await.unwrap();
@@ -640,9 +656,7 @@ mod tests {
             use_service(&db, mail, customer).await.unwrap();
         }
         use_service(&db, backup, brightfield).await.unwrap();
-        let pc = create_asset(&db, brightfield, "computer", "PC-0042")
-            .await
-            .unwrap();
+        let pc = testing::asset(&db, brightfield, "computer", "PC-0042").await;
         let r = testing::requester(&db, brightfield, "luca.bassi@mail.test").await;
         let n = testing::ticket(&db, brightfield, Some(r), "l1@mail.test").await;
         link_asset(&db, n, pc, true).await.unwrap();
@@ -676,10 +690,8 @@ mod tests {
     async fn a_service_runs_on_assets_of_any_customer(db: PgPool) {
         let own = help_desk(&db).await;
         let brightfield = testing::customer(&db, "Brightfield").await;
-        let server = create_asset(&db, own, "server", "mail-01").await.unwrap();
-        let nas = create_asset(&db, brightfield, "storage", "NAS")
-            .await
-            .unwrap();
+        let server = testing::asset(&db, own, "server", "mail-01").await;
+        let nas = testing::asset(&db, brightfield, "storage", "NAS").await;
         let backup = create_service(&db, "Managed backup", "").await.unwrap();
         runs_on(&db, backup, server, true).await.unwrap();
         runs_on(&db, backup, nas, true).await.unwrap();

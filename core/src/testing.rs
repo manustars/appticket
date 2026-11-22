@@ -16,6 +16,28 @@ pub async fn customer(db: &PgPool, name: &str) -> Uuid {
     id
 }
 
+/// The asset kind with that name, added (staying at its site) when the list does not have it.
+pub async fn asset_kind(db: &PgPool, name: &str) -> Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO asset_kinds (id, name) VALUES ($1, $2)
+         ON CONFLICT (lower(name)) DO UPDATE SET name = asset_kinds.name
+         RETURNING id",
+    )
+    .bind(Uuid::new_v4())
+    .bind(name)
+    .fetch_one(db)
+    .await
+    .unwrap()
+}
+
+/// An asset of the customer, of the named kind.
+pub async fn asset(db: &PgPool, customer: Uuid, kind: &str, name: &str) -> Uuid {
+    let kind = asset_kind(db, kind).await;
+    crate::catalog::create_asset(db, customer, kind, name)
+        .await
+        .unwrap()
+}
+
 /// A requester with one address.
 pub async fn requester(db: &PgPool, customer: Uuid, email: &str) -> Uuid {
     let mut tx = db.begin().await.unwrap();

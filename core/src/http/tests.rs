@@ -178,12 +178,13 @@ async fn assets_and_services_are_linked_through_the_api(db: PgPool) {
     let api = Client::new(&db).await;
     let brightfield = testing::customer(&db, "Brightfield").await;
     let n = testing::ticket(&db, brightfield, None, "a@brightfield.test").await;
+    let computer = testing::asset_kind(&db, "Computer").await;
 
     let (status, created) = api
         .call(
             "POST",
             &format!("/api/customers/{brightfield}/assets"),
-            Some(serde_json::json!({"kind": "computer", "name": "PC-0042"})),
+            Some(serde_json::json!({"kind_id": computer, "name": "PC-0042"})),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -218,7 +219,90 @@ async fn assets_and_services_are_linked_through_the_api(db: PgPool) {
     }
     let ticket = api.get(&format!("/api/tickets/{n}")).await;
     assert_eq!(ticket["assets"][0]["name"], "PC-0042");
+    assert_eq!(ticket["assets"][0]["kind"], "Computer");
     assert_eq!(ticket["services"][0]["name"], "Hosted mail");
+}
+
+#[sqlx::test]
+async fn asset_kinds_are_managed_through_the_api(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+
+    let (status, created) = api
+        .call(
+            "POST",
+            "/api/asset-kinds",
+            Some(serde_json::json!({"name": "Laptop", "moves_with_holder": true})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let laptop = created["id"].as_str().unwrap().to_owned();
+    let (status, json) = api
+        .call(
+            "POST",
+            "/api/asset-kinds",
+            Some(serde_json::json!({"name": "laptop", "moves_with_holder": false})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert_eq!(
+        json["error"],
+        "There is already an asset kind called Laptop."
+    );
+    let (status, json) = api
+        .call(
+            "PUT",
+            &format!("/api/asset-kinds/{laptop}"),
+            Some(serde_json::json!({"name": "Notebook", "moves_with_holder": true})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    assert_eq!(
+        api.get("/api/asset-kinds").await,
+        serde_json::json!([{"id": laptop, "name": "Notebook", "moves_with_holder": true}])
+    );
+
+    let (status, json) = api
+        .call(
+            "POST",
+            &format!("/api/customers/{brightfield}/assets"),
+            Some(serde_json::json!({"kind_id": Uuid::new_v4(), "name": "PC-0042"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+    let (status, json) = api
+        .call(
+            "POST",
+            &format!("/api/customers/{brightfield}/assets"),
+            Some(serde_json::json!({"kind_id": laptop, "name": "PC-0042"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{json}");
+
+    // Add-ons keep reading an asset's kind by its name.
+    let addon = crate::addons::register(
+        &db,
+        "assistant",
+        "http://127.0.0.1:9",
+        &[],
+        &[crate::addons::DIRECTORY_READ.into()],
+    )
+    .await
+    .unwrap();
+    let as_addon = Client {
+        cookie: String::new(),
+        ..Client::new_with_token(&db, &addon.token, api.agent)
+    };
+    let (status, assets) = as_addon
+        .call(
+            "GET",
+            &format!("/api/addon/customers/{brightfield}/assets"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{assets}");
+    assert_eq!(assets[0]["kind"], "Notebook");
+    assert_eq!(assets[0]["name"], "PC-0042");
 }
 
 #[sqlx::test]
@@ -487,6 +571,7 @@ async fn an_agent_without_permissions_changes_nothing(db: PgPool) {
     }
     // Reading stays open to every agent.
     api.get("/api/tickets").await;
+    api.get("/api/asset-kinds").await;
     api.get(&format!("/api/tickets/{number}")).await;
     api.get("/api/inbox").await;
     let me = api.get("/api/session").await;

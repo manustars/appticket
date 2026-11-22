@@ -34,7 +34,8 @@ pub struct Customer {
 pub struct Asset {
     pub id: Uuid,
     pub customer_id: Uuid,
-    /// What sort of thing it is: computer, printer, application, licence…
+    /// The name of its asset kind, one of the list the help desk manages: laptop, printer,
+    /// application, licence…
     pub kind: String,
     pub name: String,
 }
@@ -150,6 +151,7 @@ pub struct Requester {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinkedAsset {
     pub id: Uuid,
+    /// The name of its asset kind.
     pub kind: String,
     pub name: String,
 }

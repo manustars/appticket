@@ -1204,6 +1204,145 @@
         }
       }
     },
+    "/api/asset-kinds": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Every asset kind the help desk manages, by name.",
+        "operationId": "list_asset_kinds",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AssetKind"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Adds an asset kind; no two kinds have names that differ only in case.",
+        "operationId": "create_asset_kind",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetKindFields"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Created"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/asset-kinds/{id}": {
+      "put": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Renames an asset kind or changes whether its assets move with their holder.",
+        "operationId": "update_asset_kind",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The asset kind",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetKindFields"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/assets/{id}": {
       "put": {
         "tags": [
@@ -4569,6 +4708,7 @@
           "id",
           "customer_id",
           "customer_name",
+          "kind_id",
           "kind",
           "name"
         ],
@@ -4586,7 +4726,11 @@
           },
           "kind": {
             "type": "string",
-            "description": "What sort of thing it is: computer, printer, application, licence…"
+            "description": "The name of its asset kind: laptop, printer, application, licence…"
+          },
+          "kind_id": {
+            "type": "string",
+            "format": "uuid"
           },
           "name": {
             "type": "string"
@@ -4610,13 +4754,51 @@
       "AssetFields": {
         "type": "object",
         "required": [
-          "kind",
+          "kind_id",
           "name"
         ],
         "properties": {
-          "kind": {
+          "kind_id": {
             "type": "string",
-            "description": "What sort of thing it is: computer, printer, application, licence…"
+            "format": "uuid",
+            "description": "Its asset kind, one of the list the help desk manages."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "AssetKind": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "moves_with_holder"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "moves_with_holder": {
+            "type": "boolean",
+            "description": "Whether its assets move with their holder; otherwise they stay at their site."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "AssetKindFields": {
+        "type": "object",
+        "required": [
+          "name",
+          "moves_with_holder"
+        ],
+        "properties": {
+          "moves_with_holder": {
+            "type": "boolean",
+            "description": "Whether its assets move with their holder; otherwise they stay at their site."
           },
           "name": {
             "type": "string"
@@ -5147,7 +5329,8 @@
             "format": "uuid"
           },
           "kind": {
-            "type": "string"
+            "type": "string",
+            "description": "The name of its asset kind."
           },
           "name": {
             "type": "string"

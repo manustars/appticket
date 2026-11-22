@@ -21,7 +21,7 @@ export function useSession(): Session {
 }
 
 /** The permissions behind the administration screens, in the order of their tabs. */
-export const adminPermissions = ['agents.manage', 'roles.manage', 'addons.manage', 'mail.view'] as const
+export const adminPermissions = ['agents.manage', 'roles.manage', 'catalog.manage', 'addons.manage', 'mail.view'] as const
 
 /** Whether one role's permissions are all among another's: what the agent can hand out. */
 export const covers = (held: readonly Permission[], wanted: readonly Permission[]) =>

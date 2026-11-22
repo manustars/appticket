@@ -8,6 +8,7 @@ import {
   createCustomer,
   getCustomer,
   listAllCustomers,
+  listAssetKinds,
   listCustomerAssets,
   listCustomerServices,
   listServices,
@@ -25,7 +26,7 @@ import {
 } from './api/client'
 import { useI18n } from './i18n/context'
 import { Problem } from './Problem'
-import { customerHref, customersHref, defaultFilters, go, serviceHref, ticketsHref } from './route'
+import { adminHref, customerHref, customersHref, defaultFilters, go, serviceHref, ticketsHref } from './route'
 import { useSession } from './session'
 import { useAction, useLoad } from './useAction'
 
@@ -505,22 +506,24 @@ function Requesters({ customer: c, readOnly, onChanged, onSignedOut }: PartProps
   )
 }
 
+const loadKinds = () => listAssetKinds()
+
 function CustomerAssets({ customer: c, readOnly, onSignedOut }: Omit<PartProps, 'onChanged'>) {
-  const { t, formatTime } = useI18n()
+  const { t, rich, formatTime } = useI18n()
   const load = useCallback(() => listCustomerAssets(c.id), [c.id])
   const assets = useLoad(load, onSignedOut)
+  const kinds = useLoad(loadKinds, onSignedOut)
   const action = useAction(onSignedOut)
-  // The asset being edited, with what is typed for it.
-  const [editing, setEditing] = useState<{ id: string; kind: string; name: string } | null>(null)
+  // The asset being edited, with what is picked and typed for it.
+  const [editing, setEditing] = useState<{ id: string; kindId: string; name: string } | null>(null)
   const [kind, setKind] = useState('')
   const [name, setName] = useState('')
   const id = useId()
-  const kinds = [...new Set(assets.data?.map((a) => a.kind))].sort()
 
   function add(event: FormEvent) {
     event.preventDefault()
-    if (!kind.trim() || !name.trim()) return
-    void action.run(() => createAsset(c.id, kind.trim(), name.trim())).then(async (ok) => {
+    if (!kind || !name.trim()) return
+    void action.run(() => createAsset(c.id, kind, name.trim())).then(async (ok) => {
       if (!ok) return
       setKind('')
       setName('')
@@ -530,13 +533,15 @@ function CustomerAssets({ customer: c, readOnly, onSignedOut }: Omit<PartProps, 
 
   function save(event: FormEvent) {
     event.preventDefault()
-    if (!editing || !editing.kind.trim() || !editing.name.trim()) return
-    void action.run(() => updateAsset(editing.id, editing.kind.trim(), editing.name.trim())).then(async (ok) => {
+    if (!editing || !editing.kindId || !editing.name.trim()) return
+    void action.run(() => updateAsset(editing.id, editing.kindId, editing.name.trim())).then(async (ok) => {
       if (!ok) return
       setEditing(null)
       await assets.reload()
     })
   }
+
+  const kindOptions = kinds.data?.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)
 
   function retire(assetId: string, assetName: string) {
     if (!window.confirm(t('assets.confirmRetire', { name: assetName }))) return
@@ -547,6 +552,7 @@ function CustomerAssets({ customer: c, readOnly, onSignedOut }: Omit<PartProps, 
     <section className="panel" aria-labelledby={`${id}-title`}>
       <h2 id={`${id}-title`}>{t('assets.title')}</h2>
       <Problem error={assets.error} />
+      <Problem error={kinds.error} />
       {assets.data?.length === 0 && <p className="empty">{t('assets.empty')}</p>}
       {assets.data && assets.data.length > 0 && (
         // The row being edited submits the form below by its id, so that the table sits in no form.
@@ -563,8 +569,10 @@ function CustomerAssets({ customer: c, readOnly, onSignedOut }: Omit<PartProps, 
               // and the click would then submit the form.
               <tr key={`${a.id}-edit`}>
                 <td>
-                  <input form={`${id}-edit`} aria-label={t('assets.kind')} required list={`${id}-kinds`} value={editing.kind}
-                    onChange={(e) => setEditing({ ...editing, kind: e.target.value })} />
+                  <select form={`${id}-edit`} aria-label={t('assets.kind')} required value={editing.kindId}
+                    onChange={(e) => setEditing({ ...editing, kindId: e.target.value })}>
+                    {kindOptions}
+                  </select>
                 </td>
                 <td>
                   <input form={`${id}-edit`} aria-label={t('assets.name')} required value={editing.name}
@@ -590,7 +598,7 @@ function CustomerAssets({ customer: c, readOnly, onSignedOut }: Omit<PartProps, 
                   {!readOnly && !a.retired_at && (
                     <>
                       <button type="button" className="link" disabled={action.busy}
-                        onClick={() => setEditing({ id: a.id, kind: a.kind, name: a.name })}>
+                        onClick={() => setEditing({ id: a.id, kindId: a.kind_id, name: a.name })}>
                         {t('action.edit')}
                       </button>
                       <button type="button" className="link danger" disabled={action.busy}
@@ -606,19 +614,25 @@ function CustomerAssets({ customer: c, readOnly, onSignedOut }: Omit<PartProps, 
         </table>
       )}
       {editing && <form id={`${id}-edit`} onSubmit={save} />}
-      <datalist id={`${id}-kinds`}>{kinds.map((k) => <option key={k} value={k} />)}</datalist>
+      {!readOnly && kinds.data?.length === 0 && (
+        <p className="hint">
+          {rich('assets.noKinds', { link: (inner) => <a href={adminHref('kinds')}>{inner}</a> })}
+        </p>
+      )}
       {!readOnly && (
         <form className="inline-form" onSubmit={add}>
           <label>
             {t('assets.kind')}
-            <input required list={`${id}-kinds`} value={kind} placeholder={t('assets.kindPlaceholder')}
-              onChange={(e) => setKind(e.target.value)} />
+            <select required value={kind} onChange={(e) => setKind(e.target.value)}>
+              <option value="" disabled>{t('assets.chooseKind')}</option>
+              {kindOptions}
+            </select>
           </label>
           <label>
             {t('assets.name')}
             <input required value={name} onChange={(e) => setName(e.target.value)} />
           </label>
-          <button type="submit" disabled={action.busy || !kind.trim() || !name.trim()}>{t('assets.add')}</button>
+          <button type="submit" disabled={action.busy || !kind || !name.trim()}>{t('assets.add')}</button>
         </form>
       )}
       <Problem error={action.error} />

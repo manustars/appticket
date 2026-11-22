@@ -11,12 +11,15 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use super::{ApiError, AppState, Problem};
+use crate::asset_kinds::{self, AssetKind};
 use crate::auth::SignedIn;
 use crate::catalog::{self, Asset, Service, ServiceDetail};
 use crate::roles::Permission;
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
+        .routes(routes!(list_asset_kinds, create_asset_kind))
+        .routes(routes!(update_asset_kind))
         .routes(routes!(customer_assets, create_asset))
         .routes(routes!(customer_services))
         .routes(routes!(update_asset))
@@ -35,6 +38,53 @@ pub struct Created {
     id: Uuid,
 }
 
+/// Every asset kind the help desk manages, by name.
+#[utoipa::path(get, path = "/api/asset-kinds", tag = "catalog",
+    responses((status = OK, body = Vec<AssetKind>), (status = UNAUTHORIZED, body = Problem)))]
+async fn list_asset_kinds(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+) -> Result<Json<Vec<AssetKind>>, ApiError> {
+    Ok(Json(asset_kinds::list(&state.db).await?))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct AssetKindFields {
+    name: String,
+    /// Whether its assets move with their holder; otherwise they stay at their site.
+    moves_with_holder: bool,
+}
+
+/// Adds an asset kind; no two kinds have names that differ only in case.
+#[utoipa::path(post, path = "/api/asset-kinds", tag = "catalog", request_body = AssetKindFields,
+    responses((status = CREATED, body = Created), (status = CONFLICT, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn create_asset_kind(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Json(fields): Json<AssetKindFields>,
+) -> Result<(StatusCode, Json<Created>), ApiError> {
+    agent.grant.require(Permission::ManageCatalog)?;
+    let id = asset_kinds::create(&state.db, &fields.name, fields.moves_with_holder).await?;
+    Ok((StatusCode::CREATED, Json(Created { id })))
+}
+
+/// Renames an asset kind or changes whether its assets move with their holder.
+#[utoipa::path(put, path = "/api/asset-kinds/{id}", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The asset kind")), request_body = AssetKindFields,
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn update_asset_kind(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+    Json(fields): Json<AssetKindFields>,
+) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCatalog)?;
+    asset_kinds::update(&state.db, id, &fields.name, fields.moves_with_holder).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// The customer's assets, active ones first.
 #[utoipa::path(get, path = "/api/customers/{id}/assets", tag = "catalog",
     params(("id" = Uuid, Path, description = "The customer")),
@@ -49,8 +99,8 @@ async fn customer_assets(
 
 #[derive(Deserialize, ToSchema)]
 pub struct AssetFields {
-    /// What sort of thing it is: computer, printer, application, licence…
-    kind: String,
+    /// Its asset kind, one of the list the help desk manages.
+    kind_id: Uuid,
     name: String,
 }
 
@@ -66,7 +116,7 @@ async fn create_asset(
     Json(fields): Json<AssetFields>,
 ) -> Result<(StatusCode, Json<Created>), ApiError> {
     agent.grant.require(Permission::ManageCatalog)?;
-    let id = catalog::create_asset(&state.db, id, &fields.kind, &fields.name).await?;
+    let id = catalog::create_asset(&state.db, id, fields.kind_id, &fields.name).await?;
     Ok((StatusCode::CREATED, Json(Created { id })))
 }
 
@@ -94,7 +144,7 @@ async fn update_asset(
     Json(fields): Json<AssetFields>,
 ) -> Result<StatusCode, ApiError> {
     agent.grant.require(Permission::ManageCatalog)?;
-    catalog::update_asset(&state.db, id, &fields.kind, &fields.name).await?;
+    catalog::update_asset(&state.db, id, fields.kind_id, &fields.name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -303,10 +303,14 @@ async fn views(db: &PgPool, rows: Vec<Row>) -> Result<Vec<ProposalView>> {
         };
         let assets = match &content {
             Content::Assets { asset_ids } => {
-                sqlx::query_as("SELECT id, kind, name FROM assets WHERE id = ANY($1) ORDER BY name")
-                    .bind(asset_ids)
-                    .fetch_all(db)
-                    .await?
+                sqlx::query_as(
+                    "SELECT a.id, k.name AS kind, a.name FROM assets a
+                     JOIN asset_kinds k ON k.id = a.kind_id
+                     WHERE a.id = ANY($1) ORDER BY a.name",
+                )
+                .bind(asset_ids)
+                .fetch_all(db)
+                .await?
             }
             _ => Vec::new(),
         };
@@ -670,12 +674,8 @@ mod tests {
         let agent = testing::agent(&db, "marco@northgate.test").await;
         let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
         let n = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
-        let pc = crate::catalog::create_asset(&db, brightfield, "computer", "PC-0042")
-            .await
-            .unwrap();
-        let other = crate::catalog::create_asset(&db, harbor, "printer", "P2")
-            .await
-            .unwrap();
+        let pc = testing::asset(&db, brightfield, "computer", "PC-0042").await;
+        let other = testing::asset(&db, harbor, "printer", "P2").await;
         let t = Target::Ticket(n);
 
         assert!(matches!(

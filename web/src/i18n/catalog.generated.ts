@@ -237,11 +237,21 @@ export interface Messages {
   "assets.empty": { plural: false; placeholders: never; tags: never }
   "assets.kind": { plural: false; placeholders: never; tags: never }
   "assets.name": { plural: false; placeholders: never; tags: never }
-  "assets.kindPlaceholder": { plural: false; placeholders: never; tags: never }
+  "assets.chooseKind": { plural: false; placeholders: never; tags: never }
+  "assets.noKinds": { plural: false; placeholders: never; tags: "link" }
   "assets.add": { plural: false; placeholders: never; tags: never }
   "assets.retire": { plural: false; placeholders: never; tags: never }
   "assets.retired": { plural: false; placeholders: "date"; tags: never }
   "assets.confirmRetire": { plural: false; placeholders: "name"; tags: never }
+  "kinds.title": { plural: false; placeholders: never; tags: never }
+  "kinds.hint": { plural: false; placeholders: never; tags: never }
+  "kinds.empty": { plural: false; placeholders: never; tags: never }
+  "kinds.name": { plural: false; placeholders: never; tags: never }
+  "kinds.namePlaceholder": { plural: false; placeholders: never; tags: never }
+  "kinds.placement": { plural: false; placeholders: never; tags: never }
+  "kinds.movesWithHolder": { plural: false; placeholders: never; tags: never }
+  "kinds.staysAtSite": { plural: false; placeholders: never; tags: never }
+  "kinds.add": { plural: false; placeholders: never; tags: never }
   "customerServices.title": { plural: false; placeholders: never; tags: never }
   "customerServices.empty": { plural: false; placeholders: never; tags: never }
   "customerServices.helpDeskUsesAll": { plural: false; placeholders: never; tags: never }
@@ -327,6 +337,7 @@ export interface Messages {
   "admin.title": { plural: false; placeholders: never; tags: never }
   "admin.agents": { plural: false; placeholders: never; tags: never }
   "admin.roles": { plural: false; placeholders: never; tags: never }
+  "admin.kinds": { plural: false; placeholders: never; tags: never }
   "admin.addons": { plural: false; placeholders: never; tags: never }
   "admin.mail": { plural: false; placeholders: never; tags: never }
   "admin.notAllowed": { plural: false; placeholders: never; tags: never }

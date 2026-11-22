@@ -1,7 +1,9 @@
-// Administration: the help desk's agents, its roles, its add-ons and the state of its mail. Each
-// tab needs a permission of its own, and only the tabs the agent's role allows are shown.
+// Administration: the help desk's agents, its roles, its asset kinds, its add-ons and the state of
+// its mail. Each tab needs a permission of its own, and only the tabs the agent's role allows are
+// shown.
 import { useId, useState, type FormEvent } from 'react'
 import { AdminAddons } from './AdminAddons'
+import { AdminKinds } from './AdminKinds'
 import { AdminMail } from './AdminMail'
 import { AdminRoles } from './AdminRoles'
 import {
@@ -24,6 +26,7 @@ import { useAction, useLoad, type Action } from './useAction'
 const tabPermission = {
   agents: 'agents.manage',
   roles: 'roles.manage',
+  kinds: 'catalog.manage',
   addons: 'addons.manage',
   mail: 'mail.view',
 } as const satisfies Record<AdminTab, string>
@@ -52,6 +55,8 @@ export function Admin({ tab, onSignedOut }: { tab: AdminTab | null; onSignedOut:
         <Agents onSignedOut={onSignedOut} />
       ) : shown === 'roles' ? (
         <AdminRoles onSignedOut={onSignedOut} />
+      ) : shown === 'kinds' ? (
+        <AdminKinds onSignedOut={onSignedOut} />
       ) : shown === 'addons' ? (
         <AdminAddons onSignedOut={onSignedOut} />
       ) : (

@@ -163,8 +163,9 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   site after a warning.
 - An asset belongs to exactly one customer.
 - Every asset has an asset kind from the list the help desk manages; the kind says whether its
-  assets move with their holder or stay at their site. An add-on that supplies assets maps its own
-  kinds to that list in its configuration.
+  assets move with their holder or stay at their site. No two asset kinds have names that differ
+  only in case. An add-on that supplies assets maps its own kinds to that list in its
+  configuration.
 - An asset has optionally a serial number, a site of its customer and a holder, who is a requester
   of its customer and not departed. An asset whose kind moves with its holder is at its holder's
   site while it has a holder, and at its own site otherwise; any other asset is at its own site.

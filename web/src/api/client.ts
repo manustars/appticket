@@ -8,6 +8,7 @@ export type Agent = Schemas['Agent']
 export type AgentAccount = Schemas['AgentAccount']
 export type AgentEntry = Schemas['AgentEntry']
 export type Asset = Schemas['Asset']
+export type AssetKind = Schemas['AssetKind']
 export type CustomerDetail = Schemas['CustomerDetail']
 export type CustomerEntry = Schemas['CustomerEntry']
 export type CustomerSummary = Schemas['CustomerSummary']
@@ -342,18 +343,34 @@ export async function offboardCustomer(id: string): Promise<void> {
   await call('POST', `${customerPath(id)}/offboard`)
 }
 
+/** Every asset kind the help desk manages, by name. */
+export function listAssetKinds(): Promise<AssetKind[]> {
+  return json('GET', '/api/asset-kinds')
+}
+
+/** No two kinds have names that differ only in case. */
+export async function createAssetKind(name: string, movesWithHolder: boolean): Promise<void> {
+  const request: Schemas['AssetKindFields'] = { name, moves_with_holder: movesWithHolder }
+  await call('POST', '/api/asset-kinds', request)
+}
+
+export async function updateAssetKind(id: string, name: string, movesWithHolder: boolean): Promise<void> {
+  const request: Schemas['AssetKindFields'] = { name, moves_with_holder: movesWithHolder }
+  await call('PUT', `/api/asset-kinds/${encodeURIComponent(id)}`, request)
+}
+
 /** The customer's assets, active ones first. */
 export function listCustomerAssets(id: string): Promise<Asset[]> {
   return json('GET', `${customerPath(id)}/assets`)
 }
 
-export async function createAsset(customerId: string, kind: string, name: string): Promise<void> {
-  const request: Schemas['AssetFields'] = { kind, name }
+export async function createAsset(customerId: string, kindId: string, name: string): Promise<void> {
+  const request: Schemas['AssetFields'] = { kind_id: kindId, name }
   await call('POST', `${customerPath(customerId)}/assets`, request)
 }
 
-export async function updateAsset(id: string, kind: string, name: string): Promise<void> {
-  const request: Schemas['AssetFields'] = { kind, name }
+export async function updateAsset(id: string, kindId: string, name: string): Promise<void> {
+  const request: Schemas['AssetFields'] = { kind_id: kindId, name }
   await call('PUT', assetPath(id), request)
 }
 
