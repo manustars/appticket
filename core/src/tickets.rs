@@ -138,12 +138,15 @@ pub async fn assign(db: &PgPool, number: i64, agent: Option<Uuid>) -> Result<()>
 
 /// Queues a message to the ticket's requester and moves the ticket to `then`. The message is
 /// sent by the outbox; it threads with the conversation so that the answer comes back here.
+/// It goes to the address the requester last wrote from on the ticket; on a ticket they have not
+/// written on, `to` is the address the agent picked (see [`crate::requesters::Recipient`]).
 pub async fn reply(
     db: &PgPool,
     sender: &Sender,
     number: i64,
     author: Uuid,
     body: &str,
+    to: Option<&str>,
     then: TicketState,
 ) -> Result<Uuid> {
     let body = body.trim();
@@ -153,16 +156,14 @@ pub async fn reply(
     let mut tx = db.begin().await?;
     let (ticket_id, state) = lock(&mut tx, number).await?;
     not_closed(state)?;
-    let (title, requester): (String, Option<String>) = sqlx::query_as(
-        "SELECT t.title, r.email FROM tickets t LEFT JOIN requesters r ON r.id = t.requester_id
-         WHERE t.id = $1",
-    )
-    .bind(ticket_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    let Some(to) = requester else {
+    let title: String = sqlx::query_scalar("SELECT title FROM tickets WHERE id = $1")
+        .bind(ticket_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let Some(recipient) = crate::requesters::recipient(&mut tx, ticket_id).await? else {
         return rule("the ticket has no requester to reply to");
     };
+    let to = recipient.choose(to)?;
 
     // The conversation so far, newest last, to thread the reply.
     let mut thread: Vec<(String, String)> = sqlx::query_as(
@@ -238,41 +239,11 @@ pub async fn open(
         Some(true) => return rule("the customer is offboarded and gets no new tickets"),
         Some(false) => {}
     }
-    let requester = match requester_email.map(|e| e.trim().to_lowercase()) {
+    let requester = match requester_email.map(str::trim).filter(|e| !e.is_empty()) {
         None => None,
-        Some(email) if email.is_empty() => None,
         Some(email) => {
-            match email.rsplit_once('@') {
-                Some((local, domain)) if !local.is_empty() && domain.contains('.') => {}
-                _ => return rule(format!("{email:?} is not an e-mail address")),
-            }
-            let existing: Option<(Uuid, Uuid, String)> = sqlx::query_as(
-                "SELECT r.id, r.customer_id, c.name FROM requesters r
-                 JOIN customers c ON c.id = r.customer_id WHERE r.email = $1",
-            )
-            .bind(&email)
-            .fetch_optional(&mut *tx)
-            .await?;
-            match existing {
-                Some((id, of, _)) if of == customer => Some(id),
-                Some((_, _, other)) => {
-                    return rule(format!(
-                        "this address is already a requester of {other}, and a requester belongs to one customer"
-                    ));
-                }
-                None => {
-                    let id = Uuid::new_v4();
-                    sqlx::query(
-                        "INSERT INTO requesters (id, customer_id, email) VALUES ($1, $2, $3)",
-                    )
-                    .bind(id)
-                    .bind(customer)
-                    .bind(&email)
-                    .execute(&mut *tx)
-                    .await?;
-                    Some(id)
-                }
-            }
+            let email = crate::requesters::clean_address(email)?;
+            Some(crate::requesters::find_or_create(&mut tx, customer, &email, None).await?)
         }
     };
     let id = Uuid::new_v4();
@@ -470,7 +441,17 @@ pub struct TicketCustomer {
 #[derive(Serialize, ToSchema)]
 pub struct Requester {
     pub id: Uuid,
+    /// The address that stands for the requester on this ticket: the one they last wrote from on
+    /// it, else the first they registered.
     pub email: String,
+    /// All the requester's addresses, the first registered first.
+    pub addresses: Vec<String>,
+    /// The address the requester last wrote from on this ticket, where a reply goes. Empty when
+    /// they have not written on it: a reply then goes to the address the agent picks.
+    pub reply_to: Option<String>,
+    /// On a ticket the requester has not written on, the address an agent picked for the last
+    /// reply there: the next reply goes there too unless the agent picks another.
+    pub last_picked: Option<String>,
     pub name: Option<String>,
     /// How many tickets the requester has, this one included.
     pub ticket_count: i64,
@@ -536,7 +517,6 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
         customer_name: String,
         customer_is_help_desk: bool,
         requester_id: Option<Uuid>,
-        requester_email: Option<String>,
         requester_name: Option<String>,
         requester_tickets: Option<i64>,
         assignee_id: Option<Uuid>,
@@ -547,7 +527,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
     let row: Row = sqlx::query_as(
         "SELECT t.id, t.title, t.state, t.priority, c.id AS customer_id, c.name AS customer_name,
                 c.is_help_desk AS customer_is_help_desk,
-                r.id AS requester_id, r.email AS requester_email, r.name AS requester_name,
+                r.id AS requester_id, r.name AS requester_name,
                 (SELECT count(*) FROM tickets o WHERE o.requester_id = r.id) AS requester_tickets,
                 a.id AS assignee_id, a.name AS assignee_name, t.created_at, t.updated_at
          FROM tickets t
@@ -593,6 +573,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
     let (assets, services) = crate::catalog::ticket_links(db, row.id).await?;
     let (parent, children) = crate::parents::related(db, row.id).await?;
     let proposals = crate::proposals::open_on_ticket(db, row.id).await?;
+    let recipient = crate::requesters::recipient(&mut *db.acquire().await?, row.id).await?;
 
     Ok(TicketDetail {
         id: row.id,
@@ -605,12 +586,24 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
             name: row.customer_name,
             is_help_desk: row.customer_is_help_desk,
         },
-        requester: row.requester_id.map(|id| Requester {
-            id,
-            email: row.requester_email.unwrap_or_default(),
-            name: row.requester_name,
-            ticket_count: row.requester_tickets.unwrap_or(1),
-        }),
+        requester: row
+            .requester_id
+            .zip(recipient)
+            .map(|(id, recipient)| Requester {
+                id,
+                email: recipient
+                    .wrote_from
+                    .clone()
+                    .or_else(|| recipient.addresses.first().cloned())
+                    .unwrap_or_default(),
+                addresses: recipient.addresses,
+                last_picked: recipient
+                    .last_picked
+                    .filter(|_| recipient.wrote_from.is_none()),
+                reply_to: recipient.wrote_from,
+                name: row.requester_name,
+                ticket_count: row.requester_tickets.unwrap_or(1),
+            }),
         assignee: row.assignee_id.map(|id| Party {
             id,
             name: row.assignee_name.unwrap_or_default(),
@@ -646,6 +639,7 @@ mod tests {
             n,
             a,
             "Please restart it.",
+            None,
             TicketState::Waiting,
         )
         .await
@@ -678,7 +672,7 @@ mod tests {
         let c = testing::customer(&db, "Brightfield").await;
         let a = testing::agent(&db, "marco@northgate.test").await;
         let n = testing::ticket(&db, c, None, "first@brightfield.test").await;
-        let result = reply(&db, &sender(), n, a, "Hello", TicketState::Waiting).await;
+        let result = reply(&db, &sender(), n, a, "Hello", None, TicketState::Waiting).await;
         assert!(matches!(result, Err(Error::Rule(_))));
     }
 
@@ -696,7 +690,7 @@ mod tests {
         ));
         assert!(matches!(assign(&db, n, Some(a)).await, Err(Error::Rule(_))));
         assert!(matches!(
-            reply(&db, &sender(), n, a, "Hi", TicketState::Waiting).await,
+            reply(&db, &sender(), n, a, "Hi", None, TicketState::Waiting).await,
             Err(Error::Rule(_))
         ));
         assert_eq!(state(&db, n).await, "closed");
@@ -715,6 +709,7 @@ mod tests {
             n,
             a,
             "We will look at it.",
+            None,
             TicketState::Open,
         )
         .await

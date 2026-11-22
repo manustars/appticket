@@ -265,6 +265,7 @@ select.state { font-weight: 500; }
 .composer textarea { background: var(--surface); }
 .composer-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.6rem; }
 .composer-foot label { color: var(--muted); font-size: 0.9rem; margin-right: auto; }
+.composer .reply-to { color: var(--muted); font-size: 0.9rem; }
 .composer.note button[type='submit'] {
   background: var(--note-button);
   border-color: var(--note-button);

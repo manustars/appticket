@@ -1,4 +1,4 @@
-//! Managing customers, their mail domains and their requesters.
+//! Managing customers, their mail domains and their requesters with their addresses.
 
 use axum::{
     Json,
@@ -13,6 +13,7 @@ use uuid::Uuid;
 use super::{ApiError, AppState, Problem};
 use crate::auth::SignedIn;
 use crate::customers::{self, CustomerDetail, CustomerSummary};
+use crate::requesters;
 use crate::roles::Permission;
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -22,6 +23,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(add_domain))
         .routes(routes!(remove_domain))
         .routes(routes!(add_requester))
+        .routes(routes!(add_address))
+        .routes(routes!(remove_address))
         .routes(routes!(offboard))
 }
 
@@ -162,6 +165,44 @@ async fn add_requester(
         StatusCode::CREATED,
         Json(CreatedRequester { id: requester }),
     ))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct NewAddress {
+    address: String,
+}
+
+/// Gives a requester one more e-mail address; mail from it identifies them too. An address that
+/// already belongs to a requester is refused.
+#[utoipa::path(post, path = "/api/requesters/{id}/addresses", tag = "customers",
+    params(("id" = Uuid, Path, description = "The requester")), request_body = NewAddress,
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn add_address(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+    Json(new): Json<NewAddress>,
+) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
+    requesters::add_address(&state.db, id, &new.address).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Takes an e-mail address from a requester, who keeps at least one.
+#[utoipa::path(delete, path = "/api/requesters/{id}/addresses/{address}", tag = "customers",
+    params(("id" = Uuid, Path, description = "The requester"),
+        ("address" = String, Path, description = "The e-mail address")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn remove_address(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path((id, address)): Path<(Uuid, String)>,
+) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
+    requesters::remove_address(&state.db, id, &address).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Offboards a customer: no new tickets, its mail waits in the inbox, its history stays.

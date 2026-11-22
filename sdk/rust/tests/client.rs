@@ -94,7 +94,9 @@ async fn fake_core() -> (String, Posted) {
                     "title": "Printer jams", "state": "open", "priority": "high",
                     "customer": {"id": CUSTOMER, "name": "Brightfield", "is_help_desk": false},
                     "requester": {"id": "1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e",
-                        "email": "ada@brightfield.test", "name": "Ada Ferrini", "ticket_count": 3},
+                        "email": "ada@brightfield.test", "name": "Ada Ferrini", "ticket_count": 3,
+                        "addresses": ["ada@brightfield.test", "ada@home.test"],
+                        "reply_to": "ada@brightfield.test"},
                     "assignee": null, "assets": [],
                     "services": [{"id": "8c9d0e1f-2a3b-4c5d-9e6f-7a8b9c0d1e2f", "name": "Posta ospitata"}], "parent": null, "children": [],
                     "proposals": [{"id": "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f", "addon": "assistant",
@@ -176,7 +178,13 @@ async fn reads_what_an_addon_needs_and_ignores_the_rest() {
     let ticket = client.ticket(12).await.unwrap();
     assert_eq!(ticket.priority, Priority::High);
     assert_eq!(ticket.services[0].name, "Posta ospitata");
-    assert_eq!(ticket.requester.unwrap().email, "ada@brightfield.test");
+    let requester = ticket.requester.unwrap();
+    assert_eq!(requester.email, "ada@brightfield.test");
+    assert_eq!(
+        requester.addresses,
+        ["ada@brightfield.test", "ada@home.test"]
+    );
+    assert_eq!(requester.reply_to.as_deref(), Some("ada@brightfield.test"));
     match &ticket.timeline[..] {
         [
             TimelineEntry::Message(m),

@@ -33,7 +33,8 @@ pub struct CustomerDetail {
 #[derive(Serialize, ToSchema, sqlx::FromRow)]
 pub struct RequesterEntry {
     pub id: Uuid,
-    pub email: String,
+    /// The requester's e-mail addresses, the first registered first; there is at least one.
+    pub addresses: Vec<String>,
     pub name: Option<String>,
     pub tickets: i64,
 }
@@ -64,9 +65,12 @@ pub async fn detail(db: &PgPool, id: Uuid) -> Result<CustomerDetail> {
         .await?
         .ok_or(Error::NotFound("customer"))?;
     let requester_list = sqlx::query_as(
-        "SELECT r.id, r.email, r.name,
+        "SELECT r.id, r.name,
+                coalesce((SELECT array_agg(a.address ORDER BY a.created_at, a.address)
+                 FROM requester_addresses a WHERE a.requester_id = r.id), '{}') AS addresses,
                 (SELECT count(*) FROM tickets t WHERE t.requester_id = r.id) AS tickets
-         FROM requesters r WHERE r.customer_id = $1 ORDER BY r.email",
+         FROM requesters r WHERE r.customer_id = $1
+         ORDER BY requester_first_address(r.id)",
     )
     .bind(id)
     .fetch_all(db)
@@ -194,32 +198,20 @@ pub async fn remove_domain(db: &PgPool, id: Uuid, domain: &str) -> Result<()> {
     Ok(())
 }
 
-/// Registers a requester with the customer, so that their mail opens tickets directly.
+/// Registers a requester with the customer, so that their mail opens tickets directly. An
+/// address already belonging to a requester is refused.
 pub async fn add_requester(db: &PgPool, id: Uuid, email: &str, name: Option<&str>) -> Result<Uuid> {
-    let email = email.trim().to_lowercase();
-    match email.rsplit_once('@') {
-        Some((local, domain)) if !local.is_empty() && domain.contains('.') => {}
-        _ => return rule(format!("{email:?} is not an e-mail address")),
-    }
+    let email = crate::requesters::clean_address(email)?;
     let mut tx = db.begin().await?;
     lock_active(&mut tx, id).await?;
-    let owner: Option<String> = sqlx::query_scalar(
-        "SELECT c.name FROM requesters r JOIN customers c ON c.id = r.customer_id WHERE r.email = $1",
-    )
-    .bind(&email)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if let Some(owner) = owner {
-        return rule(format!("this address is already a requester of {owner}"));
+    if let Some(owner) = crate::requesters::owner_of(&mut tx, &email).await? {
+        return rule(format!(
+            "this address is already a requester of {}",
+            owner.customer_name
+        ));
     }
-    let requester = Uuid::new_v4();
-    sqlx::query("INSERT INTO requesters (id, customer_id, email, name) VALUES ($1, $2, $3, $4)")
-        .bind(requester)
-        .bind(id)
-        .bind(&email)
-        .bind(name.map(str::trim).filter(|n| !n.is_empty()))
-        .execute(&mut *tx)
-        .await?;
+    let name = name.map(str::trim).filter(|n| !n.is_empty());
+    let requester = crate::requesters::create(&mut tx, id, &email, name).await?;
     tx.commit().await?;
     Ok(requester)
 }
@@ -299,7 +291,10 @@ mod tests {
             Err(Error::Rule(_))
         ));
         let customer = detail(&db, brightfield).await.unwrap();
-        assert_eq!(customer.requester_list[0].email, "ada@brightfield.test");
+        assert_eq!(
+            customer.requester_list[0].addresses,
+            ["ada@brightfield.test"]
+        );
         assert_eq!(customer.summary.requesters, 1);
     }
 

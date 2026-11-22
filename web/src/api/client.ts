@@ -161,9 +161,13 @@ export async function addNote(number: number, body: string): Promise<void> {
   await call('POST', `${ticketPath(number)}/notes`, request)
 }
 
-/** Queues a message to the requester; the ticket then moves to `then` (the core's default is waiting). */
-export async function reply(number: number, body: string, then?: TicketState): Promise<void> {
-  const request: Schemas['NewReply'] = { body, then }
+/**
+ * Queues a message to the requester; the ticket then moves to `then` (the core's default is
+ * waiting). It goes where the requester last wrote from on the ticket; on a ticket they have not
+ * written on, `to` is the address the agent picked among theirs.
+ */
+export async function reply(number: number, body: string, then?: TicketState, to?: string | null): Promise<void> {
+  const request: Schemas['NewReply'] = { body, then, to }
   await call('POST', `${ticketPath(number)}/replies`, request)
 }
 
@@ -299,6 +303,19 @@ export async function removeDomain(id: string, domain: string): Promise<void> {
 export async function addRequester(id: string, email: string, name: string | null): Promise<void> {
   const request: Schemas['NewRequester'] = { email, name }
   await call('POST', `${customerPath(id)}/requesters`, request)
+}
+
+const requesterPath = (id: string) => `/api/requesters/${encodeURIComponent(id)}`
+
+/** Gives the requester one more address; refused when it belongs to a requester already. */
+export async function addRequesterAddress(id: string, address: string): Promise<void> {
+  const request: Schemas['NewAddress'] = { address }
+  await call('POST', `${requesterPath(id)}/addresses`, request)
+}
+
+/** Takes an address from the requester; refused for their last one. */
+export async function removeRequesterAddress(id: string, address: string): Promise<void> {
+  await call('DELETE', `${requesterPath(id)}/addresses/${encodeURIComponent(address)}`)
 }
 
 /** No new tickets from then on; the customer's history stays. Refused for the help desk. */

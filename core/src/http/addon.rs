@@ -147,7 +147,7 @@ async fn customer_assets(
 #[derive(Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct OpenTicketsFilter {
-    /// Tickets of this requester's address.
+    /// Tickets of the requester this address belongs to (any of their addresses).
     requester_email: Option<String>,
     /// Tickets of this customer.
     customer: Option<Uuid>,
@@ -160,6 +160,7 @@ pub struct AddonTicketSummary {
     state: TicketState,
     priority: Priority,
     customer_id: Uuid,
+    /// The address the requester last wrote from on the ticket, else the first they registered.
     requester_email: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
@@ -184,10 +185,13 @@ async fn open_tickets(
     Ok(Json(
         sqlx::query_as(
             "SELECT t.number, t.title, t.state, t.priority, t.customer_id,
-                    r.email AS requester_email, t.updated_at
-             FROM tickets t LEFT JOIN requesters r ON r.id = t.requester_id
+                    coalesce(ticket_reply_address(t.id), requester_first_address(t.requester_id))
+                        AS requester_email,
+                    t.updated_at
+             FROM tickets t
              WHERE t.state <> 'closed'
-               AND ($1::text IS NULL OR r.email = lower($1))
+               AND ($1::text IS NULL OR t.requester_id =
+                    (SELECT requester_id FROM requester_addresses WHERE address = lower($1)))
                AND ($2::uuid IS NULL OR t.customer_id = $2)
              ORDER BY t.updated_at DESC LIMIT 50",
         )

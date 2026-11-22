@@ -56,42 +56,11 @@ pub async fn open_ticket(db: &PgPool, message: Uuid, customer: Uuid) -> Result<i
     }
 
     let requester = if from.contains('@') {
-        let existing: Option<(Uuid, Uuid, String)> = sqlx::query_as(
-            "SELECT r.id, r.customer_id, c.name FROM requesters r
-             JOIN customers c ON c.id = r.customer_id WHERE r.email = $1",
+        // A known requester learns their name from the message when it was not known yet.
+        Some(
+            crate::requesters::find_or_create(&mut tx, customer, &from, from_name.as_deref())
+                .await?,
         )
-        .bind(&from)
-        .fetch_optional(&mut *tx)
-        .await?;
-        match existing {
-            Some((id, of, _)) if of == customer => {
-                // Learn the requester's name from the message when it was not known yet.
-                sqlx::query("UPDATE requesters SET name = $2 WHERE id = $1 AND name IS NULL")
-                    .bind(id)
-                    .bind(&from_name)
-                    .execute(&mut *tx)
-                    .await?;
-                Some(id)
-            }
-            Some((_, _, other)) => {
-                return rule(format!(
-                    "the sender is already a requester of {other}, and a requester belongs to one customer"
-                ));
-            }
-            None => {
-                let id = Uuid::new_v4();
-                sqlx::query(
-                    "INSERT INTO requesters (id, customer_id, email, name) VALUES ($1, $2, $3, $4)",
-                )
-                .bind(id)
-                .bind(customer)
-                .bind(&from)
-                .bind(&from_name)
-                .execute(&mut *tx)
-                .await?;
-                Some(id)
-            }
-        }
     } else {
         None
     };
@@ -178,7 +147,8 @@ mod tests {
         let m = testing::inbox_message(&db, "new.person@mail.test").await;
         let n = open_ticket(&db, m, c).await.unwrap();
         let (customer, email): (Uuid, String) = sqlx::query_as(
-            "SELECT t.customer_id, r.email FROM tickets t JOIN requesters r ON r.id = t.requester_id
+            "SELECT t.customer_id, a.address FROM tickets t
+             JOIN requester_addresses a ON a.requester_id = t.requester_id
              WHERE t.number = $1",
         )
         .bind(n)

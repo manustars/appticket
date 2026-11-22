@@ -141,8 +141,8 @@ pub async fn resolve_children(
     if body.trim().is_empty() {
         return rule("the message to the requesters cannot be empty");
     }
-    let children: Vec<(i64, bool)> = sqlx::query_as(
-        "SELECT t.number, t.requester_id IS NOT NULL FROM tickets t
+    let children: Vec<(i64, Uuid, bool)> = sqlx::query_as(
+        "SELECT t.number, t.id, t.requester_id IS NOT NULL FROM tickets t
          JOIN tickets p ON p.id = t.parent_id
          WHERE p.number = $1 AND t.state IN ('open', 'waiting')
          ORDER BY t.number",
@@ -153,13 +153,42 @@ pub async fn resolve_children(
     if children.is_empty() {
         return rule("the ticket has no open or waiting children");
     }
+    // Each reply goes where its requester last wrote from on the child, else where an agent's
+    // last reply there went. A requester with several addresses and neither needs an agent to pick
+    // one: refuse before changing anything, so that no child is left half done.
+    let mut conn = db.acquire().await?;
+    let mut undecided = Vec::new();
+    for (number, id, has_requester) in &children {
+        if *has_requester
+            && let Some(recipient) = crate::requesters::recipient(&mut conn, *id).await?
+            && recipient.choose(None).is_err()
+        {
+            undecided.push(format!("#{number}"));
+        }
+    }
+    drop(conn);
+    if !undecided.is_empty() {
+        return rule(format!(
+            "the requesters of {} have several addresses and have not written on their ticket: reply to them there first, picking the address",
+            undecided.join(", ")
+        ));
+    }
     let mut done = ResolvedChildren {
         resolved: 0,
         replied: 0,
     };
-    for (number, has_requester) in children {
+    for (number, _, has_requester) in children {
         if has_requester {
-            tickets::reply(db, sender, number, author, body, TicketState::Resolved).await?;
+            tickets::reply(
+                db,
+                sender,
+                number,
+                author,
+                body,
+                None,
+                TicketState::Resolved,
+            )
+            .await?;
             done.replied += 1;
         } else {
             tickets::set_state(db, number, TicketState::Resolved).await?;
@@ -264,5 +293,64 @@ mod tests {
             resolve_children(&db, &testing::sender(), outage, agent, "Again").await,
             Err(Error::Rule(_))
         ));
+    }
+
+    #[sqlx::test]
+    async fn children_are_answered_where_their_requesters_wrote_from(db: PgPool) {
+        let own = help_desk(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        crate::requesters::add_address(&db, ada, "ada@home.test")
+            .await
+            .unwrap();
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
+        let wrote = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
+        testing::message_from(&db, wrote, "ada@home.test").await;
+        let silent = testing::ticket(&db, brightfield, Some(ada), "b@brightfield.test").await;
+        for child in [wrote, silent] {
+            attach(&db, child, outage).await.unwrap();
+        }
+
+        let Err(Error::Rule(why)) =
+            resolve_children(&db, &testing::sender(), outage, agent, "Fixed.").await
+        else {
+            panic!("a requester with several addresses was answered without a choice");
+        };
+        assert!(why.contains(&format!("#{silent}")), "{why}");
+        assert!(!why.contains(&format!("#{wrote}")), "{why}");
+        for child in [wrote, silent] {
+            assert_eq!(testing::state(&db, child).await, "open", "nothing changed");
+        }
+
+        // Replying on the silent child, the agent picks the address; resolving then uses it.
+        tickets::reply(
+            &db,
+            &testing::sender(),
+            silent,
+            agent,
+            "Which address?",
+            Some("ada@brightfield.test"),
+            TicketState::Waiting,
+        )
+        .await
+        .unwrap();
+        resolve_children(&db, &testing::sender(), outage, agent, "Fixed.")
+            .await
+            .unwrap();
+        let sent: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT t.number, m.to_address FROM messages m JOIN tickets t ON t.id = m.ticket_id
+             WHERE m.direction = 'outbound' AND m.body_text = 'Fixed.' ORDER BY t.number",
+        )
+        .fetch_all(&db)
+        .await
+        .unwrap();
+        assert_eq!(
+            sent,
+            [
+                (wrote, "ada@home.test".to_owned()),
+                (silent, "ada@brightfield.test".to_owned())
+            ]
+        );
     }
 }

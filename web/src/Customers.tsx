@@ -2,6 +2,7 @@ import { useCallback, useId, useState, type FormEvent } from 'react'
 import {
   addDomain,
   addRequester,
+  addRequesterAddress,
   createAsset,
   createCustomer,
   getCustomer,
@@ -11,6 +12,7 @@ import {
   listServices,
   offboardCustomer,
   removeDomain,
+  removeRequesterAddress,
   renameCustomer,
   retireAsset,
   startUsingService,
@@ -272,6 +274,8 @@ function Requesters({ customer: c, readOnly, onChanged, onSignedOut }: PartProps
   const action = useAction(onSignedOut)
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
+  // The requester getting one more address, with what is typed for it.
+  const [adding, setAdding] = useState<{ id: string; address: string } | null>(null)
   const id = useId()
 
   function add(event: FormEvent) {
@@ -285,6 +289,21 @@ function Requesters({ customer: c, readOnly, onChanged, onSignedOut }: PartProps
     })
   }
 
+  function addAddress(event: FormEvent) {
+    event.preventDefault()
+    if (!adding || !adding.address.trim()) return
+    const { id: requester, address } = adding
+    void action.run(() => addRequesterAddress(requester, address.trim())).then(async (ok) => {
+      if (!ok) return
+      setAdding(null)
+      await onChanged()
+    })
+  }
+
+  function removeAddress(requester: string, address: string) {
+    void action.run(() => removeRequesterAddress(requester, address)).then(async (ok) => { if (ok) await onChanged() })
+  }
+
   return (
     <section className="panel" aria-labelledby={`${id}-title`}>
       <h2 id={`${id}-title`}>{t('customer.requesters')}</h2>
@@ -294,14 +313,47 @@ function Requesters({ customer: c, readOnly, onChanged, onSignedOut }: PartProps
         <table className="data">
           <thead>
             <tr>
-              <th>{t('customer.requesterEmail')}</th><th>{t('customer.requesterName')}</th>
+              <th>{t('customer.requesterAddresses')}</th><th>{t('customer.requesterName')}</th>
               <th className="figure">{t('customer.requesterTickets')}</th>
             </tr>
           </thead>
           <tbody>
             {c.requester_list.map((r) => (
               <tr key={r.id}>
-                <td>{r.email}</td>
+                <td>
+                  <ul className="chips">
+                    {r.addresses.map((a) => (
+                      <li key={a}>
+                        {a}
+                        {/* A requester keeps at least one address. */}
+                        {!readOnly && r.addresses.length > 1 && (
+                          <button type="button" className="link danger" disabled={action.busy}
+                            aria-label={t('customer.removeAddress', { address: a })}
+                            onClick={() => removeAddress(r.id, a)}>
+                            {t('action.remove')}
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  {!readOnly && (adding?.id === r.id ? (
+                    <form className="inline-form" onSubmit={addAddress}>
+                      <label>
+                        {t('customer.newAddress')}
+                        <input type="email" required autoFocus value={adding.address}
+                          onChange={(e) => setAdding({ id: r.id, address: e.target.value })} />
+                      </label>
+                      <button type="submit" disabled={action.busy || !adding.address.trim()}>{t('action.add')}</button>
+                      <button type="button" className="quiet" onClick={() => { setAdding(null); action.clear() }}>
+                        {t('action.cancel')}
+                      </button>
+                    </form>
+                  ) : (
+                    <button type="button" className="link" onClick={() => { setAdding({ id: r.id, address: '' }); action.clear() }}>
+                      {t('customer.addAddress')}
+                    </button>
+                  ))}
+                </td>
                 <td>{r.name ?? <span className="muted">—</span>}</td>
                 <td className="figure">{formatNumber(r.tickets)}</td>
               </tr>

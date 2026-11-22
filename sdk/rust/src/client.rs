@@ -204,7 +204,8 @@ impl Client {
             .await
     }
 
-    /// Tickets that are not closed whose requester has this address, most recent first.
+    /// Tickets that are not closed whose requester has this address among theirs, most recent
+    /// first.
     /// Scope `tickets:read`.
     pub async fn open_tickets_of_requester(
         &self,

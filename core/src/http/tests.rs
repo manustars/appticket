@@ -448,6 +448,7 @@ async fn an_agent_without_permissions_changes_nothing(db: PgPool) {
                 .replace("{number}", &number.to_string())
                 .replace("{name}", "assistant")
                 .replace("{domain}", "brightfield.test")
+                .replace("{address}", "ada%40brightfield.test")
                 .replace(
                     "{id}",
                     &if path.starts_with("/api/proposals/") {
@@ -611,4 +612,119 @@ async fn administrators_manage_agents_through_the_api(db: PgPool) {
     assert_eq!(status, StatusCode::CONFLICT, "{json}");
     let mail = admin.get("/api/admin/mail").await;
     assert!(mail["reading"].is_null() && mail["outbox"]["waiting"] == 0);
+}
+
+/// A requester with two addresses: either finds their tickets, the reply goes where they wrote
+/// from, and the agent picks on a ticket they have not written on.
+#[sqlx::test]
+async fn a_requester_with_several_addresses_through_the_api(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+    let (status, json) = api
+        .call(
+            "POST",
+            &format!("/api/requesters/{ada}/addresses"),
+            Some(serde_json::json!({ "address": "Ada@Home.test" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    let customer = api.get(&format!("/api/customers/{brightfield}")).await;
+    assert_eq!(
+        customer["requester_list"][0]["addresses"],
+        serde_json::json!(["ada@brightfield.test", "ada@home.test"])
+    );
+
+    let wrote = testing::ticket(&db, brightfield, Some(ada), "w@home.test").await;
+    testing::message_from(&db, wrote, "ada@home.test").await;
+    let silent = testing::ticket(&db, brightfield, Some(ada), "s@brightfield.test").await;
+
+    let ticket = api.get(&format!("/api/tickets/{wrote}")).await;
+    assert_eq!(ticket["requester"]["reply_to"], "ada@home.test");
+    assert_eq!(ticket["requester"]["email"], "ada@home.test");
+    let ticket = api.get(&format!("/api/tickets/{silent}")).await;
+    assert!(ticket["requester"]["reply_to"].is_null());
+    assert_eq!(ticket["requester"]["email"], "ada@brightfield.test");
+    assert_eq!(
+        numbers(&api.get("/api/tickets?q=home.test").await),
+        [wrote, silent]
+    );
+
+    let reply = |n: i64, to: Option<&'static str>| {
+        let api = &api;
+        async move {
+            api.call(
+                "POST",
+                &format!("/api/tickets/{n}/replies"),
+                Some(serde_json::json!({ "body": "Restart it.", "to": to })),
+            )
+            .await
+        }
+    };
+    let (status, _) = reply(wrote, Some("ada@brightfield.test")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "not where she wrote from");
+    let (status, _) = reply(silent, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "the agent has to pick");
+    assert_eq!(reply(wrote, None).await.0, StatusCode::ACCEPTED);
+    assert_eq!(
+        reply(silent, Some("ada@home.test")).await.0,
+        StatusCode::ACCEPTED
+    );
+    let ticket = api.get(&format!("/api/tickets/{silent}")).await;
+    assert_eq!(ticket["requester"]["last_picked"], "ada@home.test");
+    assert!(ticket["requester"]["reply_to"].is_null());
+    let sent: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT t.number, m.to_address FROM messages m JOIN tickets t ON t.id = m.ticket_id
+         WHERE m.direction = 'outbound' ORDER BY t.number",
+    )
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert_eq!(
+        sent,
+        [
+            (wrote, "ada@home.test".to_owned()),
+            (silent, "ada@home.test".to_owned())
+        ]
+    );
+
+    // Add-ons find the requester's tickets by any of the addresses.
+    let reader = crate::addons::register(
+        &db,
+        "reader",
+        "http://127.0.0.1:9",
+        &[],
+        &["tickets:read".into()],
+    )
+    .await
+    .unwrap();
+    let bot = Client::new_with_token(&db, &reader.token, api.agent);
+    for address in ["ada@brightfield.test", "ADA@home.test"] {
+        let found = bot
+            .get(&format!("/api/addon/tickets?requester_email={address}"))
+            .await;
+        assert_eq!(numbers(&found), [wrote, silent], "{address}");
+    }
+    let seen = bot.get(&format!("/api/addon/tickets/{wrote}")).await;
+    assert_eq!(
+        seen["requester"]["addresses"],
+        serde_json::json!(["ada@brightfield.test", "ada@home.test"])
+    );
+
+    let (status, _) = api
+        .call(
+            "DELETE",
+            &format!("/api/requesters/{ada}/addresses/ada%40brightfield.test"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, json) = api
+        .call(
+            "DELETE",
+            &format!("/api/requesters/{ada}/addresses/ada%40home.test"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
 }

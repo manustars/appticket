@@ -16,16 +16,28 @@ pub async fn customer(db: &PgPool, name: &str) -> Uuid {
     id
 }
 
+/// A requester with one address.
 pub async fn requester(db: &PgPool, customer: Uuid, email: &str) -> Uuid {
-    let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO requesters (id, customer_id, email) VALUES ($1, $2, $3)")
-        .bind(id)
-        .bind(customer)
-        .bind(email)
-        .execute(db)
+    let mut tx = db.begin().await.unwrap();
+    let id = crate::requesters::create(&mut tx, customer, email, None)
         .await
         .unwrap();
+    tx.commit().await.unwrap();
     id
+}
+
+/// A message received on the ticket from `from`.
+pub async fn message_from(db: &PgPool, number: i64, from: &str) {
+    sqlx::query(
+        "INSERT INTO messages (id, ticket_id, direction, from_address, subject, body_text)
+         SELECT $1, id, 'inbound', $3, 'Printer jams', 'Still jams.' FROM tickets WHERE number = $2",
+    )
+    .bind(Uuid::new_v4())
+    .bind(number)
+    .bind(from)
+    .execute(db)
+    .await
+    .unwrap();
 }
 
 pub async fn agent(db: &PgPool, email: &str) -> Uuid {

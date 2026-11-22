@@ -22,6 +22,7 @@ mod mail_status;
 mod outbound;
 mod parents;
 mod proposals;
+mod requesters;
 mod roles;
 #[cfg(test)]
 mod testing;

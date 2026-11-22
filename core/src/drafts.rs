@@ -126,6 +126,7 @@ mod tests {
             n,
             marco,
             "Buongiorno Ada, grazie",
+            None,
             TicketState::Waiting,
         )
         .await

@@ -234,7 +234,7 @@
           {
             "name": "requester_email",
             "in": "query",
-            "description": "Tickets of this requester's address.",
+            "description": "Tickets of the requester this address belongs to (any of their addresses).",
             "required": false,
             "schema": {
               "type": "string"
@@ -2274,6 +2274,127 @@
         }
       }
     },
+    "/api/requesters/{id}/addresses": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Gives a requester one more e-mail address; mail from it identifies them too. An address that\nalready belongs to a requester is refused.",
+        "operationId": "add_address",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The requester",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewAddress"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/requesters/{id}/addresses/{address}": {
+      "delete": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Takes an e-mail address from a requester, who keeps at least one.",
+        "operationId": "remove_address",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The requester",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "address",
+            "in": "path",
+            "description": "The e-mail address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/services": {
       "get": {
         "tags": [
@@ -2889,7 +3010,7 @@
           {
             "name": "q",
             "in": "query",
-            "description": "Text found in the title, the requester's address or the customer's name; `#12` or `12`\nalso finds ticket 12.",
+            "description": "Text found in the title, any of the requester's addresses or the customer's name; `#12` or\n`12` also finds ticket 12.",
             "required": false,
             "schema": {
               "type": "string"
@@ -4146,7 +4267,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The address the requester last wrote from on the ticket, else the first they registered."
           },
           "state": {
             "$ref": "#/components/schemas/TicketState"
@@ -4979,6 +5101,17 @@
           }
         }
       },
+      "NewAddress": {
+        "type": "object",
+        "required": [
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          }
+        }
+      },
       "NewAgent": {
         "type": "object",
         "required": [
@@ -5092,6 +5225,13 @@
                 "type": "null"
               }
             ]
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One of the requester's addresses, picked by the agent on a ticket the requester has not\nwritten on; needed then when they have several. Where they last wrote from on the ticket,\nthe reply goes there, and any other address is refused."
           }
         }
       },
@@ -5485,21 +5625,44 @@
         "required": [
           "id",
           "email",
+          "addresses",
           "ticket_count"
         ],
         "properties": {
+          "addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "All the requester's addresses, the first registered first."
+          },
           "email": {
-            "type": "string"
+            "type": "string",
+            "description": "The address that stands for the requester on this ticket: the one they last wrote from on\nit, else the first they registered."
           },
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "last_picked": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a ticket the requester has not written on, the address an agent picked for the last\nreply there: the next reply goes there too unless the agent picks another."
           },
           "name": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "reply_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address the requester last wrote from on this ticket, where a reply goes. Empty when\nthey have not written on it: a reply then goes to the address the agent picks."
           },
           "ticket_count": {
             "type": "integer",
@@ -5512,12 +5675,16 @@
         "type": "object",
         "required": [
           "id",
-          "email",
+          "addresses",
           "tickets"
         ],
         "properties": {
-          "email": {
-            "type": "string"
+          "addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The requester's e-mail addresses, the first registered first; there is at least one."
           },
           "id": {
             "type": "string",
@@ -5927,7 +6094,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The address the requester last wrote from on the ticket, else the first they registered."
           },
           "state": {
             "$ref": "#/components/schemas/TicketState"

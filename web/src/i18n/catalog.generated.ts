@@ -22,6 +22,7 @@ export interface Messages {
   "action.cancel": { plural: false; placeholders: never; tags: never }
   "action.edit": { plural: false; placeholders: never; tags: never }
   "action.remove": { plural: false; placeholders: never; tags: never }
+  "action.add": { plural: false; placeholders: never; tags: never }
   "action.link": { plural: false; placeholders: never; tags: never }
   "action.unlink": { plural: false; placeholders: never; tags: never }
   "table.actions": { plural: false; placeholders: never; tags: never }
@@ -127,6 +128,8 @@ export interface Messages {
   "composer.reply": { plural: false; placeholders: never; tags: never }
   "composer.note": { plural: false; placeholders: never; tags: never }
   "composer.hintReply": { plural: false; placeholders: "email"; tags: "strong" }
+  "composer.hintReplyWroteFrom": { plural: false; placeholders: "email"; tags: "strong" }
+  "composer.hintPickAddress": { plural: false; placeholders: never; tags: never }
   "composer.hintClosed": { plural: false; placeholders: never; tags: never }
   "composer.hintNote": { plural: false; placeholders: never; tags: "strong" }
   "composer.hintNoRequester": { plural: false; placeholders: never; tags: never }
@@ -135,7 +138,10 @@ export interface Messages {
   "composer.replyPlaceholder": { plural: false; placeholders: never; tags: never }
   "composer.notePlaceholder": { plural: false; placeholders: never; tags: never }
   "composer.then": { plural: false; placeholders: never; tags: never }
+  "composer.to": { plural: false; placeholders: never; tags: never }
+  "composer.chooseAddress": { plural: false; placeholders: never; tags: never }
   "composer.sendReply": { plural: false; placeholders: "email"; tags: never }
+  "composer.send": { plural: false; placeholders: never; tags: never }
   "composer.addNote": { plural: false; placeholders: never; tags: never }
   "composer.draftSaving": { plural: false; placeholders: never; tags: never }
   "composer.draftSaved": { plural: false; placeholders: never; tags: never }
@@ -204,10 +210,14 @@ export interface Messages {
   "customer.removeDomain": { plural: false; placeholders: "domain"; tags: never }
   "customer.noRequesters": { plural: false; placeholders: never; tags: never }
   "customer.requesterEmail": { plural: false; placeholders: never; tags: never }
+  "customer.requesterAddresses": { plural: false; placeholders: never; tags: never }
   "customer.requesterName": { plural: false; placeholders: never; tags: never }
   "customer.requesterNameOptional": { plural: false; placeholders: never; tags: never }
   "customer.requesterTickets": { plural: false; placeholders: never; tags: never }
   "customer.addRequester": { plural: false; placeholders: never; tags: never }
+  "customer.addAddress": { plural: false; placeholders: never; tags: never }
+  "customer.newAddress": { plural: false; placeholders: never; tags: never }
+  "customer.removeAddress": { plural: false; placeholders: "address"; tags: never }
   "customer.offboardHint": { plural: false; placeholders: never; tags: never }
   "customer.offboard": { plural: false; placeholders: never; tags: never }
   "customer.confirmOffboard": { plural: false; placeholders: "name"; tags: never }

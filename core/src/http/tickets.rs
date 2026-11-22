@@ -40,6 +40,7 @@ pub struct TicketSummary {
     state: TicketState,
     priority: Priority,
     customer_name: String,
+    /// The address the requester last wrote from on the ticket, else the first they registered.
     requester_email: Option<String>,
     assignee_name: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
@@ -56,8 +57,8 @@ pub struct TicketFilter {
     assignee: Option<String>,
     /// A customer's id.
     customer: Option<String>,
-    /// Text found in the title, the requester's address or the customer's name; `#12` or `12`
-    /// also finds ticket 12.
+    /// Text found in the title, any of the requester's addresses or the customer's name; `#12` or
+    /// `12` also finds ticket 12.
     q: Option<String>,
 }
 
@@ -114,17 +115,20 @@ async fn list_tickets(
 
     let tickets = sqlx::query_as(
         "SELECT t.id, t.number, t.title, t.state, t.priority, c.name AS customer_name,
-                r.email AS requester_email, a.name AS assignee_name, t.updated_at
+                coalesce(ticket_reply_address(t.id), requester_first_address(t.requester_id))
+                    AS requester_email,
+                a.name AS assignee_name, t.updated_at
          FROM tickets t
          JOIN customers c ON c.id = t.customer_id
-         LEFT JOIN requesters r ON r.id = t.requester_id
          LEFT JOIN agents a ON a.id = t.assignee_id
          WHERE ($1::text[] IS NULL OR t.state = ANY($1))
            AND (NOT $2 OR t.assignee_id IS NULL)
            AND ($3::uuid IS NULL OR t.assignee_id = $3)
            AND ($4::uuid IS NULL OR t.customer_id = $4)
            AND ($5::text IS NULL OR t.number = $6
-                OR t.title ILIKE $5 OR r.email ILIKE $5 OR c.name ILIKE $5)
+                OR t.title ILIKE $5 OR c.name ILIKE $5
+                OR EXISTS (SELECT 1 FROM requester_addresses ra
+                           WHERE ra.requester_id = t.requester_id AND ra.address ILIKE $5))
          ORDER BY t.updated_at DESC
          LIMIT 200",
     )
@@ -180,6 +184,11 @@ pub struct NewReply {
     /// The state the ticket moves to; waiting (for the requester) when omitted.
     #[serde(default)]
     then: Option<TicketState>,
+    /// One of the requester's addresses, picked by the agent on a ticket the requester has not
+    /// written on; needed then when they have several. Where they last wrote from on the ticket,
+    /// the reply goes there, and any other address is refused.
+    #[serde(default)]
+    to: Option<String>,
 }
 
 /// Queues a reply to the ticket's requester. It is sent by e-mail shortly after.
@@ -206,6 +215,7 @@ async fn reply(
         number,
         agent.id,
         &reply.body,
+        reply.to.as_deref(),
         reply.then.unwrap_or(TicketState::Waiting),
     )
     .await?;

@@ -418,6 +418,8 @@ function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked
   const setChosen = onChoose
   const setBody = onBody
   const [then, setThen] = useState<TicketState>('waiting')
+  // The address the agent picked, on a ticket the requester has not written on.
+  const [pickedTo, setPickedTo] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
   const id = useId()
@@ -425,6 +427,9 @@ function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked
   const closed = ticket.state === 'closed'
   const canReply = replyPossible(ticket, allowed)
   const mode: Mode = composerMode(ticket, picked, allowed)
+  const to = replyTo(requester, pickedTo)
+  // The requester has not written on the ticket and has several addresses: the agent picks one.
+  const pickAddress = mode === 'reply' && !!requester && !requester.reply_to && requester.addresses.length > 1
 
   const textarea = useRef<HTMLTextAreaElement>(null)
 
@@ -451,11 +456,11 @@ function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    if (busy || !body.trim()) return
+    if (busy || !body.trim() || (mode === 'reply' && !to)) return
     setBusy(true)
     setError(null)
     try {
-      if (mode === 'reply') await reply(ticket.number, body, then)
+      if (mode === 'reply') await reply(ticket.number, body, then, requester?.reply_to ? null : to)
       else await addNote(ticket.number, body)
       setBody('')
       setThen('waiting')
@@ -485,7 +490,11 @@ function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked
       </fieldset>
       <p className="mode-hint" id={`${id}-hint`}>
         {mode === 'reply' && requester
-          ? rich('composer.hintReply', { email: requester.email, strong })
+          ? requester.reply_to
+            ? rich('composer.hintReplyWroteFrom', { email: requester.reply_to, strong })
+            : to
+              ? rich('composer.hintReply', { email: to, strong })
+              : t('composer.hintPickAddress')
           : closed
             ? t('composer.hintClosed')
             : requester
@@ -495,6 +504,15 @@ function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked
       <label className="visually-hidden" htmlFor={`${id}-body`}>
         {mode === 'reply' ? t('composer.replyLabel') : t('composer.noteLabel')}
       </label>
+      {pickAddress && requester && (
+        <label className="reply-to">
+          {t('composer.to')}{' '}
+          <select value={to ?? ''} required onChange={(e) => setPickedTo(e.target.value)}>
+            {!to && <option value="" disabled>{t('composer.chooseAddress')}</option>}
+            {requester.addresses.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+        </label>
+      )}
       {draftFrom && mode === 'reply' && (
         <p className="draft-notice" role="status">
           {rich('proposals.draftReady', { addon: addonName(draftFrom), strong })}
@@ -520,12 +538,25 @@ function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked
             {t('composer.draftNotSaved', { error: errorText(saveState.error) })}
           </span>
         )}
-        <button type="submit" disabled={busy || !body.trim()}>
-          {mode === 'reply' && requester ? t('composer.sendReply', { email: requester.email }) : t('composer.addNote')}
+        <button type="submit" disabled={busy || !body.trim() || (mode === 'reply' && !to)}>
+          {mode !== 'reply' ? t('composer.addNote') : to ? t('composer.sendReply', { email: to }) : t('composer.send')}
         </button>
       </div>
     </form>
   )
+}
+
+/**
+ * Where a reply goes: the address the requester last wrote from on the ticket; else the one the
+ * agent picks here, or picked for the last reply, while it is still theirs; else their only one.
+ * Null while an agent still has to pick.
+ */
+function replyTo(requester: TicketDetail['requester'], picked: string | null): string | null {
+  if (!requester) return null
+  if (requester.reply_to) return requester.reply_to
+  if (picked && requester.addresses.includes(picked)) return picked
+  if (requester.last_picked) return requester.last_picked
+  return requester.addresses.length === 1 ? requester.addresses[0] : null
 }
 
 /** Moves the ticket to the right customer, and says what happens to the requester. */

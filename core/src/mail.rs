@@ -155,8 +155,9 @@ async fn from_offboarded_customer(
     let domain = address.rsplit_once('@').map(|(_, d)| d).unwrap_or_default();
     Ok(sqlx::query_scalar(
         "SELECT COALESCE(
-             (SELECT c.offboarded_at IS NOT NULL FROM requesters r
-              JOIN customers c ON c.id = r.customer_id WHERE r.email = $1),
+             (SELECT c.offboarded_at IS NOT NULL FROM requester_addresses a
+              JOIN requesters r ON r.id = a.requester_id
+              JOIN customers c ON c.id = r.customer_id WHERE a.address = $1),
              (SELECT c.offboarded_at IS NOT NULL FROM customer_domains d
               JOIN customers c ON c.id = d.customer_id WHERE d.domain = $2),
              false)",
@@ -174,24 +175,22 @@ async fn identify_sender(
     address: &str,
     name: Option<&str>,
 ) -> anyhow::Result<Option<(Uuid, Uuid)>> {
-    let known: Option<(Uuid, Uuid)> = sqlx::query_as(
-        "SELECT r.id, r.customer_id FROM requesters r JOIN customers c ON c.id = r.customer_id
-         WHERE r.email = $1 AND c.offboarded_at IS NULL",
+    // Any of a requester's addresses identifies them.
+    let known: Option<(Uuid, Uuid, bool)> = sqlx::query_as(
+        "SELECT r.id, r.customer_id, c.offboarded_at IS NOT NULL
+         FROM requester_addresses a
+         JOIN requesters r ON r.id = a.requester_id
+         JOIN customers c ON c.id = r.customer_id
+         WHERE a.address = $1",
     )
     .bind(address)
     .fetch_optional(&mut **tx)
     .await?;
-    if known.is_some() {
-        return Ok(known);
-    }
-    let registered: bool =
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM requesters WHERE email = $1)")
-            .bind(address)
-            .fetch_one(&mut **tx)
-            .await?;
-    if registered {
+    match known {
+        Some((requester, customer, false)) => return Ok(Some((requester, customer))),
         // A requester of an offboarded customer: not identified.
-        return Ok(None);
+        Some((_, _, true)) => return Ok(None),
+        None => {}
     }
 
     let Some((_, domain)) = address.rsplit_once('@') else {
@@ -207,14 +206,9 @@ async fn identify_sender(
     let Some(customer_id) = customer else {
         return Ok(None);
     };
-    let requester_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO requesters (id, customer_id, email, name) VALUES ($1, $2, $3, $4)")
-        .bind(requester_id)
-        .bind(customer_id)
-        .bind(address)
-        .bind(name)
-        .execute(&mut **tx)
-        .await?;
+    let requester_id = crate::requesters::create(tx, customer_id, address, name)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(Some((requester_id, customer_id)))
 }
 
@@ -501,6 +495,7 @@ mod tests {
             number,
             agent,
             "Restart it.",
+            None,
             TicketState::Waiting,
         )
         .await
@@ -608,6 +603,45 @@ mod tests {
             )
             .await,
             Routed::Inbox
+        );
+    }
+
+    #[sqlx::test]
+    async fn any_address_of_a_requester_identifies_them(db: PgPool) {
+        let brightfield = customer(&db, "Brightfield", None).await;
+        let ada = crate::testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        crate::requesters::add_address(&db, ada, "ada.ferrini@home.test")
+            .await
+            .unwrap();
+        let Routed::NewTicket { ticket_id } =
+            route_one(&db, &mail("ada.ferrini@home.test", "h1@home.test", None)).await
+        else {
+            panic!("expected a new ticket");
+        };
+        let requester: Uuid = sqlx::query_scalar("SELECT requester_id FROM tickets WHERE id = $1")
+            .bind(ticket_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(requester, ada);
+
+        sqlx::query("UPDATE customers SET offboarded_at = now() WHERE id = $1")
+            .bind(brightfield)
+            .execute(&db)
+            .await
+            .unwrap();
+        assert_eq!(
+            route_one(
+                &db,
+                &mail(
+                    "ada.ferrini@home.test",
+                    "h2@home.test",
+                    Some("h1@home.test")
+                )
+            )
+            .await,
+            Routed::Inbox,
+            "every address of an offboarded customer's requester waits in the inbox"
         );
     }
 }

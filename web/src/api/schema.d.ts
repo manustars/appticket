@@ -665,6 +665,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/requesters/{id}/addresses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Gives a requester one more e-mail address; mail from it identifies them too. An address that
+         *     already belongs to a requester is refused.
+         */
+        post: operations["add_address"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/requesters/{id}/addresses/{address}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Takes an e-mail address from a requester, who keeps at least one. */
+        delete: operations["remove_address"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/services": {
         parameters: {
             query?: never;
@@ -1092,6 +1129,7 @@ export interface components {
             /** Format: int64 */
             number: number;
             priority: components["schemas"]["Priority"];
+            /** @description The address the requester last wrote from on the ticket, else the first they registered. */
             requester_email?: string | null;
             state: components["schemas"]["TicketState"];
             title: string;
@@ -1357,6 +1395,9 @@ export interface components {
              */
             unlinked: number;
         };
+        NewAddress: {
+            address: string;
+        };
         NewAgent: {
             email: string;
             name: string;
@@ -1398,6 +1439,12 @@ export interface components {
         NewReply: {
             body: string;
             then?: components["schemas"]["TicketState"] | null;
+            /**
+             * @description One of the requester's addresses, picked by the agent on a ticket the requester has not
+             *     written on; needed then when they have several. Where they last wrote from on the ticket,
+             *     the reply goes there, and any other address is refused.
+             */
+            to?: string | null;
         };
         NewRequester: {
             email: string;
@@ -1529,10 +1576,26 @@ export interface components {
             name: string;
         };
         Requester: {
+            /** @description All the requester's addresses, the first registered first. */
+            addresses: string[];
+            /**
+             * @description The address that stands for the requester on this ticket: the one they last wrote from on
+             *     it, else the first they registered.
+             */
             email: string;
             /** Format: uuid */
             id: string;
+            /**
+             * @description On a ticket the requester has not written on, the address an agent picked for the last
+             *     reply there: the next reply goes there too unless the agent picks another.
+             */
+            last_picked?: string | null;
             name?: string | null;
+            /**
+             * @description The address the requester last wrote from on this ticket, where a reply goes. Empty when
+             *     they have not written on it: a reply then goes to the address the agent picks.
+             */
+            reply_to?: string | null;
             /**
              * Format: int64
              * @description How many tickets the requester has, this one included.
@@ -1540,7 +1603,8 @@ export interface components {
             ticket_count: number;
         };
         RequesterEntry: {
-            email: string;
+            /** @description The requester's e-mail addresses, the first registered first; there is at least one. */
+            addresses: string[];
             /** Format: uuid */
             id: string;
             name?: string | null;
@@ -1670,6 +1734,7 @@ export interface components {
              */
             number: number;
             priority: components["schemas"]["Priority"];
+            /** @description The address the requester last wrote from on the ticket, else the first they registered. */
             requester_email?: string | null;
             state: components["schemas"]["TicketState"];
             title: string;
@@ -1875,7 +1940,7 @@ export interface operations {
     open_tickets: {
         parameters: {
             query?: {
-                /** @description Tickets of this requester's address. */
+                /** @description Tickets of the requester this address belongs to (any of their addresses). */
                 requester_email?: string;
                 /** @description Tickets of this customer. */
                 customer?: string;
@@ -3528,6 +3593,100 @@ export interface operations {
             };
         };
     };
+    add_address: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The requester */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewAddress"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    remove_address: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The requester */
+                id: string;
+                /** @description The e-mail address */
+                address: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     list_services: {
         parameters: {
             query?: never;
@@ -4020,8 +4179,8 @@ export interface operations {
                 /** @description A customer's id. */
                 customer?: string;
                 /**
-                 * @description Text found in the title, the requester's address or the customer's name; `#12` or `12`
-                 *     also finds ticket 12.
+                 * @description Text found in the title, any of the requester's addresses or the customer's name; `#12` or
+                 *     `12` also finds ticket 12.
                  */
                 q?: string;
             };
