@@ -29,10 +29,20 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
   them, and every message from their addresses, replies included, waits in the inbox. The assets
   they hold lose their holder, and they stop being a key requester. A departed requester can come
   back.
-- A customer has any number of key requesters, who are requesters of that customer and not
-  departed. They receive the messages about failures that affect their customer (those sent when
-  the children of a parent ticket are resolved) and the replies on its tickets that have no
+- A person who leaves one customer for another is not moved: they are departed at the first, with
+  their history, and a new requester of the second. An address they keep passes from the departed
+  requester to the new one.
+- Two requesters of the same customer who are one person are merged: the addresses, tickets and
+  held assets of one pass to the other, which remains. A merge cannot be undone, and requesters of
+  different customers are never merged.
+- A requester identified with the wrong customer is moved, from their own page or by moving one of
+  their tickets, under the rule for moving tickets below: all their tickets move with them. The
+  assets they hold stay with their customer and lose their holder, and they stop being a key
   requester.
+- A customer has any number of key requesters, who are requesters of that customer and not
+  departed. They receive the messages about failures that affect their customer (the
+  announcements sent from a parent ticket, and the message sent when its children are resolved)
+  and the replies on its tickets that have no requester.
 - Requesters have no access to the product for now: they only exchange messages.
 - Agents are always staff of the help desk and see every customer.
 - A ticket has at most one assignee; other agents can still write messages and notes on it.
@@ -127,7 +137,10 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   included. No ticket is ever left breaking the rules above.
 - A parent ticket belongs to the help desk's own organization; its children keep their own customer
   and requester. Resolving the children of a parent sends one message to each child's requester and
-  resolves every child that is open or waiting; the parent itself is resolved separately. This is
+  resolves every child that is open or waiting; the parent itself is resolved separately. Before
+  that, at any time and as often as needed, an agent who can reply to requesters sends an
+  announcement from a parent that is not closed: it goes to the key requesters of its children's
+  customers and of the customers that use the services the parent links. This is
   the only link between tickets of different customers. Parents are one level deep, a parent stays
   with the help desk's own organization, and closed tickets are neither attached nor detached.
 
@@ -142,7 +155,9 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   address, a phone number, a website and internal notes.
 - A customer has any number of external references, each made of a system and a name in it; a
   customer can have several in the same system, and each one names exactly one customer.
-- A customer has any number of sites, each with a name and an address.
+- A customer has any number of sites, each with a name and an address. Sites are retired, never
+  deleted: a retired site gets no new requesters or assets, and those at it are left without a
+  site after a warning.
 - An asset belongs to exactly one customer.
 - Every asset has an asset kind from the list the help desk manages; the kind says whether its
   assets move with their holder or stay at their site. An add-on that supplies assets maps its own
@@ -150,14 +165,31 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
 - An asset has optionally a serial number, a site of its customer and a holder, who is a requester
   of its customer and not departed. An asset whose kind moves with its holder is at its holder's
   site while it has a holder, and at its own site otherwise; any other asset is at its own site.
-- A ticket is at the sites of the assets it links; when it links none, at its requester's site.
+- A ticket that is not closed is at the sites of the assets it links, or, when it links none, at
+  its requester's site; a closed ticket stays at the sites it was at when it was closed.
 - A service is linked explicitly to the customers that use it, and optionally to the assets it runs
   on, which can belong to any customer.
 - Assets and services are retired, never deleted: a retired one stays on the tickets that refer to
-  it but gets no new links.
+  it but gets no new links. A retired asset loses its holder.
 - A customer stops using a service only once none of its tickets refers to the service; the help
   desk's own organization never stops.
 - The links of a closed ticket do not change.
+
+## Importing
+
+- Customers, sites, requesters and assets can be imported from CSV files, one file per kind with
+  fixed column names; several files in one import are taken in that order, so that a row can refer
+  to something created by an earlier file.
+- An import recognises what exists already: a customer by external reference, else by name; a
+  requester by any of their addresses; an asset by serial number within its customer, else by name
+  and customer. Sites, holders and kinds are named and must exist. A filled cell sets a value, an
+  empty one leaves it; an import never deletes or retires anything, and never changes an asset an
+  add-on is the source of.
+- Rows that break a rule are left out with their reason, together with the rows that depend on
+  them; the other rows are imported. Every import first shows what it would create, update and
+  leave out, and applies only when asked; the rows left out come back as a file with their reason,
+  ready to correct and import again.
+- Importing needs managing customers, and managing the catalog for assets.
 
 ## Add-ons
 
