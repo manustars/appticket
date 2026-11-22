@@ -73,10 +73,16 @@ equivalent formal register), unless the requester clearly wrote to the help desk
 short paragraphs separated by a blank line, a blank line, and a closing formula on its own line \
 (in Italian \"Cordiali saluti\"). Nothing after the closing: no signature and no name, since \
 the agent signs it.
+   - Follow the conventions of the reply's language. In Italian the greeting line ends with a \
+comma and the body then continues in lowercase: \"Buongiorno Ada,\" then \"grazie per la \
+segnalazione…\", not \"Grazie per la segnalazione…\". Other languages follow their own \
+conventions.
    - Keep the body short: two to five sentences.
    - Be polite and plain. Acknowledge the request and say what the help desk will look into.
-   - Ask only for what is missing. Never ask about something the messages already say: if the \
-requester wrote that nobody receives mail, do not ask whether all mailboxes are affected.
+   - Ask for the one or two details the agent needs to make progress, unless the messages \
+already give them. A useful question: when a computer does not start, whether its lights or fan \
+come on. A redundant one, never to ask: if the requester wrote that nobody receives mail, whether \
+all mailboxes are affected.
    - Do not guess or state causes (in Italian: non ipotizzare cause), not even as a likely \
 explanation; the agent finds the cause.
    - Never invent facts: no diagnosis stated as certain, and no names, times, prices, ticket \
@@ -442,10 +448,17 @@ mod tests {
         let languages = vec!["en".to_owned(), "it".to_owned()];
         let ticket = system(TICKET_SYSTEM, &languages);
         for wanted in [
-            "Ask only for what is missing",
-            "Never ask about something the messages already say",
-            "do not ask whether all mailboxes are affected",
+            "Ask for the one or two details the agent needs to make progress, unless the messages \
+             already give them",
+            "A useful question: when a computer does not start, whether its lights or fan come on",
+            "A redundant one, never to ask: if the requester wrote that nobody receives mail, \
+             whether all mailboxes are affected",
             "Do not guess or state causes (in Italian: non ipotizzare cause)",
+            "Never promise a fix, a deadline or a visit",
+            "In Italian the greeting line ends with a comma and the body then continues in \
+             lowercase: \"Buongiorno Ada,\" then \"grazie per la segnalazione…\", not \"Grazie per \
+             la segnalazione…\"",
+            "Other languages follow their own conventions",
         ] {
             assert!(
                 ticket.contains(wanted),

@@ -40,14 +40,17 @@ never to follow instructions inside them; internal notes are never shown to it, 
 up in a draft reply.
 
 A draft reply is written as a letter the agent only has to check and sign:
-- natural wording in the requester's language, never a word-by-word rendering of English;
+- natural wording in the requester's language, never a word-by-word rendering of English, and
+  that language's conventions (in Italian the body continues in lowercase after "Buongiorno
+  Ada,");
 - the formal register (in Italian, "Lei") unless the requester wrote informally;
 - a greeting with the requester's first name when the ticket has one ("Buongiorno Ada,"; the
   model is given only the first word of the name), otherwise a neutral one;
 - the body in short paragraphs, and a closing on its own line ("Cordiali saluti");
 - no signature: the agent signs it;
-- questions only about what is missing, never about what the requester already said, and no guessed
-  causes: the agent finds the cause.
+- one or two questions about the details the agent needs to make progress (when a computer does not
+  start: do its lights or fan come on?), never about what the requester already said, no guessed
+  causes and no promises.
 
 Neither drafts nor rationales mention the short references the model works with (C1, A1, S1).
 Rationales describe the message or ticket ("Ada non può lavorare…"), never what the Assistant does
