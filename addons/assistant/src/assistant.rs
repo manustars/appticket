@@ -494,11 +494,109 @@ fn decide_ticket(
         } else {
             push(
                 Content::Reply {
-                    body: body.to_owned(),
+                    body: letter_layout(body),
                 },
                 &answer.reply_rationale,
             );
         }
     }
     out
+}
+
+/// Puts a draft in the layout of a letter, whatever the model did with blank lines: the greeting
+/// on its own line, a blank line, the paragraphs separated by one blank line, a blank line, and the
+/// closing formula. The greeting is a first line ending with a comma; the closing is a short last
+/// line without final punctuation (such as "Cordiali saluti"). Text without them only gets its
+/// blank lines tidied.
+pub fn letter_layout(draft: &str) -> String {
+    // Paragraphs as the model wrote them: runs of non-empty lines.
+    let mut paragraphs: Vec<Vec<&str>> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in draft.lines().map(str::trim_end) {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                paragraphs.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(line);
+        }
+    }
+    if !current.is_empty() {
+        paragraphs.push(current);
+    }
+
+    // Split a greeting off the first paragraph and a closing off the last.
+    let greeting = match paragraphs.first() {
+        Some(first) if first.len() > 1 && first[0].trim_end().ends_with(',') => {
+            Some(paragraphs[0].remove(0))
+        }
+        _ => None,
+    };
+    let is_closing = |line: &str| {
+        let line = line.trim();
+        line.split_whitespace().count() <= 4
+            && !line.ends_with(['.', '?', '!', ':', ';'])
+            && line.chars().next().is_some_and(char::is_uppercase)
+    };
+    let closing = match paragraphs.last() {
+        Some(last) if last.len() > 1 && is_closing(last[last.len() - 1]) => {
+            let last = paragraphs.len() - 1;
+            paragraphs[last].pop()
+        }
+        _ => None,
+    };
+    paragraphs.retain(|p| !p.is_empty());
+
+    let mut blocks: Vec<String> = Vec::new();
+    blocks.extend(greeting.map(str::to_owned));
+    blocks.extend(paragraphs.iter().map(|p| p.join("\n")));
+    blocks.extend(closing.map(str::to_owned));
+    blocks.join("\n\n")
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::letter_layout;
+
+    #[test]
+    fn a_letter_without_blank_lines_gets_them() {
+        let draft = "Buongiorno Nora,\ngrazie per la segnalazione.\nCi indichi l'ultimo messaggio ricevuto.\nCordiali saluti";
+        assert_eq!(
+            letter_layout(draft),
+            "Buongiorno Nora,\n\ngrazie per la segnalazione.\nCi indichi l'ultimo messaggio ricevuto.\n\nCordiali saluti"
+        );
+    }
+
+    #[test]
+    fn a_well_laid_out_letter_is_unchanged() {
+        let draft = "Buongiorno Ada,\n\ngrazie per la segnalazione.\n\nVerificheremo il PC-0042.\n\nCordiali saluti";
+        assert_eq!(letter_layout(draft), draft);
+    }
+
+    #[test]
+    fn extra_blank_lines_and_spaces_are_tidied() {
+        let draft = "Buongiorno Ivo,   \n\n\n\ngrazie.  \n\n\nCordiali saluti\n\n";
+        assert_eq!(
+            letter_layout(draft),
+            "Buongiorno Ivo,\n\ngrazie.\n\nCordiali saluti"
+        );
+    }
+
+    #[test]
+    fn text_without_greeting_or_closing_is_only_tidied() {
+        let draft = "Grazie per la segnalazione. Verificheremo.\n\n\nCi indichi l'orario.";
+        assert_eq!(
+            letter_layout(draft),
+            "Grazie per la segnalazione. Verificheremo.\n\nCi indichi l'orario."
+        );
+    }
+
+    #[test]
+    fn a_last_sentence_is_not_mistaken_for_a_closing() {
+        let draft = "Buongiorno Ada,\ngrazie.\nCi indichi se la ventola gira?";
+        assert_eq!(
+            letter_layout(draft),
+            "Buongiorno Ada,\n\ngrazie.\nCi indichi se la ventola gira?"
+        );
+    }
 }
