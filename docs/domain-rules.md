@@ -43,7 +43,9 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
 - A customer has any number of key requesters, who are requesters of that customer and not
   departed. They receive the messages about failures that affect their customer (the
   announcements sent from a parent ticket, and the message sent when its children are resolved)
-  and the replies on its tickets that have no requester.
+  and the replies on its tickets that have no requester. These go to the key requester's contact
+  address: one of their addresses, chosen by the agent who marks them as a key requester and
+  changed by agents who manage customers; it is always one of their addresses.
 - Requesters have no access to the product for now: they only exchange messages.
 - Agents are always staff of the help desk and see every customer.
 - A ticket has at most one assignee; other agents can still write messages and notes on it.
