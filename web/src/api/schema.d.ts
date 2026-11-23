@@ -1130,7 +1130,11 @@ export interface paths {
         /** The signed-in agent, with what their role allows. */
         get: operations["current_session"];
         put?: never;
-        /** Signs an agent in and sets the session cookie. */
+        /**
+         * Signs an agent in and sets the session cookie.
+         * @description Repeated failures for the e-mail or from the client's address are slowed, then refused for a
+         *     while (`Retry-After` says how long) without the password being checked.
+         */
         post: operations["sign_in"];
         /** Signs the agent out. */
         delete: operations["sign_out"];
@@ -5718,6 +5722,16 @@ export interface operations {
             };
             401: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            429: {
+                headers: {
+                    /** @description Seconds until attempts are accepted again */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {

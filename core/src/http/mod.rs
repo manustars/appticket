@@ -7,7 +7,7 @@ use anyhow::Context;
 use axum::{
     Json, Router,
     extract::{FromRequestParts, State},
-    http::{StatusCode, request::Parts},
+    http::{HeaderValue, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -21,7 +21,8 @@ use uuid::Uuid;
 use crate::auth::{self, SESSION_COOKIE, SESSION_DAYS, SignedIn};
 use crate::mail_status::MailStatus;
 use crate::outbound::Sender;
-use crate::sign_in_limits::SignInLimits;
+use crate::sign_in_limits::{Guarded, SignInLimits};
+use client_address::ClientAddress;
 
 mod addon;
 mod admin;
@@ -88,10 +89,14 @@ pub async fn serve(
         None => router(state),
     };
     tracing::info!(%listen, "serving the HTTP API");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("serving the HTTP API")
+    // Each request carries its connection's address, which failed sign-ins are counted under.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("serving the HTTP API")
 }
 
 /// Ctrl-C, or SIGTERM where there is one: a container's stop signal.
@@ -154,6 +159,10 @@ pub enum ApiError {
     Conflict(String),
     /// The agent's role does not allow the request; the text says what.
     Forbidden(String),
+    /// Too many failed sign-ins: attempts are refused for `retry_after`.
+    TooManySignIns {
+        retry_after: std::time::Duration,
+    },
     Internal(anyhow::Error),
 }
 
@@ -165,12 +174,21 @@ impl<E: Into<anyhow::Error>> From<E> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        let mut retry_after = None;
         let (status, error) = match self {
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "not signed in".to_owned()),
             ApiError::BadRequest(why) => (StatusCode::BAD_REQUEST, why),
             ApiError::NotFound(what) => (StatusCode::NOT_FOUND, format!("{what} not found")),
             ApiError::Conflict(why) => (StatusCode::CONFLICT, why),
             ApiError::Forbidden(why) => (StatusCode::FORBIDDEN, why),
+            ApiError::TooManySignIns { retry_after: wait } => {
+                // Whole seconds, rounded up, so that a client retrying then is not refused again.
+                retry_after = Some(wait.as_secs() + u64::from(wait.subsec_nanos() > 0));
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "too many failed sign-ins: try again later".to_owned(),
+                )
+            }
             ApiError::Internal(error) => {
                 tracing::error!(error = format!("{error:#}"), "request failed");
                 (
@@ -179,13 +197,19 @@ impl IntoResponse for ApiError {
                 )
             }
         };
-        (
+        let mut response = (
             status,
             Json(Problem {
                 error: sentence(&error),
             }),
         )
-            .into_response()
+            .into_response();
+        if let Some(seconds) = retry_after {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+        }
+        response
     }
 }
 
@@ -313,16 +337,29 @@ async fn change_password(
 }
 
 /// Signs an agent in and sets the session cookie.
+///
+/// Repeated failures for the e-mail or from the client's address are slowed, then refused for a
+/// while (`Retry-After` says how long) without the password being checked.
 #[utoipa::path(post, path = "/api/session", tag = "session", request_body = SignInRequest,
-    responses((status = NO_CONTENT), (status = UNAUTHORIZED, body = Problem)))]
+    responses((status = NO_CONTENT), (status = UNAUTHORIZED, body = Problem),
+        (status = TOO_MANY_REQUESTS, body = Problem,
+            headers(("Retry-After" = u64, description = "Seconds until attempts are accepted again")))))]
 async fn sign_in(
     State(state): State<AppState>,
+    ClientAddress(address): ClientAddress,
     jar: CookieJar,
     Json(request): Json<SignInRequest>,
 ) -> Result<(CookieJar, StatusCode), ApiError> {
-    let token = auth::sign_in(&state.db, &request.email, &request.password)
+    let check = auth::sign_in(&state.db, &request.email, &request.password);
+    let token = match state
+        .sign_in_limits
+        .guard(&state.db, &request.email, address, check)
         .await?
-        .ok_or(ApiError::Unauthorized)?;
+    {
+        Guarded::Passed(token) => token,
+        Guarded::Failed => return Err(ApiError::Unauthorized),
+        Guarded::Refused { retry_after } => return Err(ApiError::TooManySignIns { retry_after }),
+    };
     let cookie = Cookie::build((SESSION_COOKIE, token))
         .path("/")
         .http_only(true)

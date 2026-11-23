@@ -1,6 +1,9 @@
 //! Tests of the HTTP API through the real router, signed in as an agent.
 
+use std::net::SocketAddr;
+
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -69,7 +72,8 @@ impl Client {
         let mut request = Request::builder()
             .method(method)
             .uri(uri)
-            .header(header::COOKIE, &self.cookie);
+            .header(header::COOKIE, &self.cookie)
+            .extension(connection_from("192.0.2.1"));
         if let Some(token) = &self.bearer {
             request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
         }
@@ -99,6 +103,173 @@ impl Client {
         assert_eq!(status, StatusCode::OK, "GET {uri}: {json}");
         json
     }
+}
+
+/// What the server records of a connection from `address`.
+fn connection_from(address: &str) -> ConnectInfo<SocketAddr> {
+    ConnectInfo(SocketAddr::new(address.parse().unwrap(), 50000))
+}
+
+/// What a sign-in through the API answers: status, body and `Retry-After`.
+struct SignInAnswer {
+    status: StatusCode,
+    body: Value,
+    retry_after: Option<String>,
+}
+
+/// Signs in through the API on a connection from `from` that carries the `X-Forwarded-For`
+/// lines `forwarded`.
+async fn sign_in_from(
+    state: &AppState,
+    from: &str,
+    forwarded: &[&str],
+    email: &str,
+    password: &str,
+) -> SignInAnswer {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/api/session")
+        .header(header::CONTENT_TYPE, "application/json")
+        .extension(connection_from(from));
+    for line in forwarded {
+        request = request.header("x-forwarded-for", *line);
+    }
+    let body = serde_json::json!({"email": email, "password": password}).to_string();
+    let response = router(state.clone())
+        .oneshot(request.body(Body::from(body)).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let retry_after = response
+        .headers()
+        .get(header::RETRY_AFTER)
+        .map(|v| v.to_str().unwrap().to_owned());
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    SignInAnswer {
+        status,
+        body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        retry_after,
+    }
+}
+
+/// The answer to an attempt refused for too many failures: the same for every account, known
+/// or not, so that it does not tell which e-mails are agents'.
+fn assert_refused(answer: &SignInAnswer) {
+    assert_eq!(
+        answer.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "{}",
+        answer.body
+    );
+    assert_eq!(
+        answer.body,
+        serde_json::json!({"error": "Too many failed sign-ins: try again later."})
+    );
+    assert!(answer.retry_after.is_some());
+}
+
+#[sqlx::test]
+async fn repeated_failed_sign_ins_are_refused_for_known_and_unknown_accounts_alike(db: PgPool) {
+    let api = Client::new(&db).await;
+    let state = &api.state;
+    for _ in 0..9 {
+        let answer = sign_in_from(state, "203.0.113.7", &[], "marco@northgate.test", "guess").await;
+        assert_eq!(answer.status, StatusCode::UNAUTHORIZED);
+    }
+    // The four attempts past the limit waited, without the test waiting.
+    assert_eq!(
+        state.sign_in_limits.clock().sleeps(),
+        [1, 2, 4, 8].map(std::time::Duration::from_secs)
+    );
+    let right = sign_in_from(state, "198.51.100.4", &[], "Marco@Northgate.test", "pw").await;
+    assert_refused(&right);
+    assert_eq!(right.retry_after.as_deref(), Some("892"));
+    // From the guessing address, any account is refused.
+    assert_refused(&sign_in_from(state, "203.0.113.7", &[], "nobody@northgate.test", "pw").await);
+
+    // An e-mail that is no agent's is counted the same way, and no agent is made for it.
+    for n in 1..=9 {
+        let from = format!("198.51.100.{n}");
+        sign_in_from(state, &from, &[], "ghost@northgate.test", "guess").await;
+    }
+    assert_refused(&sign_in_from(state, "192.0.2.77", &[], "ghost@northgate.test", "pw").await);
+    let agents: i64 = sqlx::query_scalar("SELECT count(*) FROM agents WHERE email LIKE 'ghost%'")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(agents, 0);
+
+    // A window after the last failure, the right password signs in again.
+    state
+        .sign_in_limits
+        .clock()
+        .advance(std::time::Duration::from_secs(15 * 60));
+    let again = sign_in_from(state, "198.51.100.4", &[], "marco@northgate.test", "pw").await;
+    assert_eq!(again.status, StatusCode::NO_CONTENT);
+}
+
+/// With no trusted proxy, `X-Forwarded-For` is the client's own writing: a client cannot pick
+/// the address it is counted under.
+#[sqlx::test]
+async fn x_forwarded_for_is_ignored_from_a_connection_that_is_no_trusted_proxy(db: PgPool) {
+    let api = Client::new(&db).await;
+    let state = AppState {
+        trusted_proxies: super::TrustedProxies::new(vec![
+            super::parse_proxy("192.0.2.10").unwrap(),
+        ]),
+        ..api.state.clone()
+    };
+    for n in 1..=9 {
+        let forwarded = format!("203.0.113.{n}");
+        let email = format!("guess{n}@northgate.test");
+        sign_in_from(&state, "198.51.100.4", &[&forwarded], &email, "guess").await;
+    }
+    assert_refused(
+        &sign_in_from(
+            &state,
+            "198.51.100.4",
+            &["203.0.113.99"],
+            "marco@northgate.test",
+            "pw",
+        )
+        .await,
+    );
+}
+
+#[sqlx::test]
+async fn behind_a_trusted_proxy_clients_are_counted_under_their_forwarded_addresses(db: PgPool) {
+    let api = Client::new(&db).await;
+    let state = AppState {
+        trusted_proxies: super::TrustedProxies::new(vec![
+            super::parse_proxy("192.0.2.0/24").unwrap(),
+        ]),
+        ..api.state.clone()
+    };
+    for n in 1..=9 {
+        let email = format!("guess{n}@northgate.test");
+        sign_in_from(&state, "192.0.2.10", &["203.0.113.7"], &email, "guess").await;
+    }
+    // The leftmost entry is whatever the client wrote: it does not get the client out.
+    let spoofed = "203.0.113.8, 203.0.113.7";
+    assert_refused(
+        &sign_in_from(
+            &state,
+            "192.0.2.10",
+            &[spoofed],
+            "marco@northgate.test",
+            "pw",
+        )
+        .await,
+    );
+    let other = sign_in_from(
+        &state,
+        "192.0.2.10",
+        &["203.0.113.8"],
+        "marco@northgate.test",
+        "pw",
+    )
+    .await;
+    assert_eq!(other.status, StatusCode::NO_CONTENT);
 }
 
 fn numbers(list: &Value) -> Vec<i64> {
