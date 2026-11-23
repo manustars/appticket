@@ -255,10 +255,11 @@ How the provider's sign-in finds the agent:
   not the provider says it is verified (that matters only the first time). When the provider
   sends no name or no e-mail, the agent keeps the one they have. A linked agent's name and e-mail
   cannot be edited in the help desk.
-- Refused, with the reason on the sign-in page: someone not in the authorized group, an
-  unverified or missing e-mail with no link yet (an unverified address never picks an existing
+- Refused, with the reason on the sign-in page: someone not in the authorized group, a missing
+  e-mail or an unverified one with no link yet (an unverified address never picks an existing
   agent), someone who is not an agent while no authorized group is set, a deactivated agent
-  (signing in never reactivates or recreates one, in the group or not), and an e-mail, verified
+  found by their link or address (signing in never reactivates one, nor makes a new agent in
+  their place; but see [the authorized group](#the-authorized-group)), and an e-mail, verified
   or not, that belongs to another agent, including the first time an agent already linked to
   another identity of the provider.
 
@@ -278,6 +279,18 @@ value is compared exactly, case included. A token without the claim, or without 
 is refused. Being in the group says who may enter, not what they may do: an agent's role is
 always managed in the help desk ([ADR 0007](adr/0007-roles-and-permissions.md)), and no group of
 the provider maps to a role.
+
+The authorized group applies to signing in through the provider only. An agent with a local
+password still signs in with it, in the group or not: deactivate an agent to keep them out, or
+switch local sign-in off for the installation so that everyone signs in through the provider.
+
+The group, not deactivation, is what keeps someone out of the provider's sign-in for good. A new
+agent takes the address the provider sends, verified or not (with Entra ID always unverified,
+since it sends no `email_verified`; guest users included). A deactivated agent is found by their
+link, or, if they never signed in through the provider, by their address; if neither matches any
+more (they were never linked and their address changed at the provider), someone in the group
+comes back as a new agent. When someone leaves the help desk, remove them from the group at the
+provider as well as deactivating their agent.
 
 With Keycloak, add a "Group Membership" mapper to the client with the token claim name
 `groups`, "Full group path" off and "Add to ID token" on; `authorizedGroup` is then the group's
