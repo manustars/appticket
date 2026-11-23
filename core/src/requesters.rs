@@ -2207,6 +2207,37 @@ Prefers phone calls."
         assert!(at(old).await.is_err(), "a retired site");
     }
 
+    /// The database keeps a requester from a site retired while they are being put at it, the code
+    /// bypassed on both sides: putting them there waits for the retirement, and is refused.
+    #[sqlx::test]
+    async fn the_database_keeps_requesters_from_a_site_retired_at_the_same_time(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+
+        let mut retiring = db.begin().await.unwrap();
+        sqlx::query("UPDATE sites SET retired_at = now() WHERE id = $1")
+            .bind(head)
+            .execute(&mut *retiring)
+            .await
+            .unwrap();
+        let meanwhile = tokio::spawn({
+            let db = db.clone();
+            async move {
+                sqlx::query("UPDATE requesters SET site_id = $2 WHERE id = $1")
+                    .bind(ada)
+                    .bind(head)
+                    .execute(&db)
+                    .await
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        retiring.commit().await.unwrap();
+        assert!(meanwhile.await.unwrap().is_err(), "put at the retired site");
+    }
+
     /// The database keeps the rules even when the code above is bypassed.
     #[sqlx::test]
     async fn the_database_keeps_the_address_rules(db: PgPool) {

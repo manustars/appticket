@@ -87,3 +87,22 @@ CREATE TRIGGER departed_requesters_hold_no_assets
     FOR EACH ROW
     WHEN (NEW.departed_at IS NOT NULL)
     EXECUTE FUNCTION departed_requesters_hold_no_assets();
+
+-- Nobody is at a retired site (0017): checking a requester's site now locks its row whatever it
+-- holds, so that a site being retired at the same time is waited for and seen.
+CREATE OR REPLACE FUNCTION nobody_at_a_retired_site() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_TABLE_NAME = 'requesters' THEN
+        IF NEW.site_id IS NOT NULL
+           AND (SELECT retired_at IS NOT NULL FROM sites WHERE id = NEW.site_id FOR SHARE) THEN
+            RAISE EXCEPTION 'a requester cannot be at a retired site'
+                USING ERRCODE = 'check_violation';
+        END IF;
+    ELSIF NEW.retired_at IS NOT NULL
+          AND EXISTS (SELECT 1 FROM requesters WHERE site_id = NEW.id) THEN
+        RAISE EXCEPTION 'a retired site has nobody at it'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+END;
+$$;
