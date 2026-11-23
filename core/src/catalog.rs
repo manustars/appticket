@@ -831,18 +831,6 @@ mod tests {
     use crate::testing;
     use crate::tickets::{self, RequesterMove, TicketState};
 
-    async fn help_desk(db: &PgPool) -> Uuid {
-        let id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO customers (id, name, is_help_desk) VALUES ($1, 'Northgate', true)",
-        )
-        .bind(id)
-        .execute(db)
-        .await
-        .unwrap();
-        id
-    }
-
     use crate::testing::asset_details as fields;
 
     #[sqlx::test]
@@ -1132,7 +1120,7 @@ mod tests {
 
     #[sqlx::test]
     async fn a_ticket_links_only_services_its_customer_uses(db: PgPool) {
-        let own = help_desk(&db).await;
+        let own = testing::help_desk(&db).await;
         let brightfield = testing::customer(&db, "Brightfield").await;
         let mail = create_service(&db, "Hosted mail", "").await.unwrap();
         let n = testing::ticket(&db, brightfield, None, "a@brightfield.test").await;
@@ -1325,7 +1313,7 @@ mod tests {
 
     #[sqlx::test]
     async fn moving_a_ticket_drops_links_that_do_not_fit(db: PgPool) {
-        help_desk(&db).await;
+        testing::help_desk(&db).await;
         let brightfield = testing::customer(&db, "Brightfield").await;
         let harbor = testing::customer(&db, "Harbor Lane").await;
         let mail = create_service(&db, "Hosted mail", "").await.unwrap();
@@ -1366,7 +1354,7 @@ mod tests {
 
     #[sqlx::test]
     async fn a_service_runs_on_assets_of_any_customer(db: PgPool) {
-        let own = help_desk(&db).await;
+        let own = testing::help_desk(&db).await;
         let brightfield = testing::customer(&db, "Brightfield").await;
         let server = testing::asset(&db, own, "server", "mail-01").await;
         let nas = testing::asset(&db, brightfield, "storage", "NAS").await;

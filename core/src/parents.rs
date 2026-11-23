@@ -293,21 +293,9 @@ mod tests {
     use super::*;
     use crate::testing;
 
-    async fn help_desk(db: &PgPool) -> Uuid {
-        let id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO customers (id, name, is_help_desk) VALUES ($1, 'Northgate', true)",
-        )
-        .bind(id)
-        .execute(db)
-        .await
-        .unwrap();
-        id
-    }
-
     #[sqlx::test]
     async fn only_a_help_desk_ticket_can_be_a_parent(db: PgPool) {
-        let own = help_desk(&db).await;
+        let own = testing::help_desk(&db).await;
         let brightfield = testing::customer(&db, "Brightfield").await;
         let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
         let a = testing::ticket(&db, brightfield, None, "a@brightfield.test").await;
@@ -346,7 +334,7 @@ mod tests {
 
     #[sqlx::test]
     async fn resolving_children_writes_to_each_requester(db: PgPool) {
-        let own = help_desk(&db).await;
+        let own = testing::help_desk(&db).await;
         let brightfield = testing::customer(&db, "Brightfield").await;
         let harbor = testing::customer(&db, "Harbor Lane").await;
         let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
@@ -407,7 +395,7 @@ mod tests {
     /// neither is only resolved.
     #[sqlx::test]
     async fn resolving_children_writes_to_each_person_once(db: PgPool) {
-        let own = help_desk(&db).await;
+        let own = testing::help_desk(&db).await;
         let brightfield = testing::customer(&db, "Brightfield").await;
         let harbor = testing::customer(&db, "Harbor Lane").await;
         let delta = testing::customer(&db, "Delta Works").await;
@@ -453,7 +441,7 @@ mod tests {
     /// their child is resolved without a reply, as one without a requester is.
     #[sqlx::test]
     async fn a_child_whose_requester_has_no_address_left_is_only_resolved(db: PgPool) {
-        let own = help_desk(&db).await;
+        let own = testing::help_desk(&db).await;
         let brightfield = testing::customer(&db, "Brightfield").await;
         let harbor = testing::customer(&db, "Harbor Lane").await;
         let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
@@ -478,7 +466,7 @@ mod tests {
     /// it: resolving is refused, naming their children, and nothing changes.
     #[sqlx::test]
     async fn children_are_answered_where_their_requesters_wrote_from(db: PgPool) {
-        let own = help_desk(&db).await;
+        let own = testing::help_desk(&db).await;
         let brightfield = testing::customer(&db, "Brightfield").await;
         let harbor = testing::customer(&db, "Harbor Lane").await;
         let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
