@@ -155,12 +155,8 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", http::openapi().to_pretty_json()?);
             return Ok(());
         }
-        Command::SignIn(cli::SignInCommand::Check {
-            identity_provider,
-            public_url,
-        }) => {
-            return cli::sign_in_check(*identity_provider, public_url, &mut std::io::stdout())
-                .await;
+        Command::SignIn(cli::SignInCommand::Check { provider }) => {
+            return cli::sign_in_check(*provider, &mut std::io::stdout()).await;
         }
         command => command,
     };

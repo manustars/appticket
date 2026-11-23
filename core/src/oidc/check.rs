@@ -219,28 +219,17 @@ fn chain(error: &(dyn std::error::Error + 'static)) -> String {
     }
     said
 }
+
 #[cfg(test)]
 mod tests {
-    //! Against the development Keycloak (`dev/keycloak`, started by compose.yaml and in CI), but
-    //! for an identity provider that cannot be reached.
+    //! Against the development Keycloak, but for an identity provider that cannot be reached.
 
     use super::*;
-    use crate::oidc::{Config, Settings};
-
-    const ISSUER: &str = "http://127.0.0.1:55080/realms/helpdesk";
-    const SECRET: &str = "dev-only-client-secret";
+    use crate::oidc::Config;
+    use crate::oidc::keycloak::{ISSUER, SECRET, settings};
 
     fn provider(issuer: &str, client_id: &str, secret: &str) -> std::sync::Arc<Provider> {
-        let settings = Settings {
-            issuer: Some(issuer.to_owned()),
-            client_id: Some(client_id.to_owned()),
-            client_secret: Some(secret.to_owned()),
-            client_secret_file: None,
-            label: None,
-            session_hours: 12,
-            authorized_group: None,
-            group_claim: "groups".to_owned(),
-        };
+        let settings = settings(issuer, client_id, secret);
         let config = Config::from_settings(settings, Some("http://127.0.0.1:8080"))
             .unwrap()
             .unwrap();
