@@ -47,12 +47,15 @@ pub struct CustomerDetail {
 #[derive(Serialize, ToSchema, sqlx::FromRow)]
 pub struct RequesterEntry {
     pub id: Uuid,
-    /// The requester's e-mail addresses, the first registered first; there is at least one.
+    /// The requester's e-mail addresses, the first registered first; there is at least one unless
+    /// the requester has departed.
     pub addresses: Vec<String>,
     pub name: Option<String>,
     pub tickets: i64,
     /// The site the requester is at, one of the customer's sites.
     pub site_id: Option<Uuid>,
+    /// The requester has left the customer.
+    pub departed: bool,
 }
 
 /// Customer summaries: all of them (offboarded ones last), or only `$1` when it is not null.
@@ -88,12 +91,12 @@ pub async fn detail(db: &PgPool, id: Uuid) -> Result<CustomerDetail> {
     .fetch_one(db)
     .await?;
     let requester_list = sqlx::query_as(
-        "SELECT r.id, r.name, r.site_id,
+        "SELECT r.id, r.name, r.site_id, r.departed_at IS NOT NULL AS departed,
                 coalesce((SELECT array_agg(a.address ORDER BY a.created_at, a.address)
                  FROM requester_addresses a WHERE a.requester_id = r.id), '{}') AS addresses,
                 (SELECT count(*) FROM tickets t WHERE t.requester_id = r.id) AS tickets
          FROM requesters r WHERE r.customer_id = $1
-         ORDER BY requester_first_address(r.id)",
+         ORDER BY r.departed_at IS NOT NULL, requester_first_address(r.id), r.name, r.id",
     )
     .bind(id)
     .fetch_all(db)
@@ -319,17 +322,12 @@ pub async fn remove_domain(db: &PgPool, id: Uuid, domain: &str) -> Result<()> {
 }
 
 /// Registers a requester with the customer, so that their mail opens tickets directly. An
-/// address already belonging to a requester is refused.
+/// address already belonging to a requester is refused, unless that requester departed from
+/// another customer: then it passes to the new requester.
 pub async fn add_requester(db: &PgPool, id: Uuid, email: &str, name: Option<&str>) -> Result<Uuid> {
     let email = crate::requesters::clean_address(email)?;
     let mut tx = db.begin().await?;
     lock_active(&mut tx, id).await?;
-    if let Some(owner) = crate::requesters::owner_of(&mut tx, &email).await? {
-        return rule(format!(
-            "this address is already a requester of {}",
-            owner.customer_name
-        ));
-    }
     let name = name.map(str::trim).filter(|n| !n.is_empty());
     let requester = crate::requesters::create(&mut tx, id, &email, name).await?;
     tx.commit().await?;

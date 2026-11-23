@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
+use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -30,30 +31,90 @@ pub struct Owner {
     pub requester_id: Uuid,
     pub customer_id: Uuid,
     pub customer_name: String,
+    pub departed: bool,
 }
 
-/// Who the address belongs to, if anyone.
+/// Who the address belongs to, if anyone; the address and its requester are locked.
 pub async fn owner_of(tx: &mut Transaction<'_, Postgres>, address: &str) -> Result<Option<Owner>> {
     Ok(sqlx::query_as(
-        "SELECT r.id AS requester_id, r.customer_id, c.name AS customer_name
+        "SELECT r.id AS requester_id, r.customer_id, c.name AS customer_name,
+                r.departed_at IS NOT NULL AS departed
          FROM requester_addresses a
          JOIN requesters r ON r.id = a.requester_id
          JOIN customers c ON c.id = r.customer_id
-         WHERE a.address = $1",
+         WHERE a.address = $1
+         FOR UPDATE OF a, r",
     )
     .bind(address)
     .fetch_optional(&mut **tx)
     .await?)
 }
 
+/// Checks that `address` can become an address of a requester of `customer`, `requester` when it
+/// is one already. It can if it belongs to nobody, or to a requester who departed from another
+/// customer: a person who changed customer keeps their address, which passes to the requester
+/// they are now. Returns whether it passes.
+async fn claim(
+    tx: &mut Transaction<'_, Postgres>,
+    customer: Uuid,
+    requester: Option<Uuid>,
+    address: &str,
+) -> Result<bool> {
+    match owner_of(tx, address).await? {
+        None => Ok(false),
+        Some(owner) if Some(owner.requester_id) == requester => rule(format!(
+            "the address {address} already belongs to this requester"
+        )),
+        Some(owner) if owner.departed && owner.customer_id != customer => Ok(true),
+        Some(owner) if owner.departed => rule(format!(
+            "the address {address} belongs to a requester who has departed from {}: bring them back from their page instead",
+            owner.customer_name
+        )),
+        Some(owner) => rule(format!(
+            "the address {address} already belongs to a requester of {}, and an address belongs to one requester",
+            owner.customer_name
+        )),
+    }
+}
+
+/// Gives `requester` the address, claimed with [`claim`]: a passing address leaves its departed
+/// requester and counts as newly registered.
+async fn give_address(
+    tx: &mut Transaction<'_, Postgres>,
+    requester: Uuid,
+    address: &str,
+    passes: bool,
+) -> Result<()> {
+    let given = if passes {
+        sqlx::query(
+            "UPDATE requester_addresses SET requester_id = $2, created_at = now()
+             WHERE address = $1",
+        )
+    } else {
+        sqlx::query("INSERT INTO requester_addresses (address, requester_id) VALUES ($1, $2)")
+    }
+    .bind(address)
+    .bind(requester)
+    .execute(&mut **tx)
+    .await;
+    match given {
+        Err(e) if taken(&e) => rule(format!(
+            "the address {address} already belongs to a requester"
+        )),
+        Err(e) => Err(e.into()),
+        Ok(_) => Ok(()),
+    }
+}
+
 /// Adds a requester of `customer` with its first address, which must be clean and belong to
-/// nobody yet.
+/// nobody yet, or to a requester who departed from another customer.
 pub async fn create(
     tx: &mut Transaction<'_, Postgres>,
     customer: Uuid,
     address: &str,
     name: Option<&str>,
 ) -> Result<Uuid> {
+    let passes = claim(tx, customer, None, address).await?;
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO requesters (id, customer_id, name) VALUES ($1, $2, $3)")
         .bind(id)
@@ -61,23 +122,13 @@ pub async fn create(
         .bind(filled(name))
         .execute(&mut **tx)
         .await?;
-    let inserted =
-        sqlx::query("INSERT INTO requester_addresses (address, requester_id) VALUES ($1, $2)")
-            .bind(address)
-            .bind(id)
-            .execute(&mut **tx)
-            .await;
-    match inserted {
-        Err(e) if taken(&e) => rule(format!(
-            "the address {address} already belongs to a requester"
-        )),
-        Err(e) => Err(e.into()),
-        Ok(_) => Ok(id),
-    }
+    give_address(tx, id, address, passes).await?;
+    Ok(id)
 }
 
 /// The requester of `customer` the address belongs to, registered with `name` if new; an address
-/// of another customer's requester is refused. A known requester without a name takes `name`.
+/// of another customer's requester is refused unless they departed, and a departed requester of
+/// `customer` is refused too. A known requester without a name takes `name`.
 pub async fn find_or_create(
     tx: &mut Transaction<'_, Postgres>,
     customer: Uuid,
@@ -85,7 +136,7 @@ pub async fn find_or_create(
     name: Option<&str>,
 ) -> Result<Uuid> {
     match owner_of(tx, address).await? {
-        Some(owner) if owner.customer_id == customer => {
+        Some(owner) if owner.customer_id == customer && !owner.departed => {
             sqlx::query("UPDATE requesters SET name = $2 WHERE id = $1 AND name IS NULL")
                 .bind(owner.requester_id)
                 .bind(filled(name))
@@ -93,11 +144,7 @@ pub async fn find_or_create(
                 .await?;
             Ok(owner.requester_id)
         }
-        Some(owner) => rule(format!(
-            "the address {address} is already a requester of {}, and a requester belongs to one customer",
-            owner.customer_name
-        )),
-        None => create(tx, customer, address, name).await,
+        _ => create(tx, customer, address, name).await,
     }
 }
 
@@ -112,40 +159,14 @@ pub async fn addresses<'e>(db: impl sqlx::PgExecutor<'e>, requester: Uuid) -> Re
     .await?)
 }
 
-/// Gives the requester one more address; an address already belonging to a requester is refused.
+/// Gives the requester one more address. An address already belonging to a requester is refused,
+/// unless that requester departed from another customer: then it passes to this one.
 pub async fn add_address(db: &PgPool, requester: Uuid, address: &str) -> Result<()> {
     let address = clean_address(address)?;
     let mut tx = db.begin().await?;
-    lock_with_customer(&mut tx, requester).await?;
-    match owner_of(&mut tx, &address).await? {
-        Some(owner) if owner.requester_id == requester => {
-            return rule(format!(
-                "the address {address} already belongs to this requester"
-            ));
-        }
-        Some(owner) => {
-            return rule(format!(
-                "the address {address} already belongs to a requester of {}, and an address belongs to one requester",
-                owner.customer_name
-            ));
-        }
-        None => {}
-    }
-    let inserted =
-        sqlx::query("INSERT INTO requester_addresses (address, requester_id) VALUES ($1, $2)")
-            .bind(&address)
-            .bind(requester)
-            .execute(&mut *tx)
-            .await;
-    match inserted {
-        Err(e) if taken(&e) => {
-            return rule(format!(
-                "the address {address} already belongs to a requester"
-            ));
-        }
-        Err(e) => return Err(e.into()),
-        Ok(_) => {}
-    }
+    let customer = lock_with_customer(&mut tx, requester).await?;
+    let passes = claim(&mut tx, customer, Some(requester), &address).await?;
+    give_address(&mut tx, requester, &address, passes).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -217,6 +238,10 @@ pub struct RequesterDetail {
     /// Internal notes, seen only by agents.
     pub notes: String,
     pub site: Option<SiteRef>,
+    /// When the requester left their customer; empty while they have not. A departed requester
+    /// gets no tickets and their messages wait in the inbox.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub departed_at: Option<OffsetDateTime>,
 }
 
 /// A requester with their customer, details and site.
@@ -232,11 +257,12 @@ pub async fn detail(db: &PgPool, id: Uuid) -> Result<RequesterDetail> {
         notes: String,
         site_id: Option<Uuid>,
         site_name: Option<String>,
+        departed_at: Option<OffsetDateTime>,
     }
     let row: Row = sqlx::query_as(
         "SELECT r.customer_id, c.name AS customer_name, c.offboarded_at IS NOT NULL AS offboarded,
                 r.name, r.phone_numbers, r.job_title, r.notes,
-                r.site_id, s.name AS site_name
+                r.site_id, s.name AS site_name, r.departed_at
          FROM requesters r
          JOIN customers c ON c.id = r.customer_id
          LEFT JOIN sites s ON s.id = r.site_id
@@ -262,7 +288,51 @@ pub async fn detail(db: &PgPool, id: Uuid) -> Result<RequesterDetail> {
             .site_id
             .zip(row.site_name)
             .map(|(id, name)| SiteRef { id, name }),
+        departed_at: row.departed_at,
     })
+}
+
+/// Marks a requester departed: they left their customer. Their history stays.
+pub async fn depart(db: &PgPool, id: Uuid) -> Result<()> {
+    let mut tx = db.begin().await?;
+    lock_with_customer(&mut tx, id).await?;
+    let left = sqlx::query(
+        "UPDATE requesters SET departed_at = now() WHERE id = $1 AND departed_at IS NULL",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    if left.rows_affected() == 0 {
+        return rule("the requester has already departed");
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Brings a departed requester back to their customer. They need an address of their own again,
+/// since the ones they kept may have passed to the requester they became elsewhere.
+pub async fn come_back(db: &PgPool, id: Uuid) -> Result<()> {
+    let mut tx = db.begin().await?;
+    lock_with_customer(&mut tx, id).await?;
+    let departed: bool =
+        sqlx::query_scalar("SELECT departed_at IS NOT NULL FROM requesters WHERE id = $1")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if !departed {
+        return rule("the requester has not departed");
+    }
+    if addresses(&mut *tx, id).await?.is_empty() {
+        return rule(
+            "the requester has no e-mail address left: give them one before they come back",
+        );
+    }
+    sqlx::query("UPDATE requesters SET departed_at = NULL WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Trimmed, or `None` when blank.
@@ -366,6 +436,7 @@ impl Recipient {
             (Some(to), _) => rule(format!(
                 "the address {to} does not belong to the ticket's requester"
             )),
+            (None, []) => rule("the requester has no e-mail address left to reply to"),
             (None, [only]) => Ok(only.clone()),
             (None, _) => match &self.last_picked {
                 Some(picked) => Ok(picked.clone()),
@@ -456,6 +527,14 @@ mod tests {
             picked.choose(Some("ada@brightfield.test")).unwrap(),
             "ada@brightfield.test"
         );
+    }
+
+    #[test]
+    fn a_requester_without_addresses_gets_no_reply() {
+        let Err(Error::Rule(why)) = recipient(None, &[]).choose(None) else {
+            panic!("a reply without an address");
+        };
+        assert!(why.contains("no e-mail address"), "{why}");
     }
 
     #[test]
@@ -718,6 +797,177 @@ mod tests {
         let seen = detail(&db, ada).await.unwrap();
         assert_eq!(seen.customer.id, harbor);
         assert!(seen.site.is_none(), "a site of the old customer");
+    }
+
+    #[sqlx::test]
+    async fn a_departed_requester_can_come_back(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let n = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
+
+        depart(&db, ada).await.unwrap();
+        let seen = detail(&db, ada).await.unwrap();
+        assert!(seen.departed_at.is_some());
+        assert_eq!(
+            seen.addresses,
+            ["ada@brightfield.test"],
+            "their history stays"
+        );
+        assert_eq!(
+            crate::tickets::detail(&db, n)
+                .await
+                .unwrap()
+                .requester
+                .map(|r| (r.id, r.departed)),
+            Some((ada, true)),
+            "their tickets stay theirs"
+        );
+        assert!(
+            matches!(depart(&db, ada).await, Err(Error::Rule(_))),
+            "departed twice"
+        );
+
+        come_back(&db, ada).await.unwrap();
+        assert!(detail(&db, ada).await.unwrap().departed_at.is_none());
+        assert!(
+            matches!(come_back(&db, ada).await, Err(Error::Rule(_))),
+            "back without having left"
+        );
+        assert!(matches!(
+            depart(&db, Uuid::new_v4()).await,
+            Err(Error::NotFound(_))
+        ));
+
+        crate::customers::offboard(&db, brightfield).await.unwrap();
+        assert!(
+            matches!(depart(&db, ada).await, Err(Error::Rule(_))),
+            "an offboarded customer's requesters do not change"
+        );
+    }
+
+    /// A person who leaves one customer for another is departed at the first and a new requester
+    /// of the second; an address they keep passes to the new requester.
+    #[sqlx::test]
+    async fn an_address_passes_from_a_departed_requester_to_a_new_one(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        add_address(&db, ada, "ada@home.test").await.unwrap();
+        let n = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
+
+        let mut tx = db.begin().await.unwrap();
+        let Err(Error::Rule(why)) = find_or_create(&mut tx, harbor, "ada@home.test", None).await
+        else {
+            panic!("an address taken from a requester who has not departed");
+        };
+        assert!(why.contains("Brightfield"), "{why}");
+        drop(tx);
+
+        depart(&db, ada).await.unwrap();
+        let mut tx = db.begin().await.unwrap();
+        let Err(Error::Rule(why)) =
+            find_or_create(&mut tx, brightfield, "ada@home.test", None).await
+        else {
+            panic!("a departed requester identified at their own customer");
+        };
+        assert!(why.contains("departed"), "{why}");
+        drop(tx);
+
+        let mut tx = db.begin().await.unwrap();
+        let ada_at_harbor = find_or_create(&mut tx, harbor, "ada@home.test", Some("Ada Ferrini"))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert_ne!(ada_at_harbor, ada);
+        assert_eq!(
+            addresses(&db, ada_at_harbor).await.unwrap(),
+            ["ada@home.test"]
+        );
+        assert_eq!(addresses(&db, ada).await.unwrap(), ["ada@brightfield.test"]);
+
+        // Her last address passes too, from the customer's page; her history stays.
+        let ada_again =
+            crate::customers::add_requester(&db, harbor, "ada@brightfield.test", None).await;
+        assert!(ada_again.is_ok(), "{ada_again:?}");
+        let seen = detail(&db, ada).await.unwrap();
+        assert!(seen.addresses.is_empty());
+        assert!(seen.departed_at.is_some());
+        let ticket = crate::tickets::detail(&db, n).await.unwrap();
+        assert_eq!(ticket.requester.map(|r| r.id), Some(ada));
+
+        // Without an address of her own she cannot come back, until she gets one.
+        assert!(matches!(come_back(&db, ada).await, Err(Error::Rule(_))));
+        add_address(&db, ada, "a.ferrini@brightfield.test")
+            .await
+            .unwrap();
+        come_back(&db, ada).await.unwrap();
+    }
+
+    /// The database keeps the departed requesters' rules even when the code is bypassed.
+    #[sqlx::test]
+    async fn the_database_keeps_the_departed_rules(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let n = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
+        let ticket: Uuid = sqlx::query_scalar("SELECT id FROM tickets WHERE number = $1")
+            .bind(n)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        // Each statement takes the requester as $1 and the ticket as $2.
+        let run = |sql: &'static str| {
+            let db = db.clone();
+            async move { sqlx::query(sql).bind(ada).bind(ticket).execute(&db).await }
+        };
+        run("UPDATE requesters SET departed_at = now() WHERE id = $1 AND $2::uuid IS NOT NULL")
+            .await
+            .unwrap();
+
+        assert!(
+            run("INSERT INTO tickets (id, customer_id, requester_id, title)
+                 SELECT gen_random_uuid(), customer_id, $1, 'x' FROM tickets WHERE id = $2")
+            .await
+            .is_err(),
+            "a ticket opened for a departed requester"
+        );
+        run("UPDATE tickets SET requester_id = NULL WHERE id = $2 AND $1::uuid IS NOT NULL")
+            .await
+            .unwrap();
+        assert!(
+            run("UPDATE tickets SET requester_id = $1 WHERE id = $2")
+                .await
+                .is_err(),
+            "a ticket given to a departed requester"
+        );
+        assert!(
+            run(
+                "INSERT INTO messages (id, ticket_id, direction, from_address, subject)
+                 SELECT gen_random_uuid(), $2, 'inbound', a.address, 'x'
+                 FROM requester_addresses a WHERE a.requester_id = $1"
+            )
+            .await
+            .is_err(),
+            "a departed requester's message routed to a ticket"
+        );
+        assert!(
+            run("INSERT INTO messages (id, direction, from_address, subject)
+                 SELECT gen_random_uuid(), 'inbound', a.address, 'x'
+                 FROM requester_addresses a WHERE a.requester_id = $1 AND $2::uuid IS NOT NULL")
+            .await
+            .is_ok(),
+            "it waits in the inbox"
+        );
+
+        // A departed requester can be left without an address, and comes back only with one.
+        run("DELETE FROM requester_addresses WHERE requester_id = $1 AND $2::uuid IS NOT NULL")
+            .await
+            .unwrap();
+        assert!(
+            run("UPDATE requesters SET departed_at = NULL WHERE id = $1 AND $2::uuid IS NOT NULL")
+                .await
+                .is_err(),
+            "back without an address"
+        );
     }
 
     /// The database keeps the details' rules even when the code above is bypassed.

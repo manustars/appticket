@@ -214,8 +214,9 @@ pub async fn reply(
 
 /// Opens a ticket by hand, for example after a phone call (docs/domain-rules.md, "Incoming
 /// messages"). With a requester's address, that requester is used or, if new, registered with
-/// the customer; an address that is a requester of another customer is refused. The optional note
-/// records what was said. Returns the ticket's number.
+/// the customer; a departed requester, and an address that is a requester of another customer, are
+/// refused, unless that requester departed: then the address passes to the new requester. The
+/// optional note records what was said. Returns the ticket's number.
 pub async fn open(
     db: &PgPool,
     customer: Uuid,
@@ -444,7 +445,7 @@ pub struct Requester {
     pub id: Uuid,
     /// The address that stands for the requester on this ticket, where a reply goes: the one they
     /// last wrote from on it, else the one an agent last picked there, else the first they
-    /// registered.
+    /// registered. Empty for a departed requester whose addresses have all passed to others.
     pub email: String,
     /// All the requester's addresses, the first registered first.
     pub addresses: Vec<String>,
@@ -457,6 +458,8 @@ pub struct Requester {
     pub name: Option<String>,
     /// How many tickets the requester has, this one included.
     pub ticket_count: i64,
+    /// The requester has left their customer: their messages wait in the inbox.
+    pub departed: bool,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -522,6 +525,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
         requester_address: Option<String>,
         requester_name: Option<String>,
         requester_tickets: Option<i64>,
+        requester_departed: Option<bool>,
         assignee_id: Option<Uuid>,
         assignee_name: Option<String>,
         created_at: OffsetDateTime,
@@ -533,6 +537,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
                 r.id AS requester_id, ticket_requester_address(t.id) AS requester_address,
                 r.name AS requester_name,
                 (SELECT count(*) FROM tickets o WHERE o.requester_id = r.id) AS requester_tickets,
+                r.departed_at IS NOT NULL AS requester_departed,
                 a.id AS assignee_id, a.name AS assignee_name, t.created_at, t.updated_at
          FROM tickets t
          JOIN customers c ON c.id = t.customer_id
@@ -603,6 +608,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
                 reply_to: recipient.wrote_from,
                 name: row.requester_name,
                 ticket_count: row.requester_tickets.unwrap_or(1),
+                departed: row.requester_departed.unwrap_or(false),
             }),
         assignee: row.assignee_id.map(|id| Party {
             id,
@@ -836,6 +842,42 @@ mod tests {
             open(&db, brightfield, "  ", None, None, a).await,
             Err(Error::Rule(_))
         ));
+    }
+
+    #[sqlx::test]
+    async fn no_ticket_is_opened_by_hand_for_a_departed_requester(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let a = testing::agent(&db, "marco@northgate.test").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        crate::requesters::depart(&db, ada).await.unwrap();
+
+        let Err(Error::Rule(why)) = open(
+            &db,
+            brightfield,
+            "Phone: VPN down",
+            Some("ada@brightfield.test"),
+            None,
+            a,
+        )
+        .await
+        else {
+            panic!("a ticket opened for a departed requester");
+        };
+        assert!(why.contains("departed"), "{why}");
+
+        let n = open(
+            &db,
+            harbor,
+            "Phone: VPN down",
+            Some("ada@brightfield.test"),
+            None,
+            a,
+        )
+        .await
+        .unwrap();
+        let requester = detail(&db, n).await.unwrap().requester.unwrap();
+        assert_ne!(requester.id, ada, "the address passed to a new requester");
     }
 
     #[sqlx::test]

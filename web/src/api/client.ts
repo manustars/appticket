@@ -340,7 +340,10 @@ export async function updateRequester(id: string, details: Schemas['RequesterDet
   await call('PUT', requesterPath(id), details)
 }
 
-/** Gives the requester one more address; refused when it belongs to a requester already. */
+/**
+ * Gives the requester one more address; refused when it belongs to a requester already, unless
+ * that requester departed from another customer: then it passes to this one.
+ */
 export async function addRequesterAddress(id: string, address: string): Promise<void> {
   const request: Schemas['NewAddress'] = { address }
   await call('POST', `${requesterPath(id)}/addresses`, request)
@@ -349,6 +352,16 @@ export async function addRequesterAddress(id: string, address: string): Promise<
 /** Takes an address from the requester; refused for their last one. */
 export async function removeRequesterAddress(id: string, address: string): Promise<void> {
   await call('DELETE', `${requesterPath(id)}/addresses/${encodeURIComponent(address)}`)
+}
+
+/** Marks the requester departed: no ticket is opened for them and their mail waits in the inbox. */
+export async function departRequester(id: string): Promise<void> {
+  await call('POST', `${requesterPath(id)}/depart`)
+}
+
+/** Brings a departed requester back; refused while they have no address of their own. */
+export async function bringBackRequester(id: string): Promise<void> {
+  await call('POST', `${requesterPath(id)}/return`)
 }
 
 /** No new tickets from then on; the customer's history stays. Refused for the help desk. */

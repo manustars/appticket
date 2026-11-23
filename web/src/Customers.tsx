@@ -26,6 +26,7 @@ import {
 import { countries, countryName } from './countries'
 import { useI18n } from './i18n/context'
 import { Problem } from './Problem'
+import { requesterLabel } from './people'
 import { adminHref, customerHref, customersHref, defaultFilters, go, requesterHref, serviceHref, ticketsHref } from './route'
 import { useSession } from './session'
 import { useAction, useLoad } from './useAction'
@@ -421,7 +422,7 @@ function Sites({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
     let question = ''
     void action.run(async () => {
       const fresh = await getCustomer(c.id)
-      const there = fresh.requester_list.filter((r) => r.site_id === siteId).map((r) => r.name ?? r.addresses[0])
+      const there = fresh.requester_list.filter((r) => r.site_id === siteId).map((r) => requesterLabel(t, r.name, r.addresses[0]))
       question = there.length === 0
         ? t('sites.confirmRetire', { name: siteName })
         : t('sites.confirmRetireWithRequesters', { name: siteName, count: there.length, requesters: there.join(', ') })
@@ -555,7 +556,10 @@ function Requesters({ customer: c, readOnly, onChanged, onSignedOut }: PartProps
           <tbody>
             {c.requester_list.map((r) => (
               <tr key={r.id}>
-                <td><a href={requesterHref(r.id)}>{r.name ?? r.addresses[0]}</a></td>
+                <td>
+                  <a href={requesterHref(r.id)}>{requesterLabel(t, r.name, r.addresses[0])}</a>
+                  {r.departed && <> <span className="marker retired">{t('marker.departed')}</span></>}
+                </td>
                 <td>
                   <ul className="plain">{r.addresses.map((a) => <li key={a}>{a}</li>)}</ul>
                 </td>

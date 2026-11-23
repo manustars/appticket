@@ -29,6 +29,7 @@ export interface Messages {
   "marker.helpDesk": { plural: false; placeholders: never; tags: never }
   "marker.offboarded": { plural: false; placeholders: never; tags: never }
   "marker.retired": { plural: false; placeholders: never; tags: never }
+  "marker.departed": { plural: false; placeholders: never; tags: never }
   "state.open": { plural: false; placeholders: never; tags: never }
   "state.waiting": { plural: false; placeholders: never; tags: never }
   "state.resolved": { plural: false; placeholders: never; tags: never }
@@ -255,6 +256,17 @@ export interface Messages {
   "requester.removeAddress": { plural: false; placeholders: "address"; tags: never }
   "requester.tickets": { plural: false; placeholders: never; tags: never }
   "requester.noTickets": { plural: false; placeholders: never; tags: never }
+  "requester.unnamed": { plural: false; placeholders: never; tags: never }
+  "requester.departedOn": { plural: false; placeholders: "date"; tags: never }
+  "requester.departedNotice": { plural: false; placeholders: never; tags: never }
+  "requester.noAddresses": { plural: false; placeholders: never; tags: never }
+  "requester.departure": { plural: false; placeholders: never; tags: never }
+  "requester.departHint": { plural: false; placeholders: never; tags: never }
+  "requester.depart": { plural: false; placeholders: never; tags: never }
+  "requester.confirmDepart": { plural: false; placeholders: "name"; tags: never }
+  "requester.comeBackHint": { plural: false; placeholders: never; tags: never }
+  "requester.comeBackNeedsAddress": { plural: false; placeholders: never; tags: never }
+  "requester.comeBack": { plural: false; placeholders: never; tags: never }
   "sites.title": { plural: false; placeholders: never; tags: never }
   "sites.hint": { plural: false; placeholders: never; tags: never }
   "sites.empty": { plural: false; placeholders: never; tags: never }

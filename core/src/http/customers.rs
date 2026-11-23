@@ -26,6 +26,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(remove_domain))
         .routes(routes!(add_requester))
         .routes(routes!(get_requester, update_requester))
+        .routes(routes!(depart))
+        .routes(routes!(come_back))
         .routes(routes!(add_address))
         .routes(routes!(remove_address))
         .routes(routes!(add_site))
@@ -150,7 +152,8 @@ pub struct CreatedRequester {
     id: Uuid,
 }
 
-/// Registers a requester with the customer.
+/// Registers a requester with the customer. An address of a requester who departed from another
+/// customer passes to the new requester.
 #[utoipa::path(post, path = "/api/customers/{id}/requesters", tag = "customers",
     params(("id" = Uuid, Path, description = "The customer")), request_body = NewRequester,
     responses((status = CREATED, body = CreatedRequester), (status = NOT_FOUND, body = Problem),
@@ -197,6 +200,37 @@ async fn update_requester(
 ) -> Result<StatusCode, ApiError> {
     agent.grant.require(Permission::ManageCustomers)?;
     requesters::update(&state.db, id, &details).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Marks a requester departed: they left their customer. Their history stays, no ticket is
+/// opened for them and their messages wait in the inbox.
+#[utoipa::path(post, path = "/api/requesters/{id}/depart", tag = "customers",
+    params(("id" = Uuid, Path, description = "The requester")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn depart(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
+    requesters::depart(&state.db, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Brings a departed requester back to their customer; they need an e-mail address of their own.
+#[utoipa::path(post, path = "/api/requesters/{id}/return", tag = "customers",
+    params(("id" = Uuid, Path, description = "The requester")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn come_back(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
+    requesters::come_back(&state.db, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

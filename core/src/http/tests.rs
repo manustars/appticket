@@ -1036,3 +1036,60 @@ async fn a_customer_s_page_through_the_api(db: PgPool) {
     let (status, _) = api.call("POST", &format!("{page}/bring-back"), None).await;
     assert_eq!(status, StatusCode::CONFLICT, "it is no longer offboarded");
 }
+
+/// A requester is marked departed and brought back from their page, and is shown as departed
+/// wherever they appear.
+#[sqlx::test]
+async fn a_requester_departs_and_comes_back_through_the_api(db: PgPool) {
+    use crate::roles::Permission;
+    let api = Client::new(&db).await;
+    let worker = role_with(&db, "Ticket worker", &[Permission::WorkTickets]).await;
+    let worker = Client::with_role(&db, "wanda@northgate.test", worker).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+    let n = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
+
+    let depart = format!("/api/requesters/{ada}/depart");
+    let (status, _) = worker.call("POST", &depart, None).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "departing needs managing customers"
+    );
+    let (status, json) = api.call("POST", &depart, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    let (status, _) = api.call("POST", &depart, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "departed twice");
+
+    let page = api.get(&format!("/api/requesters/{ada}")).await;
+    assert!(page["departed_at"].is_string(), "{page}");
+    let customer = api.get(&format!("/api/customers/{brightfield}")).await;
+    assert_eq!(customer["requester_list"][0]["departed"], true);
+    let ticket = api.get(&format!("/api/tickets/{n}")).await;
+    assert_eq!(ticket["requester"]["departed"], true);
+    let list = api.get("/api/tickets").await;
+    assert_eq!(list[0]["requester_departed"], true);
+
+    let (status, json) = api
+        .call(
+            "POST",
+            "/api/tickets",
+            Some(serde_json::json!({
+                "customer_id": brightfield,
+                "title": "Phone: VPN down",
+                "requester_email": "ada@brightfield.test",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+
+    let back = format!("/api/requesters/{ada}/return");
+    let (status, _) = worker.call("POST", &back, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, json) = api.call("POST", &back, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    let page = api.get(&format!("/api/requesters/{ada}")).await;
+    assert!(page["departed_at"].is_null());
+    let ticket = api.get(&format!("/api/tickets/{n}")).await;
+    assert_eq!(ticket["requester"]["departed"], false);
+}

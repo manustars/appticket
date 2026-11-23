@@ -2004,7 +2004,7 @@
         "tags": [
           "customers"
         ],
-        "summary": "Registers a requester with the customer.",
+        "summary": "Registers a requester with the customer. An address of a requester who departed from another\ncustomer passes to the new requester.",
         "operationId": "add_requester",
         "parameters": [
           {
@@ -2728,6 +2728,108 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/requesters/{id}/depart": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Marks a requester departed: they left their customer. Their history stays, no ticket is\nopened for them and their messages wait in the inbox.",
+        "operationId": "depart",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The requester",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/requesters/{id}/return": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Brings a departed requester back to their customer; they need an e-mail address of their own.",
+        "operationId": "come_back",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The requester",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
             }
           }
         ],
@@ -5943,7 +6045,7 @@
               "string",
               "null"
             ],
-            "description": "The requester's address; a new one is registered with the customer. Omit it for planned\nwork without a requester."
+            "description": "The requester's address; a new one is registered with the customer, and one of a requester\nwho departed from another customer passes to a new requester. A departed requester of\nthis customer is refused. Omit it for planned work without a requester."
           },
           "title": {
             "type": "string"
@@ -6269,7 +6371,8 @@
           "id",
           "email",
           "addresses",
-          "ticket_count"
+          "ticket_count",
+          "departed"
         ],
         "properties": {
           "addresses": {
@@ -6279,9 +6382,13 @@
             },
             "description": "All the requester's addresses, the first registered first."
           },
+          "departed": {
+            "type": "boolean",
+            "description": "The requester has left their customer: their messages wait in the inbox."
+          },
           "email": {
             "type": "string",
-            "description": "The address that stands for the requester on this ticket, where a reply goes: the one they\nlast wrote from on it, else the one an agent last picked there, else the first they\nregistered."
+            "description": "The address that stands for the requester on this ticket, where a reply goes: the one they\nlast wrote from on it, else the one an agent last picked there, else the first they\nregistered. Empty for a departed requester whose addresses have all passed to others."
           },
           "id": {
             "type": "string",
@@ -6356,6 +6463,14 @@
           },
           "customer": {
             "$ref": "#/components/schemas/RequesterCustomer"
+          },
+          "departed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the requester left their customer; empty while they have not. A departed requester\ngets no tickets and their messages wait in the inbox."
           },
           "id": {
             "type": "string",
@@ -6437,7 +6552,8 @@
         "required": [
           "id",
           "addresses",
-          "tickets"
+          "tickets",
+          "departed"
         ],
         "properties": {
           "addresses": {
@@ -6445,7 +6561,11 @@
             "items": {
               "type": "string"
             },
-            "description": "The requester's e-mail addresses, the first registered first; there is at least one."
+            "description": "The requester's e-mail addresses, the first registered first; there is at least one unless\nthe requester has departed."
+          },
+          "departed": {
+            "type": "boolean",
+            "description": "The requester has left the customer."
           },
           "id": {
             "type": "string",
@@ -6896,6 +7016,7 @@
           "state",
           "priority",
           "customer_name",
+          "requester_departed",
           "updated_at"
         ],
         "properties": {
@@ -6919,6 +7040,10 @@
           },
           "priority": {
             "$ref": "#/components/schemas/Priority"
+          },
+          "requester_departed": {
+            "type": "boolean",
+            "description": "The ticket's requester has left their customer."
           },
           "requester_email": {
             "type": [

@@ -576,7 +576,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Registers a requester with the customer. */
+        /**
+         * Registers a requester with the customer. An address of a requester who departed from another
+         *     customer passes to the new requester.
+         */
         post: operations["add_requester"];
         delete?: never;
         options?: never;
@@ -793,6 +796,43 @@ export interface paths {
         post?: never;
         /** Takes an e-mail address from a requester, who keeps at least one. */
         delete: operations["remove_address"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/requesters/{id}/depart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Marks a requester departed: they left their customer. Their history stays, no ticket is
+         *     opened for them and their messages wait in the inbox.
+         */
+        post: operations["depart"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/requesters/{id}/return": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Brings a departed requester back to their customer; they need an e-mail address of their own. */
+        post: operations["come_back"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1651,8 +1691,9 @@ export interface components {
             /** @description An internal note recording what was said, e.g. on the phone. */
             note?: string | null;
             /**
-             * @description The requester's address; a new one is registered with the customer. Omit it for planned
-             *     work without a requester.
+             * @description The requester's address; a new one is registered with the customer, and one of a requester
+             *     who departed from another customer passes to a new requester. A departed requester of
+             *     this customer is refused. Omit it for planned work without a requester.
              */
             requester_email?: string | null;
             title: string;
@@ -1766,10 +1807,12 @@ export interface components {
         Requester: {
             /** @description All the requester's addresses, the first registered first. */
             addresses: string[];
+            /** @description The requester has left their customer: their messages wait in the inbox. */
+            departed: boolean;
             /**
              * @description The address that stands for the requester on this ticket, where a reply goes: the one they
              *     last wrote from on it, else the one an agent last picked there, else the first they
-             *     registered.
+             *     registered. Empty for a departed requester whose addresses have all passed to others.
              */
             email: string;
             /** Format: uuid */
@@ -1804,6 +1847,12 @@ export interface components {
             /** @description The requester's addresses, the first registered first. */
             addresses: string[];
             customer: components["schemas"]["RequesterCustomer"];
+            /**
+             * Format: date-time
+             * @description When the requester left their customer; empty while they have not. A departed requester
+             *     gets no tickets and their messages wait in the inbox.
+             */
+            departed_at?: string | null;
             /** Format: uuid */
             id: string;
             job_title?: string | null;
@@ -1828,8 +1877,13 @@ export interface components {
             site_id?: string | null;
         };
         RequesterEntry: {
-            /** @description The requester's e-mail addresses, the first registered first; there is at least one. */
+            /**
+             * @description The requester's e-mail addresses, the first registered first; there is at least one unless
+             *     the requester has departed.
+             */
             addresses: string[];
+            /** @description The requester has left the customer. */
+            departed: boolean;
             /** Format: uuid */
             id: string;
             name?: string | null;
@@ -1986,6 +2040,8 @@ export interface components {
              */
             number: number;
             priority: components["schemas"]["Priority"];
+            /** @description The ticket's requester has left their customer. */
+            requester_departed: boolean;
             /**
              * @description The address a reply goes to: the one the requester last wrote from on the ticket, else the
              *     one an agent last picked there, else the first they registered.
@@ -4199,6 +4255,94 @@ export interface operations {
                 id: string;
                 /** @description The e-mail address */
                 address: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    depart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The requester */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    come_back: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The requester */
+                id: string;
             };
             cookie?: never;
         };

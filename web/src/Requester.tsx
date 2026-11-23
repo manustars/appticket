@@ -1,6 +1,8 @@
 import { useCallback, useId, useState, type FormEvent } from 'react'
 import {
   addRequesterAddress,
+  bringBackRequester,
+  departRequester,
   getCustomer,
   getRequester,
   listTickets,
@@ -10,6 +12,7 @@ import {
   type RequesterDetail,
 } from './api/client'
 import { useI18n } from './i18n/context'
+import { requesterLabel } from './people'
 import { Problem } from './Problem'
 import { customerHref, customersHref } from './route'
 import { useSession } from './session'
@@ -25,7 +28,7 @@ interface PageProps {
 
 /** A requester's page: their addresses, details and tickets. */
 export function RequesterPage({ id, onChanged, onSignedOut }: PageProps) {
-  const { t } = useI18n()
+  const { t, formatTime } = useI18n()
   const { can } = useSession()
   const load = useCallback(() => getRequester(id), [id])
   const requester = useLoad(load, onSignedOut)
@@ -52,12 +55,17 @@ export function RequesterPage({ id, onChanged, onSignedOut }: PageProps) {
     <div className="page">
       <a className="back" href={customerHref(r.customer.id)}>{t('requester.back', { customer: r.customer.name })}</a>
       <div className="title-row">
-        <h1>{r.name ?? r.addresses[0]}</h1>
+        <h1>{requesterLabel(t, r.name, r.addresses[0])}</h1>
+        {r.departed_at && (
+          <span className="marker retired">{t('requester.departedOn', { date: formatTime(r.departed_at) })}</span>
+        )}
         {r.customer.offboarded && <span className="marker offboarded">{t('marker.offboarded')}</span>}
       </div>
+      {r.departed_at && <p className="notice">{t('requester.departedNotice')}</p>}
       <Problem error={requester.error} />
       <Details requester={r} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       <Addresses requester={r} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
+      {!readOnly && <Departure requester={r} onChanged={changed} onSignedOut={onSignedOut} />}
       <section className="panel" aria-labelledby={`${id}-tickets`}>
         <h2 id={`${id}-tickets`}>{t('requester.tickets')}</h2>
         <Problem error={tickets.error} />
@@ -228,6 +236,7 @@ function Addresses({ requester: r, readOnly, onChanged, onSignedOut }: PartProps
     <section className="panel" aria-labelledby={`${id}-title`}>
       <h2 id={`${id}-title`}>{t('requester.addresses')}</h2>
       <p className="hint">{t('requester.addressesHint')}</p>
+      {r.addresses.length === 0 && <p className="empty">{t('requester.noAddresses')}</p>}
       <ul className="chips">
         {r.addresses.map((a) => (
           <li key={a}>
@@ -250,6 +259,47 @@ function Addresses({ requester: r, readOnly, onChanged, onSignedOut }: PartProps
           </label>
           <button type="submit" disabled={action.busy || !address.trim()}>{t('requester.addAddress')}</button>
         </form>
+      )}
+      <Problem error={action.error} />
+    </section>
+  )
+}
+
+/** Marking the requester departed, and bringing them back. */
+function Departure({ requester: r, onChanged, onSignedOut }: Omit<PartProps, 'readOnly'>) {
+  const { t } = useI18n()
+  const action = useAction(onSignedOut)
+  const id = useId()
+  const name = requesterLabel(t, r.name, r.addresses[0])
+
+  function depart() {
+    if (!window.confirm(t('requester.confirmDepart', { name }))) return
+    void action.run(() => departRequester(r.id)).then(async (ok) => { if (ok) await onChanged() })
+  }
+
+  function bringBack() {
+    void action.run(() => bringBackRequester(r.id)).then(async (ok) => { if (ok) await onChanged() })
+  }
+
+  return (
+    <section className="panel" aria-labelledby={`${id}-title`}>
+      <h2 id={`${id}-title`}>{t('requester.departure')}</h2>
+      {r.departed_at ? (
+        <div className="danger-row">
+          <p className="hint">
+            {r.addresses.length === 0 ? t('requester.comeBackNeedsAddress') : t('requester.comeBackHint')}
+          </p>
+          <button type="button" disabled={action.busy || r.addresses.length === 0} onClick={bringBack}>
+            {t('requester.comeBack')}
+          </button>
+        </div>
+      ) : (
+        <div className="danger-row">
+          <p className="hint">{t('requester.departHint')}</p>
+          <button type="button" className="danger" disabled={action.busy} onClick={depart}>
+            {t('requester.depart')}
+          </button>
+        </div>
       )}
       <Problem error={action.error} />
     </section>

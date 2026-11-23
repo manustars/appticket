@@ -43,6 +43,8 @@ pub struct TicketSummary {
     /// The address a reply goes to: the one the requester last wrote from on the ticket, else the
     /// one an agent last picked there, else the first they registered.
     requester_email: Option<String>,
+    /// The ticket's requester has left their customer.
+    requester_departed: bool,
     assignee_name: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
@@ -126,9 +128,11 @@ async fn list_tickets(
     let tickets = sqlx::query_as(
         "SELECT t.id, t.number, t.title, t.state, t.priority, c.name AS customer_name,
                 ticket_requester_address(t.id) AS requester_email,
+                coalesce(r.departed_at IS NOT NULL, false) AS requester_departed,
                 a.name AS assignee_name, t.updated_at
          FROM tickets t
          JOIN customers c ON c.id = t.customer_id
+         LEFT JOIN requesters r ON r.id = t.requester_id
          LEFT JOIN agents a ON a.id = t.assignee_id
          WHERE ($1::text[] IS NULL OR t.state = ANY($1))
            AND (NOT $2 OR t.assignee_id IS NULL)
@@ -394,8 +398,9 @@ async fn resolve_children(
 pub struct NewTicket {
     customer_id: Uuid,
     title: String,
-    /// The requester's address; a new one is registered with the customer. Omit it for planned
-    /// work without a requester.
+    /// The requester's address; a new one is registered with the customer, and one of a requester
+    /// who departed from another customer passes to a new requester. A departed requester of
+    /// this customer is refused. Omit it for planned work without a requester.
     requester_email: Option<String>,
     /// An internal note recording what was said, e.g. on the phone.
     note: Option<String>,

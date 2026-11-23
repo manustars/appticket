@@ -2,7 +2,8 @@
 //!
 //! Routing follows docs/domain-rules.md ("Incoming messages"):
 //! a reply joins its ticket, a new message from a known requester opens a ticket, and anything
-//! else waits in the inbox.
+//! else waits in the inbox, as does everything from a departed requester or an offboarded
+//! customer ("People", "Customers, assets and services").
 
 use mail_parser::MessageParser;
 use sqlx::{Postgres, Transaction};
@@ -79,8 +80,9 @@ pub async fn route(
         }
     }
 
-    // 1. Everything from an offboarded customer waits in the inbox, replies included.
-    if from_offboarded_customer(tx, &incoming.from_address).await? {
+    // 1. Everything from a departed requester or an offboarded customer waits in the inbox,
+    //    replies included.
+    if waits_in_the_inbox(tx, &incoming.from_address).await? {
         insert_message(tx, incoming, None).await?;
         return Ok(Routed::Inbox);
     }
@@ -146,30 +148,39 @@ pub async fn route(
     Ok(Routed::NewTicket { ticket_id })
 }
 
-/// Whether the sender is a requester of an offboarded customer or, when not a requester, writes
-/// from a domain registered on one.
-async fn from_offboarded_customer(
+/// Whether the sender is a departed requester or a requester of an offboarded customer or, when
+/// not a requester, writes from a domain registered on an offboarded customer. The requester is
+/// locked, so that one departing or coming back meanwhile is seen.
+async fn waits_in_the_inbox(
     tx: &mut Transaction<'_, Postgres>,
     address: &str,
 ) -> anyhow::Result<bool> {
-    let domain = address.rsplit_once('@').map(|(_, d)| d).unwrap_or_default();
-    Ok(sqlx::query_scalar(
-        "SELECT COALESCE(
-             (SELECT c.offboarded_at IS NOT NULL FROM requester_addresses a
-              JOIN requesters r ON r.id = a.requester_id
-              JOIN customers c ON c.id = r.customer_id WHERE a.address = $1),
-             (SELECT c.offboarded_at IS NOT NULL FROM customer_domains d
-              JOIN customers c ON c.id = d.customer_id WHERE d.domain = $2),
-             false)",
+    let requester: Option<bool> = sqlx::query_scalar(
+        "SELECT r.departed_at IS NOT NULL OR c.offboarded_at IS NOT NULL
+         FROM requester_addresses a
+         JOIN requesters r ON r.id = a.requester_id
+         JOIN customers c ON c.id = r.customer_id
+         WHERE a.address = $1
+         FOR SHARE OF r",
     )
     .bind(address)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if let Some(waits) = requester {
+        return Ok(waits);
+    }
+    let domain = address.rsplit_once('@').map(|(_, d)| d).unwrap_or_default();
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM customer_domains d JOIN customers c ON c.id = d.customer_id
+                        WHERE d.domain = $1 AND c.offboarded_at IS NOT NULL)",
+    )
     .bind(domain)
     .fetch_one(&mut **tx)
     .await?)
 }
 
 /// Returns the requester and their customer, creating the requester when only the domain is
-/// known. Senders of offboarded customers count as unidentified.
+/// known. Departed requesters and senders of offboarded customers count as unidentified.
 async fn identify_sender(
     tx: &mut Transaction<'_, Postgres>,
     address: &str,
@@ -177,7 +188,7 @@ async fn identify_sender(
 ) -> anyhow::Result<Option<(Uuid, Uuid)>> {
     // Any of a requester's addresses identifies them.
     let known: Option<(Uuid, Uuid, bool)> = sqlx::query_as(
-        "SELECT r.id, r.customer_id, c.offboarded_at IS NOT NULL
+        "SELECT r.id, r.customer_id, r.departed_at IS NOT NULL OR c.offboarded_at IS NOT NULL
          FROM requester_addresses a
          JOIN requesters r ON r.id = a.requester_id
          JOIN customers c ON c.id = r.customer_id
@@ -188,7 +199,7 @@ async fn identify_sender(
     .await?;
     match known {
         Some((requester, customer, false)) => return Ok(Some((requester, customer))),
-        // A requester of an offboarded customer: not identified.
+        // A departed requester, or one of an offboarded customer: not identified.
         Some((_, _, true)) => return Ok(None),
         None => {}
     }
@@ -655,6 +666,55 @@ mod tests {
             ),
             "its domains identify new requesters again"
         );
+    }
+
+    #[sqlx::test]
+    async fn every_message_from_a_departed_requester_waits_in_the_inbox(db: PgPool) {
+        let brightfield = customer(&db, "Brightfield", Some("brightfield.test")).await;
+        let ada = crate::testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        crate::requesters::add_address(&db, ada, "ada@home.test")
+            .await
+            .unwrap();
+        let Routed::NewTicket { ticket_id } = route_one(
+            &db,
+            &mail("ada@brightfield.test", "a1@brightfield.test", None),
+        )
+        .await
+        else {
+            panic!("expected a new ticket");
+        };
+
+        crate::requesters::depart(&db, ada).await.unwrap();
+        for (from, id, reply_to) in [
+            ("ada@brightfield.test", "a2@brightfield.test", None),
+            ("ada@home.test", "h1@home.test", None),
+            (
+                "ada@brightfield.test",
+                "a3@brightfield.test",
+                Some("a1@brightfield.test"),
+            ),
+            ("ada@home.test", "h2@home.test", Some("a1@brightfield.test")),
+        ] {
+            assert_eq!(
+                route_one(&db, &mail(from, id, reply_to)).await,
+                Routed::Inbox,
+                "{id} from {from}"
+            );
+        }
+
+        crate::requesters::come_back(&db, ada).await.unwrap();
+        assert_eq!(
+            route_one(
+                &db,
+                &mail("ada@home.test", "h3@home.test", Some("a1@brightfield.test"))
+            )
+            .await,
+            Routed::Reply { ticket_id }
+        );
+        assert!(matches!(
+            route_one(&db, &mail("ada@home.test", "h4@home.test", None)).await,
+            Routed::NewTicket { .. }
+        ));
     }
 
     #[sqlx::test]

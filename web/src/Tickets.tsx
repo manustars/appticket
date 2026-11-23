@@ -87,7 +87,10 @@ export function TicketTable({ tickets }: { tickets: TicketSummary[] }) {
             <td className="number">{ticket.number}</td>
             <td><a href={ticketHref(ticket.number)}>{ticket.title}</a></td>
             <td>{ticket.customer_name}</td>
-            <td>{ticket.requester_email ?? '—'}</td>
+            <td>
+              {ticket.requester_email ?? '—'}
+              {ticket.requester_departed && <> <span className="marker retired">{t('marker.departed')}</span></>}
+            </td>
             <td>{ticket.assignee_name ?? '—'}</td>
             <td><span className={`state ${ticket.state}`}>{t(`state.${ticket.state}`)}</span></td>
             <td><span className={`priority ${ticket.priority}`}>{t(`priority.${ticket.priority}`)}</span></td>

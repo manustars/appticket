@@ -35,7 +35,8 @@ async fn lock_waiting(tx: &mut Transaction<'_, Postgres>, message: Uuid) -> Resu
 
 /// Opens a ticket of `customer` for the message. The sender becomes the ticket's requester,
 /// registered with that customer if new; a message without a readable sender gets no requester.
-/// Returns the new ticket's number.
+/// A departed requester gets no ticket, but an address of one who departed from another customer
+/// passes to a new requester of `customer`. Returns the new ticket's number.
 pub async fn open_ticket(db: &PgPool, message: Uuid, customer: Uuid) -> Result<i64> {
     let mut tx = db.begin().await?;
     let Waiting {
@@ -188,6 +189,32 @@ mod tests {
             Err(Error::Rule(_))
         ));
         assert!(open_ticket(&db, m, brightfield).await.is_ok());
+    }
+
+    /// No ticket is opened for a departed requester; for another customer, the address passes to a
+    /// new requester of that customer.
+    #[sqlx::test]
+    async fn a_departed_requester_gets_no_ticket(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        crate::requesters::depart(&db, ada).await.unwrap();
+        let m = testing::inbox_message(&db, "ada@brightfield.test").await;
+
+        let Err(Error::Rule(why)) = open_ticket(&db, m, brightfield).await else {
+            panic!("a ticket opened for a departed requester");
+        };
+        assert!(why.contains("departed"), "{why}");
+
+        let n = open_ticket(&db, m, harbor).await.unwrap();
+        let requester = crate::tickets::detail(&db, n)
+            .await
+            .unwrap()
+            .requester
+            .unwrap();
+        assert_ne!(requester.id, ada);
+        assert_eq!(requester.addresses, ["ada@brightfield.test"]);
+        assert!(!requester.departed);
     }
 
     #[sqlx::test]

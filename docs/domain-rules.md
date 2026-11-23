@@ -20,8 +20,8 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
 ## People
 
 - Every requester belongs to exactly one customer.
-- A requester has one or more e-mail addresses, and each address belongs to exactly one requester;
-  a message from any of them identifies the requester. A reply goes to the address the requester
+- A requester who has not departed has one or more e-mail addresses, and each address belongs to
+  exactly one requester; a message from any of them identifies the requester. A reply goes to the address the requester
   last wrote from on that ticket; on a ticket they have not written on, the agent picks one, and
   later replies there go to it unless the agent picks another.
 - A requester also has a name, phone numbers, a job title and internal notes; agents who manage
@@ -29,10 +29,10 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
 - A requester who leaves their customer is departed: their history stays, no ticket is opened for
   them, and every message from their addresses, replies included, waits in the inbox. The assets
   they hold lose their holder, and they stop being a key requester. A departed requester can come
-  back.
+  back, once they have an address of their own.
 - A person who leaves one customer for another is not moved: they are departed at the first, with
   their history, and a new requester of the second. An address they keep passes from the departed
-  requester to the new one.
+  requester to the new one, even when it is the last they had.
 - Two requesters of the same customer who are one person are merged: the addresses, tickets and
   held assets of one pass to the other, which remains. A merge cannot be undone, and requesters of
   different customers are never merged.
