@@ -38,6 +38,18 @@ pub async fn asset(db: &PgPool, customer: Uuid, kind: &str, name: &str) -> Uuid 
         .unwrap()
 }
 
+/// An asset of the customer, of the named kind, given to `holder`.
+pub async fn held_asset(db: &PgPool, customer: Uuid, kind: &str, name: &str, holder: Uuid) -> Uuid {
+    let kind = asset_kind(db, kind).await;
+    let fields = crate::catalog::AssetFields {
+        holder_id: Some(holder),
+        ..asset_fields(kind, name)
+    };
+    crate::catalog::create_asset(db, customer, &fields)
+        .await
+        .unwrap()
+}
+
 /// An asset of `kind` called `name`, with no serial number, site or holder.
 pub fn asset_fields(kind: Uuid, name: &str) -> crate::catalog::AssetFields {
     crate::catalog::AssetFields {
