@@ -19,6 +19,7 @@ mod drafts;
 mod error;
 mod external_references;
 mod http;
+mod identities;
 mod imap;
 mod import;
 mod key_requesters;
