@@ -55,10 +55,6 @@ pub struct Settings {
         default_value_t = 12
     )]
     pub session_hours: i64,
-    /// The address agents open the help desk at, such as https://helpdesk.example.com: the
-    /// provider sends them back to it after they sign in.
-    #[arg(long = "public-url", env = "HD_PUBLIC_URL")]
-    pub public_url: Option<String>,
 }
 
 /// A configured identity provider.
@@ -75,8 +71,12 @@ pub struct Config {
 }
 
 impl Config {
-    /// The provider the settings configure, if any.
-    pub fn from_settings(settings: Settings) -> anyhow::Result<Option<Config>> {
+    /// The provider the settings configure, if any. `public_url` is the core's (HD_PUBLIC_URL),
+    /// which the provider sends agents back to.
+    pub fn from_settings(
+        settings: Settings,
+        public_url: Option<&str>,
+    ) -> anyhow::Result<Option<Config>> {
         let given =
             |value: Option<String>| value.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty());
         let issuer = given(settings.issuer);
@@ -96,7 +96,7 @@ impl Config {
         if secret.is_none() && secret_file.is_none() {
             missing.push("HD_OIDC_CLIENT_SECRET (or HD_OIDC_CLIENT_SECRET_FILE)");
         }
-        let public_url = given(settings.public_url);
+        let public_url = given(public_url.map(str::to_owned));
         if public_url.is_none() {
             missing.push("HD_PUBLIC_URL");
         }
@@ -347,9 +347,10 @@ mod tests {
             client_secret_file: None,
             label: None,
             session_hours: 12,
-            public_url: Some("https://helpdesk.example.com/".to_owned()),
         }
     }
+
+    const PUBLIC_URL: Option<&str> = Some("https://helpdesk.example.com/");
 
     #[test]
     fn without_an_issuer_client_or_secret_there_is_no_provider() {
@@ -359,12 +360,14 @@ mod tests {
             client_secret: None,
             ..settings()
         };
-        assert!(Config::from_settings(none).unwrap().is_none());
+        assert!(Config::from_settings(none, PUBLIC_URL).unwrap().is_none());
     }
 
     #[test]
     fn a_configured_provider_redirects_back_to_the_public_url() {
-        let config = Config::from_settings(settings()).unwrap().unwrap();
+        let config = Config::from_settings(settings(), PUBLIC_URL)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             config.issuer.as_str(),
             "https://login.example.com/realms/staff"
@@ -380,42 +383,41 @@ mod tests {
 
     #[test]
     fn a_partial_configuration_is_refused() {
-        let error = Config::from_settings(Settings {
-            client_id: None,
-            ..settings()
-        })
+        let error = Config::from_settings(
+            Settings {
+                client_id: None,
+                ..settings()
+            },
+            PUBLIC_URL,
+        )
         .unwrap_err();
         assert!(format!("{error}").contains("HD_OIDC_CLIENT_ID"), "{error}");
-        let error = Config::from_settings(Settings {
-            public_url: None,
-            ..settings()
-        })
-        .unwrap_err();
+        let error = Config::from_settings(settings(), None).unwrap_err();
         assert!(format!("{error}").contains("HD_PUBLIC_URL"), "{error}");
     }
 
     #[test]
     fn plain_http_is_accepted_only_on_this_machine() {
         assert!(
-            Config::from_settings(Settings {
-                issuer: Some("http://login.example.com/realms/staff".to_owned()),
-                ..settings()
-            })
+            Config::from_settings(
+                Settings {
+                    issuer: Some("http://login.example.com/realms/staff".to_owned()),
+                    ..settings()
+                },
+                PUBLIC_URL
+            )
             .is_err()
         );
-        assert!(
-            Config::from_settings(Settings {
-                public_url: Some("http://helpdesk.example.com".to_owned()),
-                ..settings()
-            })
-            .is_err()
-        );
+        assert!(Config::from_settings(settings(), Some("http://helpdesk.example.com")).is_err());
         let local = Settings {
             issuer: Some("http://127.0.0.1:55080/realms/helpdesk".to_owned()),
-            public_url: Some("http://localhost:5173".to_owned()),
             ..settings()
         };
-        assert!(Config::from_settings(local).unwrap().is_some());
+        assert!(
+            Config::from_settings(local, Some("http://localhost:5173"))
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
@@ -429,13 +431,15 @@ mod tests {
             client_secret_file: Some(file.clone()),
             ..settings()
         };
-        let config = Config::from_settings(from_file).unwrap().unwrap();
+        let config = Config::from_settings(from_file, PUBLIC_URL)
+            .unwrap()
+            .unwrap();
         assert_eq!(config.client_secret.secret(), "secret-from-a-file");
         let both = Settings {
             client_secret_file: Some(file),
             ..settings()
         };
-        assert!(Config::from_settings(both).is_err());
+        assert!(Config::from_settings(both, PUBLIC_URL).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -443,18 +447,24 @@ mod tests {
     fn a_session_lasts_between_one_hour_and_a_day() {
         for hours in [0, 25] {
             assert!(
-                Config::from_settings(Settings {
-                    session_hours: hours,
-                    ..settings()
-                })
+                Config::from_settings(
+                    Settings {
+                        session_hours: hours,
+                        ..settings()
+                    },
+                    PUBLIC_URL
+                )
                 .is_err()
             );
         }
-        let config = Config::from_settings(Settings {
-            session_hours: 8,
-            label: Some(" Northgate ".to_owned()),
-            ..settings()
-        })
+        let config = Config::from_settings(
+            Settings {
+                session_hours: 8,
+                label: Some(" Northgate ".to_owned()),
+                ..settings()
+            },
+            PUBLIC_URL,
+        )
         .unwrap()
         .unwrap();
         assert_eq!(config.session, time::Duration::hours(8));

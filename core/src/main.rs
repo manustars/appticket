@@ -103,6 +103,11 @@ enum Command {
         #[arg(long, env = "HD_TRUSTED_PROXIES", default_value = "", hide_default_value = true,
             value_parser = http::parse_proxies)]
         trusted_proxies: http::TrustedProxies,
+        /// The address agents open the help desk at, such as https://helpdesk.example.com:
+        /// https:// unless on this machine. The identity provider sends agents back to it after
+        /// they sign in; needed with an identity provider.
+        #[arg(long, env = "HD_PUBLIC_URL")]
+        public_url: Option<String>,
         #[command(flatten)]
         identity_provider: Box<oidc::Settings>,
     },
@@ -177,11 +182,15 @@ async fn main() -> anyhow::Result<()> {
             sign_in_failures,
             sign_in_window_seconds,
             trusted_proxies,
+            public_url,
             identity_provider,
         } => {
             // A provider configured in part stops the core; one that is down at startup does not,
             // since it is asked only when an agent signs in through it.
-            let identity_provider = match oidc::Config::from_settings(*identity_provider)? {
+            let identity_provider = match oidc::Config::from_settings(
+                *identity_provider,
+                public_url.as_deref(),
+            )? {
                 Some(config) => {
                     tracing::info!(issuer = %config.issuer.as_str(), "agents can sign in through the OpenID Connect identity provider");
                     Some(oidc::Provider::new(config)?)

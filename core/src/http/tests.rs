@@ -2241,9 +2241,8 @@ async fn the_sign_in_page_offers_the_identity_provider_only_when_configured(db: 
         client_secret_file: None,
         label: Some("Northgate".to_owned()),
         session_hours: 12,
-        public_url: Some("https://helpdesk.example.com".to_owned()),
     };
-    let config = crate::oidc::Config::from_settings(settings)
+    let config = crate::oidc::Config::from_settings(settings, Some("https://helpdesk.example.com"))
         .unwrap()
         .unwrap();
     let with = Client::anonymous(AppState {

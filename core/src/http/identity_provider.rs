@@ -142,9 +142,8 @@ mod tests {
             client_secret_file: None,
             label: Some("Northgate".to_owned()),
             session_hours: 12,
-            public_url: Some("http://127.0.0.1:8080".to_owned()),
         };
-        let config = crate::oidc::Config::from_settings(settings)
+        let config = crate::oidc::Config::from_settings(settings, Some("http://127.0.0.1:8080"))
             .unwrap()
             .unwrap();
         AppState {
