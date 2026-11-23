@@ -12,6 +12,13 @@ export interface Messages {
   "signIn.submit": { plural: false; placeholders: never; tags: never }
   "signIn.wrong": { plural: false; placeholders: never; tags: never }
   "signIn.tooManyFailures": { plural: false; placeholders: never; tags: never }
+  "signIn.with": { plural: false; placeholders: "provider"; tags: never }
+  "signIn.orPassword": { plural: false; placeholders: never; tags: never }
+  "signIn.refused.emailOfAnotherAgent": { plural: false; placeholders: never; tags: never }
+  "signIn.refused.emailNotVerified": { plural: false; placeholders: never; tags: never }
+  "signIn.refused.notAnAgent": { plural: false; placeholders: never; tags: never }
+  "signIn.refused.deactivated": { plural: false; placeholders: never; tags: never }
+  "signIn.refused.failed": { plural: false; placeholders: never; tags: never }
   "desk.tickets": { plural: false; placeholders: never; tags: never }
   "desk.inbox": { plural: false; placeholders: never; tags: never }
   "desk.customers": { plural: false; placeholders: never; tags: never }

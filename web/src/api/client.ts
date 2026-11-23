@@ -102,6 +102,17 @@ export async function signIn(email: string, password: string): Promise<'signedIn
   }
 }
 
+/** How agents can sign in: asked before anyone is signed in. */
+export function signInOptions(): Promise<Schemas['SignInOptions']> {
+  return json('GET', '/api/session/options')
+}
+
+/**
+ * Where the browser goes to sign in through the identity provider. It comes back to the help desk
+ * signed in, or to the sign-in page with `?sign_in_error=` and the reason.
+ */
+export const identityProviderSignIn = '/api/session/identity-provider'
+
 export async function signOut(): Promise<void> {
   await call('DELETE', '/api/session')
 }
