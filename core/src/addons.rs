@@ -1,10 +1,8 @@
 //! Add-ons (ADR 0005): their registration, the events the core records and delivers to them,
 //! signed with a secret shared with each add-on, and the tokens they use to call the core.
 
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::Context;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Serialize;
 use serde_json::Value;
@@ -197,21 +195,9 @@ pub fn signature(secret: &str, timestamp: u64, body: &[u8]) -> String {
     format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
 }
 
+/// The client events are delivered with; an add-on's URL may redirect.
 pub fn http_client() -> anyhow::Result<reqwest::Client> {
-    let roots = tokio_rustls::rustls::RootCertStore::from_iter(
-        webpki_roots::TLS_SERVER_ROOTS.iter().cloned(),
-    );
-    let tls = tokio_rustls::rustls::ClientConfig::builder_with_provider(Arc::new(
-        tokio_rustls::rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()?
-    .with_root_certificates(roots)
-    .with_no_client_auth();
-    reqwest::Client::builder()
-        .tls_backend_preconfigured(tls)
-        .timeout(Duration::from_secs(10))
-        .build()
-        .context("building the HTTP client for add-ons")
+    crate::http_client::http_client(reqwest::redirect::Policy::default())
 }
 
 /// Delivers due events every `interval`, forever.
@@ -357,7 +343,7 @@ pub async fn caller(db: &PgPool, token: &str) -> Result<Option<Caller>> {
 mod tests {
     use super::*;
     use axum::{Router, body::Bytes, http::HeaderMap, routing::post};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn the_signature_covers_timestamp_and_body() {

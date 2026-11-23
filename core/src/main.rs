@@ -19,6 +19,7 @@ mod drafts;
 mod error;
 mod external_references;
 mod http;
+mod http_client;
 mod identities;
 mod imap;
 mod import;
