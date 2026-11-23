@@ -3926,6 +3926,7 @@
           "session"
         ],
         "summary": "Signs an agent in and sets the session cookie.",
+        "description": "Repeated failures for the e-mail or from the client's address are slowed, then refused for a\nwhile (`Retry-After` says how long) without the password being checked.",
         "operationId": "sign_in",
         "requestBody": {
           "content": {
@@ -3940,6 +3941,25 @@
         "responses": {
           "204": {},
           "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until attempts are accepted again"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
