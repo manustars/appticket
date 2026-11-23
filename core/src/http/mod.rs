@@ -31,6 +31,7 @@ mod catalog;
 mod client_address;
 mod customers;
 mod directory;
+mod identity_provider;
 mod imports;
 mod inbox;
 mod tickets;
@@ -136,6 +137,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(current_session, sign_in, sign_out))
         .routes(routes!(change_password))
         .routes(routes!(sign_in_options))
+        .merge(identity_provider::routes())
         .merge(tickets::routes())
         .merge(inbox::routes())
         .merge(directory::routes())

@@ -42,3 +42,13 @@ CREATE TRIGGER agent_sessions_for_active_agents
 CREATE TRIGGER agent_identities_for_active_agents
     BEFORE INSERT OR UPDATE OF agent_id ON agent_identities
     FOR EACH ROW EXECUTE FUNCTION only_active_agents_sign_in();
+
+-- A sign-in through the OpenID Connect identity provider under way, for a few minutes: what the
+-- browser's return from the provider is checked against, once. Only a hash of the state is kept;
+-- the state itself travels in the provider's redirect and in a cookie of the browser that set out.
+CREATE TABLE identity_provider_sign_ins (
+    state_hash     bytea PRIMARY KEY,
+    nonce          text NOT NULL,
+    pkce_verifier  text NOT NULL,
+    expires_at     timestamptz NOT NULL
+);
