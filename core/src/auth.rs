@@ -147,7 +147,7 @@ static DUMMY_HASH: LazyLock<String> =
     LazyLock::new(|| hash_password("no agent has this password").expect("hashing a constant"));
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
