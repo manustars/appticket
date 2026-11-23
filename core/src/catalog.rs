@@ -1271,6 +1271,49 @@ mod tests {
         assert!(removed.is_err(), "a holder merged away");
     }
 
+    /// The database keeps the rules when the site is retired, or the holder departs, while the
+    /// asset is being put there or given to them, the code bypassed on both sides: whichever
+    /// commits second is refused.
+    #[sqlx::test]
+    async fn the_database_keeps_the_asset_rules_at_the_same_time(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let pc = testing::asset(&db, brightfield, "Laptop", "PC-0042").await;
+        for (first, second, value) in [
+            (
+                "UPDATE sites SET retired_at = now() WHERE id = $1",
+                "UPDATE assets SET site_id = $2 WHERE id = $1",
+                head,
+            ),
+            (
+                "UPDATE requesters SET departed_at = now() WHERE id = $1",
+                "UPDATE assets SET holder_id = $2 WHERE id = $1",
+                ada,
+            ),
+        ] {
+            let mut tx = db.begin().await.unwrap();
+            sqlx::query(first)
+                .bind(value)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            let other = db.clone();
+            let meanwhile = tokio::spawn(async move {
+                sqlx::query(second)
+                    .bind(pc)
+                    .bind(value)
+                    .execute(&other)
+                    .await
+            });
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            tx.commit().await.unwrap();
+            assert!(meanwhile.await.unwrap().is_err(), "{second} after {first}");
+        }
+    }
+
     #[sqlx::test]
     async fn moving_a_ticket_drops_links_that_do_not_fit(db: PgPool) {
         help_desk(&db).await;
