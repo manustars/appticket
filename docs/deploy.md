@@ -220,9 +220,11 @@ Assets file. An asset is recognised by its serial number within its customer, el
 within its customer, ignoring case, and is imported once per file. A row is about one asset
 entered by hand and not retired, or about a new one when nothing matches. It is left out when it
 matches an asset an add-on is the source of (even when it would change nothing: only the add-on
-changes it), a retired asset, or two assets (two with its serial number, or, without one, two
-with its name); and when it is recognised by its name while that asset has another serial
-number, since an import replaces no serial number. Those are done on the asset's page.
+changes it), a retired asset (an active asset with its serial number or name comes first; a name
+that only a retired asset has is not given to a new one), or two assets (two active ones with
+its serial number, or, when its serial number matches none, two with its name); and when it is
+recognised by its name while that asset has another serial number, since an import replaces no
+serial number. Those are done on the asset's page.
 
 | Column | Meaning |
 |---|---|
