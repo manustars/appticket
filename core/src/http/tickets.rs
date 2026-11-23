@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use super::{ApiError, AppState, Problem};
 use crate::auth::SignedIn;
+use crate::requesters::SiteRef;
 use crate::roles::Permission;
 use crate::tickets::{self, Moved, Priority, RequesterMove, TicketDetail, TicketState};
 
@@ -46,6 +47,10 @@ pub struct TicketSummary {
     /// The ticket's requester has left their customer.
     requester_departed: bool,
     assignee_name: Option<String>,
+    /// The sites the ticket is at: those of the assets it links, else its requester's; a closed
+    /// ticket stays at the sites it was at when it was closed. By name.
+    #[sqlx(skip)]
+    sites: Vec<SiteRef>,
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
 }
@@ -62,6 +67,8 @@ pub struct TicketFilter {
     customer: Option<String>,
     /// A requester's id.
     requester: Option<String>,
+    /// A site's id, retired ones included: the tickets at that site.
+    site: Option<String>,
     /// Text found in the title, any of the requester's addresses or the customer's name; `#12` or
     /// `12` also finds ticket 12.
     q: Option<String>,
@@ -114,6 +121,13 @@ async fn list_tickets(
                 .map_err(|_| ApiError::BadRequest("requester must be a requester's id".into()))?,
         ),
     };
+    let site = match filter.site.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(id) => Some(
+            Uuid::parse_str(id)
+                .map_err(|_| ApiError::BadRequest("site must be a site's id".into()))?,
+        ),
+    };
     let q = filter.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
     let number: Option<i64> = q.and_then(|q| q.trim_start_matches('#').parse().ok());
     let pattern = q.map(|q| {
@@ -125,7 +139,7 @@ async fn list_tickets(
         )
     });
 
-    let tickets = sqlx::query_as(
+    let mut tickets: Vec<TicketSummary> = sqlx::query_as(
         "SELECT t.id, t.number, t.title, t.state, t.priority, c.name AS customer_name,
                 ticket_requester_address(t.id) AS requester_email,
                 coalesce(r.departed_at IS NOT NULL, false) AS requester_departed,
@@ -139,6 +153,8 @@ async fn list_tickets(
            AND ($3::uuid IS NULL OR t.assignee_id = $3)
            AND ($4::uuid IS NULL OR t.customer_id = $4)
            AND ($7::uuid IS NULL OR t.requester_id = $7)
+           AND ($8::uuid IS NULL
+                OR EXISTS (SELECT 1 FROM ticket_sites ts WHERE ts.ticket_id = t.id AND ts.site_id = $8))
            AND ($5::text IS NULL OR t.number = $6
                 OR t.title ILIKE $5 OR c.name ILIKE $5
                 OR EXISTS (SELECT 1 FROM requester_addresses ra
@@ -153,8 +169,14 @@ async fn list_tickets(
     .bind(pattern)
     .bind(number)
     .bind(requester)
+    .bind(site)
     .fetch_all(&state.db)
     .await?;
+    let numbers: Vec<i64> = tickets.iter().map(|t| t.number).collect();
+    let mut sites = tickets::sites(&state.db, &numbers).await?;
+    for ticket in &mut tickets {
+        ticket.sites = sites.remove(&ticket.number).unwrap_or_default();
+    }
     Ok(Json(tickets))
 }
 
