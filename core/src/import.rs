@@ -1721,11 +1721,10 @@ async fn write_asset(
         // Assets are added under their customer's lock: one added since the row was recognised
         // is seen now, and the row is about it.
         let (name, serial_number) = (table.cell(row, "name"), table.cell(row, "serial_number"));
-        if !matches!(
-            recognised_asset(tx, customer, name, serial_number).await,
-            Ok(None)
-        ) {
-            return Err(Error::Internal(Overtaken.into()));
+        match recognised_asset(tx, customer, name, serial_number).await {
+            Ok(None) => {}
+            Ok(Some(_)) | Err(Error::Rule(_)) => return Err(Error::Internal(Overtaken.into())),
+            Err(error) => return Err(error),
         }
         // A new asset has a kind and a name: a row without them was refused.
         let fields = crate::catalog::AssetFields {
@@ -2106,7 +2105,8 @@ mod tests {
             Brightfield,PC-0006,SN-0003,,,\n\
             Brightfield,SPARE,,,,\n\
             Brightfield,spare,SN-0007,,,\n\
-            Brightfield,PC-0005,SN-0008,,,\n";
+            Brightfield,PC-0005,SN-0008,,,\n\
+            Brightfield,PC-0001,SN-0009,laptop,,\n";
         let report = import(&db, vec![assets(file)], Mode::Apply).await;
         assert_reasons(
             &report.files[0],
@@ -2122,6 +2122,8 @@ mod tests {
                 (8, "2 assets of Brightfield are named SPARE, ignoring case"),
                 (9, "2 assets of Brightfield are named spare, ignoring case"),
                 (10, "PC-0005 has the serial number SN-0005, not SN-0008"),
+                // Named like a retired asset only: an import does not add another in its place.
+                (11, "PC-0001 is retired"),
             ],
         );
         assert_eq!(
