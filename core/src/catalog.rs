@@ -215,7 +215,7 @@ pub(crate) async fn pass_held(
 pub async fn create_asset(db: &PgPool, customer: Uuid, fields: &AssetFields) -> Result<Uuid> {
     let mut tx = db.begin().await?;
     crate::customers::lock_active(&mut tx, customer).await?;
-    let details = checked(&mut tx, customer, fields).await?;
+    let details = stored_details(&mut tx, customer, fields).await?;
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO assets (id, customer_id, kind_id, name, serial_number, site_id, holder_id)
@@ -236,18 +236,20 @@ pub async fn create_asset(db: &PgPool, customer: Uuid, fields: &AssetFields) -> 
 
 /// Changes an asset's kind, name, serial number, site and holder. The site is one of the asset's
 /// customer's that is not retired; the holder is a requester of that customer who has not departed,
-/// and a retired asset has none. An offboarded customer's assets do not change.
+/// and a retired asset has none. Agents do not change an offboarded customer's assets, as they add
+/// none to it.
 pub async fn update_asset(db: &PgPool, id: Uuid, fields: &AssetFields) -> Result<()> {
     let mut tx = db.begin().await?;
-    // An asset never changes customer, so its customer can be read before it is locked. Locks are
-    // taken customers first, then requesters, then sites, then assets.
+    // An asset never changes customer, so its customer can be read before it is locked. The
+    // customer is locked first, as by every change to its requesters, sites and assets, which
+    // keeps them from waiting on one another; the asset is locked last.
     let customer: Uuid = sqlx::query_scalar("SELECT customer_id FROM assets WHERE id = $1")
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(Error::NotFound("asset"))?;
     crate::customers::lock_active(&mut tx, customer).await?;
-    let details = checked(&mut tx, customer, fields).await?;
+    let details = stored_details(&mut tx, customer, fields).await?;
     let retired: bool =
         sqlx::query_scalar("SELECT retired_at IS NOT NULL FROM assets WHERE id = $1 FOR UPDATE")
             .bind(id)
@@ -274,18 +276,18 @@ pub async fn update_asset(db: &PgPool, id: Uuid, fields: &AssetFields) -> Result
 }
 
 /// An asset's name and serial number as they are stored.
-struct Checked {
+struct Stored {
     name: String,
     serial_number: Option<String>,
 }
 
 /// Refuses details that break a rule for an asset of `customer`, which the caller has locked; the
 /// site and the holder are locked too, so that one retired or departing at the same time is seen.
-async fn checked(
+async fn stored_details(
     tx: &mut Transaction<'_, Postgres>,
     customer: Uuid,
     fields: &AssetFields,
-) -> Result<Checked> {
+) -> Result<Stored> {
     let name = text(&fields.name, "name")?;
     kind_exists(&mut **tx, fields.kind_id).await?;
     if let Some(holder) = fields.holder_id {
@@ -324,7 +326,7 @@ async fn checked(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
-    Ok(Checked {
+    Ok(Stored {
         name,
         serial_number,
     })
