@@ -401,16 +401,16 @@
     "other": "Retire {name}? {count} requesters are at it and will be left without a site: {requesters}. The site stays visible, but no requester or asset can be put at it any more."
   },
   "sites.confirmRetireWithAssets": {
-    "one": "Retire {name}? The asset {assets} will no longer be at it. The site stays visible, but no requester or asset can be put at it any more.",
-    "other": "Retire {name}? {count} assets will no longer be at it: {assets}. The site stays visible, but no requester or asset can be put at it any more."
+    "one": "Retire {name}? The asset {assets} will lose this site. The site stays visible, but no requester or asset can be put at it any more.",
+    "other": "Retire {name}? {count} assets will lose this site: {assets}. The site stays visible, but no requester or asset can be put at it any more."
   },
   "sites.confirmRetireWithRequesterAndAssets": {
-    "one": "Retire {name}? {requesters} is at it and will be left without a site, and the asset {assets} will no longer be at it. The site stays visible, but no requester or asset can be put at it any more.",
-    "other": "Retire {name}? {requesters} is at it and will be left without a site, and {count} assets will no longer be at it: {assets}. The site stays visible, but no requester or asset can be put at it any more."
+    "one": "Retire {name}? {requesters} is at it and will be left without a site, and the asset {assets} will lose this site. The site stays visible, but no requester or asset can be put at it any more.",
+    "other": "Retire {name}? {requesters} is at it and will be left without a site, and {count} assets will lose this site: {assets}. The site stays visible, but no requester or asset can be put at it any more."
   },
   "sites.confirmRetireWithRequestersAndAssets": {
-    "one": "Retire {name}? {requesterCount} requesters are at it and will be left without a site: {requesters}; and the asset {assets} will no longer be at it. The site stays visible, but no requester or asset can be put at it any more.",
-    "other": "Retire {name}? {requesterCount} requesters are at it and will be left without a site: {requesters}; and {count} assets will no longer be at it: {assets}. The site stays visible, but no requester or asset can be put at it any more."
+    "one": "Retire {name}? {requesterCount} requesters are at it and will be left without a site: {requesters}; and the asset {assets} will lose this site. The site stays visible, but no requester or asset can be put at it any more.",
+    "other": "Retire {name}? {requesterCount} requesters are at it and will be left without a site: {requesters}; and {count} assets will lose this site: {assets}. The site stays visible, but no requester or asset can be put at it any more."
   },
   "externalReferences.title": "External references",
   "externalReferences.hint": "The names other systems use for this customer, such as a group in a monitoring tool. Within its system a name names one customer only; add-ons read them.",
