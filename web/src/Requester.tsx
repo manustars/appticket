@@ -415,12 +415,17 @@ function Departure({ requester: r, onChanged, onSignedOut }: Omit<PartProps, 're
   const name = requesterLabel(t, r.name, r.addresses[0])
 
   function depart() {
-    const held = r.held_assets.map((a) => a.name)
-    const question = held.length === 0
-      ? t('requester.confirmDepart', { name })
-      : `${t('requester.confirmDepart', { name })} ${t('requester.departLeavesAssets', { count: held.length, assets: held.join(', ') })}`
-    if (!window.confirm(question)) return
-    void action.run(() => departRequester(r.id)).then(async (ok) => { if (ok) await onChanged() })
+    // The assets named are those they hold now, not when the page was loaded.
+    let question = ''
+    void action.run(async () => {
+      const held = (await getRequester(r.id)).held_assets.map((a) => a.name)
+      question = held.length === 0
+        ? t('requester.confirmDepart', { name })
+        : `${t('requester.confirmDepart', { name })} ${t('requester.departLeavesAssets', { count: held.length, assets: held.join(', ') })}`
+    }).then((ok) => {
+      if (!ok || !window.confirm(question)) return
+      void action.run(() => departRequester(r.id)).then(async (done) => { if (done) await onChanged() })
+    })
   }
 
   function bringBack() {
