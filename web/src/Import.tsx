@@ -36,7 +36,8 @@ function download(name: string, text: string) {
   link.href = url
   link.download = name
   link.click()
-  URL.revokeObjectURL(url)
+  // The browser reads the file after the click has been handled, not during it.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
 }
 
 export function Import({ onSignedOut }: { onSignedOut: () => void }) {
@@ -145,12 +146,16 @@ function FileResult({ kind, rows, leftOut, applied }: {
 }) {
   const { t, formatNumber } = useI18n()
   const id = useId()
-  const count = (outcome: ImportRow['outcome']) => formatNumber(rows.filter((r) => r.outcome === outcome).length)
-  const counts = { create: count('create'), update: count('update'), unchanged: count('unchanged'), leftOut: count('left_out') }
+  const count = (outcome: ImportRow['outcome']) => rows.filter((r) => r.outcome === outcome).length
   return (
     <section className="panel" aria-labelledby={`${id}-title`}>
       <h2 id={`${id}-title`}>{t(`import.file.${kind}`)}</h2>
-      <p>{applied ? t('import.summaryApplied', counts) : t('import.summary', counts)}</p>
+      <ul className="import-counts">
+        <li>{t(applied ? 'import.count.created' : 'import.count.create', { count: count('create') })}</li>
+        <li>{t(applied ? 'import.count.updated' : 'import.count.update', { count: count('update') })}</li>
+        <li>{t('import.count.unchanged', { count: count('unchanged') })}</li>
+        <li>{t('import.count.leftOut', { count: count('left_out') })}</li>
+      </ul>
       {leftOut && (
         <div className="import-left-out">
           <button type="button" onClick={() => download(`${kind}-left-out.csv`, leftOut)}>

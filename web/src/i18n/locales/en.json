@@ -237,8 +237,30 @@
   "import.applied": "Imported. The rows left out were not.",
   "import.notUtf8": "{file} is not in UTF-8. Save it as “CSV UTF-8” and choose it again.",
   "import.tooLarge": "The files are too large for one import. Split them into several imports.",
-  "import.summary": "{create} to create, {update} to update, {unchanged} unchanged, {leftOut} left out.",
-  "import.summaryApplied": "{create} created, {update} updated, {unchanged} unchanged, {leftOut} left out.",
+  "import.count.create": {
+    "one": "{count} row to create",
+    "other": "{count} rows to create"
+  },
+  "import.count.created": {
+    "one": "{count} row created",
+    "other": "{count} rows created"
+  },
+  "import.count.update": {
+    "one": "{count} row to update",
+    "other": "{count} rows to update"
+  },
+  "import.count.updated": {
+    "one": "{count} row updated",
+    "other": "{count} rows updated"
+  },
+  "import.count.unchanged": {
+    "one": "{count} row unchanged",
+    "other": "{count} rows unchanged"
+  },
+  "import.count.leftOut": {
+    "one": "{count} row left out",
+    "other": "{count} rows left out"
+  },
   "import.downloadLeftOut": "Download the rows left out",
   "import.leftOutHint": "They have the same columns and an error column with the reason: correct them and import the file again.",
   "import.line": "Line",
