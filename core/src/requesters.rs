@@ -202,7 +202,7 @@ pub async fn remove_address(db: &PgPool, requester: Uuid, address: &str) -> Resu
     .await?;
     if contact {
         return rule(format!(
-            "{address} is the requester's contact address as a key requester: pick another on the customer's page first"
+            "the address {address} is where the requester is written to as a key requester (their contact address): pick another on the customer's page first"
         ));
     }
     sqlx::query("DELETE FROM requester_addresses WHERE address = $1")
