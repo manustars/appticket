@@ -2,10 +2,34 @@
 //! tickets that have no requester and the messages about failures that affect it, at their contact
 //! address. Rules are in docs/domain-rules.md ("People", "Tickets").
 
-use sqlx::{PgPool, Postgres, Transaction};
+use serde::Serialize;
+use sqlx::{PgExecutor, PgPool, Postgres, Transaction};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{Result, rule};
+
+/// A requester who speaks for their customer.
+#[derive(Debug, Clone, Serialize, ToSchema, sqlx::FromRow)]
+pub struct KeyRequester {
+    pub id: Uuid,
+    pub name: Option<String>,
+    /// The address the messages for key requesters go to, one of the requester's.
+    pub contact_address: String,
+}
+
+/// The customer's key requesters, by contact address.
+pub async fn of_customer<'e>(db: impl PgExecutor<'e>, customer: Uuid) -> Result<Vec<KeyRequester>> {
+    Ok(sqlx::query_as(
+        "SELECT r.id, r.name, k.contact_address
+         FROM key_requesters k JOIN requesters r ON r.id = k.requester_id
+         WHERE k.customer_id = $1
+         ORDER BY k.contact_address",
+    )
+    .bind(customer)
+    .fetch_all(db)
+    .await?)
+}
 
 /// Makes the requester a key requester of their customer, written to at `contact_address`, one
 /// of their addresses; for a key requester already, it changes their contact address. Without

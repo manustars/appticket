@@ -136,10 +136,15 @@ pub async fn assign(db: &PgPool, number: i64, agent: Option<Uuid>) -> Result<()>
     Ok(())
 }
 
-/// Queues a message to the ticket's requester and moves the ticket to `then`. The message is
-/// sent by the outbox; it threads with the conversation so that the answer comes back here.
-/// It goes to the address the requester last wrote from on the ticket; on a ticket they have not
-/// written on, `to` is the address the agent picked (see [`crate::requesters::Recipient`]).
+/// Queues a reply on the ticket and moves the ticket to `then`. It is sent by the outbox and
+/// threads with the conversation, so that the answer comes back here.
+///
+/// On a ticket with a requester it goes to them, at the address they last wrote from on the
+/// ticket; on a ticket they have not written on, `to` is the address the agent picked (see
+/// [`crate::requesters::Recipient`]). On a ticket without a requester it goes to every key
+/// requester of the ticket's customer, each at their contact address in a message of their own,
+/// and the ticket stays without a requester; with none, the reply is refused. Returns the queued
+/// messages.
 pub async fn reply(
     db: &PgPool,
     sender: &Sender,
@@ -148,7 +153,7 @@ pub async fn reply(
     body: &str,
     to: Option<&str>,
     then: TicketState,
-) -> Result<Uuid> {
+) -> Result<Vec<Uuid>> {
     let body = body.trim();
     if body.is_empty() {
         return rule("a reply cannot be empty");
@@ -156,52 +161,32 @@ pub async fn reply(
     let mut tx = db.begin().await?;
     let (ticket_id, state) = lock(&mut tx, number).await?;
     not_closed(state)?;
-    let title: String = sqlx::query_scalar("SELECT title FROM tickets WHERE id = $1")
+    let customer: Uuid = sqlx::query_scalar("SELECT customer_id FROM tickets WHERE id = $1")
         .bind(ticket_id)
         .fetch_one(&mut *tx)
         .await?;
-    let Some(recipient) = crate::requesters::recipient(&mut tx, ticket_id).await? else {
-        return rule("the ticket has no requester to reply to");
+    let recipients = match crate::requesters::recipient(&mut tx, ticket_id).await? {
+        Some(recipient) => vec![recipient.choose(to)?],
+        None => {
+            if to.is_some_and(|to| !to.trim().is_empty()) {
+                return rule(
+                    "the ticket has no requester: the reply goes to every key requester of its customer, and no address is picked",
+                );
+            }
+            let keys = crate::key_requesters::of_customer(&mut *tx, customer).await?;
+            if keys.is_empty() {
+                return rule(
+                    "the ticket has no requester and its customer has no key requesters: there is nobody to reply to",
+                );
+            }
+            keys.into_iter().map(|key| key.contact_address).collect()
+        }
     };
-    let to = recipient.choose(to)?;
-
-    // The conversation so far, newest last, to thread the reply.
-    let mut thread: Vec<(String, String)> = sqlx::query_as(
-        "SELECT rfc_message_id, direction FROM messages
-         WHERE ticket_id = $1 AND rfc_message_id IS NOT NULL
-         ORDER BY created_at DESC LIMIT 20",
-    )
-    .bind(ticket_id)
-    .fetch_all(&mut *tx)
-    .await?;
-    thread.reverse();
-    let in_reply_to = thread
-        .iter()
-        .rev()
-        .find(|(_, direction)| direction == "inbound")
-        .or(thread.last())
-        .map(|(id, _)| id.clone());
-    let references: Vec<String> = thread.into_iter().map(|(id, _)| id).collect();
-
-    let id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO messages (id, ticket_id, direction, rfc_message_id, in_reply_to, \"references\",
-                               from_address, from_name, to_address, author_id, subject, body_text)
-         VALUES ($1, $2, 'outbound', $3, $4, $5, $6, $7, $8, $9, $10, $11)",
-    )
-    .bind(id)
-    .bind(ticket_id)
-    .bind(sender.new_message_id())
-    .bind(in_reply_to)
-    .bind(&references)
-    .bind(&sender.address)
-    .bind(&sender.name)
-    .bind(&to)
-    .bind(author)
-    .bind(reply_subject(&title, number))
-    .bind(body)
-    .execute(&mut *tx)
-    .await?;
+    let outgoing = Outgoing::on(&mut tx, ticket_id, author, body).await?;
+    let mut queued = Vec::new();
+    for to in &recipients {
+        queued.push(outgoing.queue(&mut tx, sender, to).await?);
+    }
     sqlx::query("UPDATE tickets SET state = $2, updated_at = now() WHERE id = $1")
         .bind(ticket_id)
         .bind(then)
@@ -209,7 +194,87 @@ pub async fn reply(
         .await?;
     crate::drafts::clear(&mut tx, ticket_id, author).await?;
     tx.commit().await?;
-    Ok(id)
+    Ok(queued)
+}
+
+/// A message an agent sends on a ticket, before it has a recipient: it threads with the
+/// conversation so far, answering the last message received (else the last one).
+pub(crate) struct Outgoing<'a> {
+    ticket: Uuid,
+    author: Uuid,
+    body: &'a str,
+    subject: String,
+    in_reply_to: Option<String>,
+    references: Vec<String>,
+}
+
+impl<'a> Outgoing<'a> {
+    pub(crate) async fn on(
+        tx: &mut Transaction<'_, Postgres>,
+        ticket: Uuid,
+        author: Uuid,
+        body: &'a str,
+    ) -> Result<Outgoing<'a>> {
+        let (title, number): (String, i64) =
+            sqlx::query_as("SELECT title, number FROM tickets WHERE id = $1")
+                .bind(ticket)
+                .fetch_one(&mut **tx)
+                .await?;
+        // The conversation so far, newest last.
+        let mut messages: Vec<(String, String)> = sqlx::query_as(
+            "SELECT rfc_message_id, direction FROM messages
+             WHERE ticket_id = $1 AND rfc_message_id IS NOT NULL
+             ORDER BY created_at DESC LIMIT 20",
+        )
+        .bind(ticket)
+        .fetch_all(&mut **tx)
+        .await?;
+        messages.reverse();
+        let in_reply_to = messages
+            .iter()
+            .rev()
+            .find(|(_, direction)| direction == "inbound")
+            .or(messages.last())
+            .map(|(id, _)| id.clone());
+        Ok(Outgoing {
+            ticket,
+            author,
+            body,
+            subject: reply_subject(&title, number),
+            in_reply_to,
+            references: messages.into_iter().map(|(id, _)| id).collect(),
+        })
+    }
+
+    /// Puts the message to `to` in the outbox, as a message of its own; returns its id.
+    pub(crate) async fn queue(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        sender: &Sender,
+        to: &str,
+    ) -> Result<Uuid> {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO messages (id, ticket_id, direction, rfc_message_id, in_reply_to,
+                                   \"references\", from_address, from_name, to_address, author_id,
+                                   subject, body_text)
+             VALUES ($1, $2, 'outbound', $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        )
+        .bind(id)
+        .bind(self.ticket)
+        .bind(sender.new_message_id())
+        .bind(&self.in_reply_to)
+        .bind(&self.references)
+        .bind(&sender.address)
+        .bind(&sender.name)
+        .bind(to)
+        .bind(self.author)
+        .bind(&self.subject)
+        .bind(self.body)
+        .execute(&mut **tx)
+        .await?;
+        Ok(id)
+    }
 }
 
 /// Opens a ticket by hand, for example after a phone call (docs/domain-rules.md, "Incoming
@@ -673,13 +738,89 @@ mod tests {
         assert_eq!(state(&db, n).await, "waiting");
     }
 
+    /// The outbound messages on the ticket: to whom, oldest first.
+    async fn sent_to(db: &PgPool, number: i64) -> Vec<String> {
+        detail(db, number)
+            .await
+            .unwrap()
+            .timeline
+            .into_iter()
+            .filter_map(|entry| match entry {
+                TimelineEntry::Message(m) if m.direction == Direction::Outbound => m.to_address,
+                _ => None,
+            })
+            .collect()
+    }
+
     #[sqlx::test]
-    async fn a_ticket_without_requester_cannot_be_replied_to(db: PgPool) {
+    async fn a_ticket_with_neither_requester_nor_key_requesters_cannot_be_replied_to(db: PgPool) {
         let c = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ivo = testing::requester(&db, harbor, "ivo@harbor.test").await;
+        crate::key_requesters::mark(&db, ivo, None).await.unwrap();
         let a = testing::agent(&db, "marco@northgate.test").await;
         let n = testing::ticket(&db, c, None, "first@brightfield.test").await;
-        let result = reply(&db, &sender(), n, a, "Hello", None, TicketState::Waiting).await;
-        assert!(matches!(result, Err(Error::Rule(_))));
+        let Err(Error::Rule(why)) =
+            reply(&db, &sender(), n, a, "Hello", None, TicketState::Waiting).await
+        else {
+            panic!("a reply to nobody");
+        };
+        assert!(why.contains("key requester"), "{why}");
+        assert_eq!(sent_to(&db, n).await, Vec::<String>::new());
+    }
+
+    /// On a ticket without a requester, a reply goes to every key requester of the ticket's
+    /// customer, each at their contact address and in a message of their own; the ticket stays
+    /// without a requester.
+    #[sqlx::test]
+    async fn a_reply_without_a_requester_goes_to_every_key_requester(db: PgPool) {
+        let c = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, c, "ada@brightfield.test").await;
+        crate::requesters::add_address(&db, ada, "ada@home.test")
+            .await
+            .unwrap();
+        let lena = testing::requester(&db, c, "lena@brightfield.test").await;
+        testing::requester(&db, c, "nora@brightfield.test").await;
+        let ivo = testing::requester(&db, harbor, "ivo@harbor.test").await;
+        for (key, contact) in [(ada, Some("ada@home.test")), (lena, None), (ivo, None)] {
+            crate::key_requesters::mark(&db, key, contact)
+                .await
+                .unwrap();
+        }
+        let a = testing::agent(&db, "marco@northgate.test").await;
+        let n = testing::ticket(&db, c, None, "first@brightfield.test").await;
+
+        let Err(Error::Rule(_)) = reply(
+            &db,
+            &sender(),
+            n,
+            a,
+            "Hello",
+            Some("ada@brightfield.test"),
+            TicketState::Waiting,
+        )
+        .await
+        else {
+            panic!("an address was picked among the key requesters");
+        };
+        reply(
+            &db,
+            &sender(),
+            n,
+            a,
+            "We are on it.",
+            None,
+            TicketState::Waiting,
+        )
+        .await
+        .unwrap();
+        let mut to = sent_to(&db, n).await;
+        to.sort();
+        assert_eq!(to, ["ada@home.test", "lena@brightfield.test"]);
+        let ticket = detail(&db, n).await.unwrap();
+        assert!(ticket.requester.is_none());
+        assert_eq!(ticket.state, TicketState::Waiting);
     }
 
     #[sqlx::test]

@@ -522,6 +522,45 @@ mod tests {
         assert_eq!(testing::state(&db, number).await, "open");
     }
 
+    /// A key requester answering a reply on a ticket without a requester writes on that ticket,
+    /// which reopens and stays without a requester.
+    #[sqlx::test]
+    async fn a_key_requester_s_answer_joins_the_ticket_without_becoming_its_requester(db: PgPool) {
+        use crate::testing;
+        use crate::tickets::{self, TicketState};
+
+        let brightfield = customer(&db, "Brightfield", Some("brightfield.test")).await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        crate::key_requesters::mark(&db, lena, None).await.unwrap();
+        let number = testing::ticket(&db, brightfield, None, "alert@monitor.test").await;
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        tickets::reply(
+            &db,
+            &testing::sender(),
+            number,
+            agent,
+            "The backup failed overnight; we are on it.",
+            None,
+            TicketState::Waiting,
+        )
+        .await
+        .unwrap();
+        let ours: String =
+            sqlx::query_scalar("SELECT rfc_message_id FROM messages WHERE direction = 'outbound'")
+                .fetch_one(&db)
+                .await
+                .unwrap();
+
+        let answer = mail("lena@brightfield.test", "l1@brightfield.test", Some(&ours));
+        let Routed::Reply { .. } = route_one(&db, &answer).await else {
+            panic!("the answer did not join the ticket");
+        };
+        let ticket = tickets::detail(&db, number).await.unwrap();
+        assert!(ticket.requester.is_none(), "she became its requester");
+        assert_eq!(ticket.state, TicketState::Open);
+        assert_eq!(ticket.timeline.len(), 3);
+    }
+
     #[sqlx::test]
     async fn the_same_message_is_stored_once(db: PgPool) {
         let m = mail("someone@elsewhere.test", "x1@elsewhere.test", None);
