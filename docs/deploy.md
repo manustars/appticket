@@ -224,9 +224,8 @@ must be `https://` addresses; `http://` is accepted only for a server on the cor
 (`localhost` or a loopback address), as for the mail servers. Without an issuer, client id and
 secret nothing changes; with only some of them, or an authorized group without them, the core
 does not start, and says which are missing (the chart already refuses an issuer without a public
-URL). The core reads the provider's
-configuration and keys when an agent signs in, not at startup, so a provider that is down does
-not keep the core or local passwords from working.
+URL). The core reads the provider's configuration and keys when an agent signs in, not at
+startup, so a provider that is down does not keep the core or local passwords from working.
 
 Anyone can open the sign-in through the provider, so at most 20 sign-ins may be under way from
 one address at a time (the address is taken as for [failed sign-ins](#failed-sign-ins), so set
@@ -266,9 +265,10 @@ How the provider's sign-in finds the agent:
 A session opened through the provider lasts `sessionHours`, so that an account disabled there
 loses access within hours; one opened with a local password lasts 14 days. Signing out ends the
 help desk's session only, not the one at the provider. Existing agents keep their local password
-when they are linked. Agents made by a first sign-in have none: a password typed for them on the
-sign-in page is refused as a wrong one is (and counts as a [failed sign-in](#failed-sign-ins)),
-and `hd agent set-password` or Administration can give them one.
+when they are linked. Agents made by a first sign-in have none: while local sign-in is on, a
+password typed for them on the sign-in page is refused as a wrong one is (and counts as a
+[failed sign-in](#failed-sign-ins)), and `hd agent set-password` or Administration can give them
+one.
 
 #### The authorized group
 
@@ -282,7 +282,8 @@ the provider maps to a role.
 
 The authorized group applies to signing in through the provider only. An agent with a local
 password still signs in with it, in the group or not: deactivate an agent to keep them out, or
-switch local sign-in off for the installation so that everyone signs in through the provider.
+[switch local sign-in off](#switching-local-sign-in-off) (`hd sign-in local off`) so that
+everyone signs in through the provider, where the group decides.
 
 The group, not deactivation, is what keeps someone out of the provider's sign-in for good. A new
 agent takes the address the provider sends, verified or not (with Entra ID always unverified,
@@ -329,6 +330,9 @@ Entra ID sends the `email` claim for the `email` scope the core asks for, for us
 address. Its ID tokens carry no `email_verified` claim, though, so no existing agent is linked by
 e-mail: people in the group become new agents at their first sign-in, and one whose address an
 existing agent already has is refused (`email_not_verified`) until that agent's address changes.
+That includes the first Administrator: before
+[switching local sign-in off](#switching-local-sign-in-off), give the Administrator role to an
+agent made by a first sign-in (`hd agent set-role <e-mail> Administrator`).
 
 #### Switching local sign-in off
 
