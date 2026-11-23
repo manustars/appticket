@@ -5,6 +5,17 @@ use uuid::Uuid;
 
 use crate::outbound::Sender;
 
+/// The help desk's own organization.
+pub async fn help_desk(db: &PgPool) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO customers (id, name, is_help_desk) VALUES ($1, 'Northgate', true)")
+        .bind(id)
+        .execute(db)
+        .await
+        .unwrap();
+    id
+}
+
 pub async fn customer(db: &PgPool, name: &str) -> Uuid {
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO customers (id, name) VALUES ($1, $2)")
