@@ -436,8 +436,8 @@ async fn update_site(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Retires a site: it stays visible but gets no new requesters or assets. Sites are never
-/// deleted.
+/// Retires a site: it stays visible but gets no new requesters or assets, and the requesters and
+/// assets at it are left without a site. Sites are never deleted.
 #[utoipa::path(post, path = "/api/sites/{id}/retire", tag = "customers",
     params(("id" = Uuid, Path, description = "The site")),
     responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),

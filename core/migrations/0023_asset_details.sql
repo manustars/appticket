@@ -29,3 +29,52 @@ CREATE VIEW asset_sites AS
     FROM assets a
     JOIN asset_kinds k ON k.id = a.kind_id
     LEFT JOIN requesters h ON h.id = a.holder_id;
+
+-- No asset is at a retired site or held by a departed requester: an asset gets neither, and
+-- retiring a site or departing needs the assets at it, or held, to have left them first. Checking an
+-- asset's site and holder locks them, so that one retired or departing at the same time is seen.
+CREATE FUNCTION assets_at_active_sites_with_present_holders() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_TABLE_NAME = 'assets' THEN
+        IF NEW.site_id IS NOT NULL
+           AND (TG_OP = 'INSERT' OR NEW.site_id IS DISTINCT FROM OLD.site_id)
+           AND EXISTS (SELECT 1 FROM sites WHERE id = NEW.site_id AND retired_at IS NOT NULL
+                       FOR SHARE) THEN
+            RAISE EXCEPTION 'an asset cannot be at a retired site'
+                USING ERRCODE = 'check_violation';
+        END IF;
+        IF NEW.holder_id IS NOT NULL
+           AND (TG_OP = 'INSERT' OR NEW.holder_id IS DISTINCT FROM OLD.holder_id)
+           AND EXISTS (SELECT 1 FROM requesters WHERE id = NEW.holder_id AND departed_at IS NOT NULL
+                       FOR SHARE) THEN
+            RAISE EXCEPTION 'a departed requester holds no asset'
+                USING ERRCODE = 'check_violation';
+        END IF;
+    ELSIF TG_TABLE_NAME = 'sites' THEN
+        IF EXISTS (SELECT 1 FROM assets WHERE site_id = NEW.id) THEN
+            RAISE EXCEPTION 'a retired site has no asset at it'
+                USING ERRCODE = 'check_violation';
+        END IF;
+    ELSIF EXISTS (SELECT 1 FROM assets WHERE holder_id = NEW.id) THEN
+        RAISE EXCEPTION 'a holder does not depart: the assets they hold lose their holder first'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER assets_at_active_sites_with_present_holders
+    AFTER INSERT OR UPDATE OF site_id, holder_id ON assets
+    FOR EACH ROW EXECUTE FUNCTION assets_at_active_sites_with_present_holders();
+
+CREATE TRIGGER retired_sites_have_no_assets
+    AFTER UPDATE OF retired_at ON sites
+    FOR EACH ROW
+    WHEN (NEW.retired_at IS NOT NULL)
+    EXECUTE FUNCTION assets_at_active_sites_with_present_holders();
+
+CREATE TRIGGER departed_requesters_hold_no_assets
+    AFTER UPDATE OF departed_at ON requesters
+    FOR EACH ROW
+    WHEN (NEW.departed_at IS NOT NULL)
+    EXECUTE FUNCTION assets_at_active_sites_with_present_holders();
