@@ -114,15 +114,17 @@ async fn give_address(
     address: &str,
     source: Source,
 ) -> Result<()> {
+    // Several given in one transaction keep the order they were given in.
     let given = match source {
-        // Several given in one transaction keep the order they were given in.
         Source::Free => sqlx::query(
             "INSERT INTO requester_addresses (address, requester_id, created_at)
              SELECT $1, $2, greatest(now(), max(created_at) + interval '1 microsecond')
              FROM requester_addresses WHERE requester_id = $2",
         ),
         Source::Departed => sqlx::query(
-            "UPDATE requester_addresses SET requester_id = $2, created_at = now()
+            "UPDATE requester_addresses SET requester_id = $2,
+                 created_at = (SELECT greatest(now(), max(created_at) + interval '1 microsecond')
+                               FROM requester_addresses WHERE requester_id = $2)
              WHERE address = $1",
         ),
     }

@@ -596,6 +596,11 @@ fn changed_meanwhile(error: Error) -> Error {
         e.is_unique_violation() || matches!(e.code().as_deref(), Some("40P01" | "40001"))
     });
     if internal.is::<Overtaken>() || contended {
+        // What the database said stays in the log, should a bug of the core hide behind it.
+        tracing::warn!(
+            error = format!("{internal:#}"),
+            "an import was refused, to be run again"
+        );
         return Error::Rule(
             "the help desk's data changed during the import: reload and try again".into(),
         );
@@ -2780,6 +2785,13 @@ mod tests {
     /// of them, and the import, when it is the one, asks to be run again instead of failing.
     #[sqlx::test]
     async fn an_import_in_a_deadlock_asks_to_try_again(db: PgPool) {
+        // Waits on locks: it fails rather than hang when they do not go as planned.
+        tokio::time::timeout(std::time::Duration::from_secs(30), import_in_a_deadlock(db))
+            .await
+            .expect("the deadlock was not resolved in time");
+    }
+
+    async fn import_in_a_deadlock(db: PgPool) {
         let brightfield = crate::customers::create(&db, "Brightfield", &[])
             .await
             .unwrap();
@@ -2805,9 +2817,23 @@ mod tests {
             let db = db.clone();
             async move { run(&db, &Grant::command_line(), vec![file], Mode::Apply).await }
         });
-        // The import holds Brightfield and waits for Harbor Lane; the agent now asks for
+        // Once the import holds Brightfield and waits for Harbor Lane, the agent asks for
         // Brightfield.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let mut waiting = false;
+        for _ in 0..200 {
+            waiting = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+                                WHERE NOT l.granted AND a.datname = current_database())",
+            )
+            .fetch_one(&db)
+            .await
+            .unwrap();
+            if waiting {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(waiting, "the import never waited for Harbor Lane");
         crate::customers::lock_active(&mut agent, brightfield)
             .await
             .unwrap();
@@ -2816,6 +2842,10 @@ mod tests {
             other => panic!("not refused: {other:?}"),
         }
         agent.rollback().await.unwrap();
+        assert!(
+            requesters_of(&db, brightfield).await.is_empty(),
+            "the row before the deadlock is not written either"
+        );
     }
 
     /// Applying does everything again against the database as it is then: a preview is no promise.
