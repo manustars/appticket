@@ -16,6 +16,7 @@ use crate::roles::{Grant, Permission};
 /// row can refer to something an earlier file creates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
+#[schema(as = ImportKind)]
 pub enum Kind {
     Customers,
     Sites,
@@ -56,6 +57,7 @@ pub enum Mode {
 
 /// What an import does, or would do, file by file.
 #[derive(Debug, Serialize, ToSchema)]
+#[schema(as = ImportReport)]
 pub struct Report {
     /// Whether the import was applied; a preview changes nothing.
     pub applied: bool,
@@ -63,6 +65,7 @@ pub struct Report {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+#[schema(as = ImportFileReport)]
 pub struct FileReport {
     pub kind: Kind,
     /// Every row of the file, in its order.
@@ -74,6 +77,7 @@ pub struct FileReport {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+#[schema(as = ImportRow)]
 pub struct RowReport {
     /// The line of the file the row starts on; the header is line 1.
     pub line: u64,
@@ -88,6 +92,7 @@ pub struct RowReport {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
+#[schema(as = ImportOutcome)]
 pub enum Outcome {
     Create,
     Update,

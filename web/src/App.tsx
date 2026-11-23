@@ -16,6 +16,7 @@ import {
 import { CustomerPage, Customers } from './Customers'
 import { useI18n } from './i18n/context'
 import { LanguageSwitcher } from './i18n/LanguageSwitcher'
+import { Import } from './Import'
 import { Inbox } from './Inbox'
 import {
   accountHref,
@@ -186,7 +187,7 @@ function Desk({ agent, onAgent, onSignedOut }: {
   }
 
   const section = route.view === 'ticket' ? 'tickets'
-    : route.view === 'customer' || route.view === 'requester' ? 'customers'
+    : route.view === 'customer' || route.view === 'requester' || route.view === 'import' ? 'customers'
     : route.view === 'service' ? 'services'
     : route.view
   const current = (s: typeof section) => (section === s ? 'current' : '')
@@ -228,6 +229,8 @@ function Desk({ agent, onAgent, onSignedOut }: {
             <Inbox messages={inbox} onChanged={refresh} onSignedOut={onSignedOut} />
           ) : route.view === 'customers' ? (
             <Customers onSignedOut={onSignedOut} />
+          ) : route.view === 'import' ? (
+            <Import onSignedOut={onSignedOut} />
           ) : route.view === 'customer' ? (
             <CustomerPage key={route.id} id={route.id} onChanged={refresh} onSignedOut={onSignedOut} />
           ) : route.view === 'requester' ? (

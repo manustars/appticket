@@ -33,7 +33,7 @@ import { useI18n } from './i18n/context'
 import { DepartedMarker } from './DepartedMarker'
 import { Problem } from './Problem'
 import { requesterLabel } from './people'
-import { adminHref, customerHref, customersHref, defaultFilters, go, requesterHref, serviceHref, ticketsHref } from './route'
+import { adminHref, customerHref, customersHref, defaultFilters, go, importHref, requesterHref, serviceHref, ticketsHref } from './route'
 import { useSession } from './session'
 import { useAction, useLoad } from './useAction'
 
@@ -49,7 +49,10 @@ export function Customers({ onSignedOut }: { onSignedOut: () => void }) {
   const canManage = useSession().can('customers.manage')
   return (
     <div className="page">
-      <h1>{t('customers.title')}</h1>
+      <div className="title-row">
+        <h1>{t('customers.title')}</h1>
+        {canManage && <a href={importHref}>{t('customers.import')}</a>}
+      </div>
       <Problem error={customers.error} />
       {customers.data && (
         <table className="data rows">

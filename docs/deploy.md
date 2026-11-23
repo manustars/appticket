@@ -144,6 +144,65 @@ in has it, `hd agent set-role <e-mail> Administrator` gives it back; the command
 limited by roles. Upgrading from a version without roles makes every existing agent an
 Administrator.
 
+### Importing customers and sites
+
+Customers and their sites can be imported from CSV files, in the UI (Customers, then Import from
+CSV files) by an agent who manages customers, or with `hd import`. Each kind has its own file, in
+UTF-8 (Excel: "CSV UTF-8"), separated by commas or semicolons, with a header row of the column
+names below in any order. Every import first shows what it would create, update and leave out;
+nothing changes until it is applied (the Import button, or `--apply`), and applying checks
+every row again.
+
+A filled cell sets a value and an empty one leaves it; an import never deletes, retires or
+offboards anything, and never brings an offboarded customer or a retired site back. A row that
+breaks a rule is left out with its reason, as is a site whose customer row is left out; the
+other rows are imported. The rows left out come back as a file with the same columns and an
+`error` column giving the reason, ready to correct and import again (an `error` column is
+ignored on import). A file with an unknown or missing column, a file that is not UTF-8, or more
+than 10,000 rows in a file stops the whole import before anything changes. In the UI, the files
+of one import can be up to 10 MiB together.
+
+Customers file. A customer is recognised by its external reference, else by its name, ignoring
+case; a row that could be two customers (two names that differ only in case, or a reference
+naming one customer and a name naming another) is left out, and a customer is imported once
+per file.
+
+| Column | Meaning |
+|---|---|
+| `name` | The customer's name. The column is required; a new customer needs a value. |
+| `external_system`, `external_name` | An external reference: a system, such as a monitoring tool, and the name it uses for the customer. Both or neither. It recognises the customer; one no customer has is added to the customer of the row. |
+| `legal_name` | The legal name. |
+| `tax_id`, `tax_country` | The tax identifier and its country (ISO 3166-1 alpha-2, such as `IT`); one always comes with the other. |
+| `address` | The postal address; it can span several lines inside quotes. |
+| `phone` | A phone number. |
+| `website` | An `http` or `https` address; `https://` is added when there is none. |
+| `notes` | Internal notes; a filled cell replaces the notes there. |
+
+Sites file. It is taken after the customers file, so that a site can be at a customer that file
+creates. A site is recognised by its name within its customer, ignoring case; a name that only a
+retired site has is left out.
+
+| Column | Meaning |
+|---|---|
+| `customer` | The site's customer, by name. The column is required. |
+| `customer_external_system`, `customer_external_name` | Or the customer by one of its external references. |
+| `name` | The site's name. Required. |
+| `address` | The site's address. The column is required; a new site needs a value. |
+
+From the command line, inside the core's pod, whose file system is read-only, a file is read
+from standard input:
+
+```sh
+kubectl -n helpdesk exec -i deploy/hd-core -- hd import --customers - < customers.csv          # preview
+kubectl -n helpdesk exec -i deploy/hd-core -- hd import --customers - --apply < customers.csv  # import
+```
+
+The command lists every row with what it does, or why it is left out. Run on a machine with
+access to the database, `hd import --customers customers.csv --sites sites.csv` takes both
+files in one import and writes the rows left out to `customers-left-out.csv` and
+`sites-left-out.csv` beside them (or into `--left-out DIR`). `hd import --help` describes the
+columns too.
+
 ## The Assistant
 
 The Assistant needs credentials that only exist once it is registered on the core, so the order
