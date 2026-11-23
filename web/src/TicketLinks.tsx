@@ -292,22 +292,22 @@ function Children({ ticket, onChanged, onSignedOut }: Props) {
           {ticket.children.map((c) => <li key={c.number}><RelatedLink ticket={c} /></li>)}
         </ul>
       )}
-      {pending > 0 && (
-        <SendForm button={t('parent.resolveChildren')} field={t('parent.message')}
-          hint={t('parent.resolveHint', { count: pending })}
-          confirm={t('parent.confirmResolve', { count: pending, number: ticket.number })}
-          send={resolve} onChanged={onChanged} onSignedOut={onSignedOut} />
-      )}
-      {announcing && (
-        <SendForm button={t('parent.announce')} field={t('parent.announcement')}
-          hint={t('parent.announceHint')} confirm={t('parent.confirmAnnounce', { number: ticket.number })}
-          send={sendAnnouncement} onChanged={onChanged} onSignedOut={onSignedOut} />
-      )}
+      {/* Mounted while there is nothing to send either: what the last resolve did stays shown
+          after the children it resolved have changed state. */}
+      <SendForm available={pending > 0} button={t('parent.resolveChildren')} field={t('parent.message')}
+        hint={t('parent.resolveHint', { count: pending })}
+        confirm={t('parent.confirmResolve', { count: pending, number: ticket.number })}
+        send={resolve} onChanged={onChanged} onSignedOut={onSignedOut} />
+      <SendForm available={announcing} button={t('parent.announce')} field={t('parent.announcement')}
+        hint={t('parent.announceHint')} confirm={t('parent.confirmAnnounce', { number: ticket.number })}
+        send={sendAnnouncement} onChanged={onChanged} onSignedOut={onSignedOut} />
     </section>
   )
 }
 
 interface SendFormProps {
+  /** Whether there is something to send now; what was done, or went wrong, stays shown anyway. */
+  available: boolean
   /** What the button that opens the form, and sends it, says. */
   button: string
   /** The label of the message's field. */
@@ -325,7 +325,7 @@ interface SendFormProps {
  * A message written from a parent ticket to the people its failure affects: a button opens the
  * form, and sending asks first. What was done stays shown until the form is opened again.
  */
-function SendForm({ button, field, hint, confirm, send, onChanged, onSignedOut }: SendFormProps) {
+function SendForm({ available, button, field, hint, confirm, send, onChanged, onSignedOut }: SendFormProps) {
   const { t } = useI18n()
   const action = useAction(onSignedOut)
   const [open, setOpen] = useState(false)
@@ -353,12 +353,12 @@ function SendForm({ button, field, hint, confirm, send, onChanged, onSignedOut }
   return (
     <>
       {done !== null && <p className="done" role="status">{done}</p>}
-      {!open && (
+      {available && !open && (
         <div>
           <button type="button" onClick={() => { setOpen(true); setDone(null) }}>{button}</button>
         </div>
       )}
-      {open && (
+      {available && open && (
         <form className="resolve" onSubmit={submit}>
           <label htmlFor={`${id}-body`}>{field}</label>
           <textarea id={`${id}-body`} rows={4} value={body} aria-describedby={`${id}-hint`}
