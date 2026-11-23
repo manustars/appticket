@@ -77,16 +77,18 @@ pub(crate) fn token_hash(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
 
-/// Checks the credentials and opens a session. Returns the session token.
+/// Checks the credentials and opens a session. Returns the session token. An agent without a
+/// local password is answered as a wrong password is.
 pub async fn sign_in(db: &PgPool, email: &str, password: &str) -> anyhow::Result<Option<String>> {
-    let agent: Option<(Uuid, String)> = sqlx::query_as(
+    let agent: Option<(Uuid, Option<String>)> = sqlx::query_as(
         "SELECT id, password_hash FROM agents WHERE email = $1 AND deactivated_at IS NULL",
     )
     .bind(email.trim().to_lowercase())
     .fetch_optional(db)
     .await?;
-    let Some((agent_id, hash)) = agent else {
-        // Spend the same time as a wrong password, so that timing does not reveal addresses.
+    let Some((agent_id, Some(hash))) = agent else {
+        // Spend the same time as a wrong password, so that timing does not reveal addresses, or
+        // which agents have no local password.
         let _ = verify_password(password, &DUMMY_HASH);
         return Ok(None);
     };
@@ -110,7 +112,8 @@ pub async fn sign_out(db: &PgPool, token: &str) -> anyhow::Result<()> {
 /// still valid and the agent not deactivated.
 pub async fn agent_for(db: &PgPool, token: &str) -> anyhow::Result<Option<SignedIn>> {
     let row: Option<SessionRow> = sqlx::query_as(
-        "SELECT a.id, a.email, a.name, r.name, r.is_administrator, r.permissions
+        "SELECT a.id, a.email, a.name, a.password_hash IS NOT NULL, r.name, r.is_administrator,
+                r.permissions
          FROM agent_sessions s JOIN agents a ON a.id = s.agent_id JOIN roles r ON r.id = a.role_id
          WHERE s.token_hash = $1 AND s.expires_at > now() AND a.deactivated_at IS NULL",
     )
@@ -118,10 +121,11 @@ pub async fn agent_for(db: &PgPool, token: &str) -> anyhow::Result<Option<Signed
     .fetch_optional(db)
     .await?;
     Ok(row.map(
-        |(id, email, name, role_name, administrator, permissions)| SignedIn {
+        |(id, email, name, local_password, role_name, administrator, permissions)| SignedIn {
             id,
             email,
             name,
+            local_password,
             role_name,
             grant: Grant::from_stored(administrator, &permissions),
             token: token.to_owned(),
@@ -129,13 +133,15 @@ pub async fn agent_for(db: &PgPool, token: &str) -> anyhow::Result<Option<Signed
     ))
 }
 
-type SessionRow = (Uuid, String, String, String, bool, Vec<String>);
+type SessionRow = (Uuid, String, String, bool, String, bool, Vec<String>);
 
 #[derive(Debug, Clone)]
 pub struct SignedIn {
     pub id: Uuid,
     pub email: String,
     pub name: String,
+    /// Whether the agent has a local password.
+    pub local_password: bool,
     pub role_name: String,
     /// What the agent's role allows, read with the session on every request.
     pub grant: Grant,
@@ -174,6 +180,52 @@ pub(crate) mod tests {
         .fetch_one(db)
         .await
         .unwrap()
+    }
+
+    /// An agent without a local password, as a first sign-in through an identity provider makes.
+    pub async fn agent_without_local_password(db: &PgPool, email: &str) -> Uuid {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO agents (id, email, name, password_hash, role_id)
+             VALUES ($1, $2, 'Vera Lind', NULL, (SELECT id FROM roles WHERE is_default))",
+        )
+        .bind(id)
+        .bind(email)
+        .execute(db)
+        .await
+        .unwrap();
+        id
+    }
+
+    #[sqlx::test]
+    async fn an_agent_without_a_local_password_cannot_sign_in_with_one(db: PgPool) {
+        agent_without_local_password(&db, "vera.lind@example.com").await;
+        for password in ["", "any password at all"] {
+            assert!(
+                sign_in(&db, "vera.lind@example.com", password)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_sessions")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(sessions, 0);
+    }
+
+    /// No local password is kept as no hash at all, never as an empty one.
+    #[sqlx::test]
+    async fn the_database_keeps_no_empty_password(db: PgPool) {
+        let empty = sqlx::query(
+            "INSERT INTO agents (id, email, name, password_hash, role_id)
+             VALUES (gen_random_uuid(), 'bo@helpdesk.test', 'Bo', '',
+                     (SELECT id FROM roles WHERE is_default))",
+        )
+        .execute(&db)
+        .await;
+        assert!(empty.is_err());
     }
 
     #[sqlx::test]

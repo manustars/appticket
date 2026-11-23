@@ -332,6 +332,9 @@ struct Agent {
     id: Uuid,
     email: String,
     name: String,
+    /// Whether the agent has a local password to sign in and change; agents created by signing
+    /// in through the identity provider have none.
+    local_password: bool,
     role_name: String,
     /// Whether the agent's role is the Administrator role.
     administrator: bool,
@@ -355,6 +358,7 @@ async fn current_session(agent: SignedIn) -> Json<Agent> {
         administrator: agent.grant.administrator,
         email: agent.email,
         name: agent.name,
+        local_password: agent.local_password,
         role_name: agent.role_name,
     })
 }
@@ -395,7 +399,8 @@ struct PasswordChange {
     new_password: String,
 }
 
-/// Changes the signed-in agent's password; their other sessions end.
+/// Changes the signed-in agent's password; their other sessions end. Refused (409) for an agent
+/// without a local password.
 #[utoipa::path(put, path = "/api/session/password", tag = "session", request_body = PasswordChange,
     responses((status = NO_CONTENT), (status = CONFLICT, body = Problem),
         (status = FORBIDDEN, body = Problem), (status = UNAUTHORIZED, body = Problem)))]

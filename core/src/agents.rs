@@ -283,7 +283,8 @@ pub async fn reset_password(
     Ok(generated)
 }
 
-/// An agent changes their own password; every session but `keep_session` ends.
+/// An agent changes their own password; every session but `keep_session` ends. An agent without
+/// a local password has none to change.
 pub async fn change_own_password(
     db: &PgPool,
     agent: Uuid,
@@ -291,11 +292,17 @@ pub async fn change_own_password(
     current: &str,
     new: &str,
 ) -> Result<()> {
-    let hash: String = sqlx::query_scalar("SELECT password_hash FROM agents WHERE id = $1")
+    let hash: Option<String> = sqlx::query_scalar("SELECT password_hash FROM agents WHERE id = $1")
         .bind(agent)
         .fetch_optional(db)
         .await?
         .ok_or(Error::NotFound("agent"))?;
+    let Some(hash) = hash else {
+        return rule(
+            "you have no local password: you sign in through the identity provider, and an \
+             administrator can give you a password",
+        );
+    };
     if !auth::verify_password(current, &hash) {
         return Err(Error::Forbidden("the current password is wrong".into()));
     }
@@ -584,6 +591,46 @@ mod tests {
         assert!(auth::agent_for(&db, &elsewhere).await.unwrap().is_none());
         assert!(
             auth::sign_in(&db, "ada@helpdesk.test", "second password")
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// An agent without a local password has none to change; whoever manages agents, or the
+    /// command line, can give them one.
+    #[sqlx::test]
+    async fn an_agent_without_a_local_password_is_given_one_by_who_manages_agents(db: PgPool) {
+        let cli = Grant::command_line();
+        add(&db, &cli, "ada@helpdesk.test", "Ada", None, None)
+            .await
+            .unwrap();
+        let vera = auth::tests::agent_without_local_password(&db, "vera.lind@example.com").await;
+        let session = auth::open_session(
+            &db,
+            vera,
+            auth::OpenedWith::OpenIdConnect,
+            time::Duration::HOUR,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            change_own_password(&db, vera, &session, "", "a new password").await,
+            Err(Error::Rule(_))
+        ));
+        assert!(
+            auth::sign_in(&db, "vera.lind@example.com", "a new password")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(list(&db).await.unwrap().iter().any(|a| a.id == vera));
+
+        reset_password(&db, &cli, vera, Some("vera's own password"))
+            .await
+            .unwrap();
+        assert!(
+            auth::sign_in(&db, "vera.lind@example.com", "vera's own password")
                 .await
                 .unwrap()
                 .is_some()
