@@ -1320,12 +1320,17 @@ mod tests {
             .unwrap();
         let by_requester = testing::ticket(&db, c, Some(ada), "a2@brightfield.test").await;
         let open = testing::ticket(&db, c, Some(ada), "a3@brightfield.test").await;
+        let resolved = testing::ticket(&db, c, Some(ada), "a4@brightfield.test").await;
+        set_state(&db, resolved, TicketState::Resolved)
+            .await
+            .unwrap();
         for n in [by_asset, by_requester] {
             set_state(&db, n, TicketState::Closed).await.unwrap();
         }
 
         put_at(&db, ada, Some(lab)).await;
         assert_eq!(at(&db, open).await, ["Lab"], "an open ticket follows");
+        assert_eq!(at(&db, resolved).await, ["Lab"], "so does a resolved one");
         crate::catalog::update_asset(
             &db,
             pc,
