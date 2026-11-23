@@ -199,15 +199,16 @@ async fn main() -> anyhow::Result<()> {
         } => {
             // A provider configured in part stops the core; one that is down at startup does not,
             // since it is asked only when an agent signs in through it.
-            let identity_provider = match oidc::Config::from_settings(
+            let (identity_provider, identity_provider_activity) = match oidc::Config::from_settings(
                 *identity_provider,
                 public_url.as_deref(),
             )? {
                 Some(config) => {
                     tracing::info!(issuer = %config.issuer.as_str(), "agents can sign in through the OpenID Connect identity provider");
-                    Some(oidc::Provider::new(config)?)
+                    let (provider, activity) = http::connect_identity_provider(config)?;
+                    (Some(provider), Some(activity))
                 }
-                None => None,
+                None => (None, None),
             };
             local_sign_in::at_startup(&db, identity_provider.is_some())
                 .await
@@ -278,6 +279,7 @@ async fn main() -> anyhow::Result<()> {
                 ),
                 trusted_proxies,
                 identity_provider,
+                identity_provider_activity,
             };
             http::serve(state, listen, web_dir).await
         }

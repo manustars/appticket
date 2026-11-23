@@ -12,8 +12,10 @@ import {
   listAgentAccounts,
   listRoles,
   reactivateAgent,
+  removeAgentPassword,
   resetAgentPassword,
   setAgentRole,
+  unlinkAgentIdentity,
   type AgentAccount,
   type Role,
 } from './api/client'
@@ -80,7 +82,15 @@ interface Secret {
 /** What the last change to an agent did, beyond what the list shows. */
 type Done =
   | { kind: 'deactivated'; name: string; unassigned: number }
-  | { kind: 'reactivated'; name: string }
+  | { kind: 'reactivated' | 'passwordRemoved' | 'unlinked'; name: string }
+
+/** How the agent signs in: the key of its words. */
+function signsInWith(a: AgentAccount) {
+  if (a.has_local_password && a.has_linked_identity) return 'agents.signIn.both' as const
+  if (a.has_local_password) return 'agents.signIn.localPassword' as const
+  if (a.has_linked_identity) return 'agents.signIn.identityProvider' as const
+  return 'agents.signIn.none' as const
+}
 
 /** Whether the agent of `session` can give `role`: only what their own role allows, and only an Administrator the Administrator role. */
 function canGive(session: Session, role: Role): boolean {
@@ -151,6 +161,24 @@ function Agents({ onSignedOut }: { onSignedOut: () => void }) {
     })
   }
 
+  function removePassword(a: AgentAccount) {
+    if (!window.confirm(t('agents.confirmRemovePassword', { name: a.name }))) return
+    setDone(null)
+    void action.run(() => removeAgentPassword(a.id)).then(async (ok) => {
+      if (ok) setDone({ kind: 'passwordRemoved', name: a.name })
+      await changed(false)
+    })
+  }
+
+  function unlink(a: AgentAccount) {
+    if (!window.confirm(t('agents.confirmUnlink', { name: a.name }))) return
+    setDone(null)
+    void action.run(() => unlinkAgentIdentity(a.id)).then(async (ok) => {
+      if (ok) setDone({ kind: 'unlinked', name: a.name })
+      await changed(false)
+    })
+  }
+
   return (
     <>
       {secret && <SecretNotice secret={secret} onDismiss={() => setSecret(null)} />}
@@ -158,7 +186,7 @@ function Agents({ onSignedOut }: { onSignedOut: () => void }) {
         <p className="done" role="status">
           {done.kind === 'deactivated'
             ? t('agents.deactivated', { name: done.name, count: done.unassigned })
-            : t('agents.reactivated', { name: done.name })}
+            : t(`agents.${done.kind}`, { name: done.name })}
         </p>
       )}
       <section className="panel" aria-labelledby={`${id}-title`}>
@@ -169,6 +197,7 @@ function Agents({ onSignedOut }: { onSignedOut: () => void }) {
             <thead>
               <tr>
                 <th>{t('agents.name')}</th><th>{t('agents.email')}</th><th>{t('agents.role')}</th>
+                <th>{t('agents.signsInWith')}</th><th>{t('agents.lastSignIn')}</th>
                 <th><span className="visually-hidden">{t('table.actions')}</span></th>
               </tr>
             </thead>
@@ -197,6 +226,10 @@ function Agents({ onSignedOut }: { onSignedOut: () => void }) {
                         roleLabel(t, { administrator: a.administrator, name: a.role_name })
                       )}
                     </td>
+                    <td>{t(signsInWith(a))}</td>
+                    <td className="when">
+                      {a.last_signed_in_at ? formatTime(a.last_signed_in_at) : <span className="muted">{t('agents.neverSignedIn')}</span>}
+                    </td>
                     <td className="row-actions">
                       {/* One's own password is changed from one's account; one does not deactivate oneself. */}
                       {may && !own && !a.deactivated_at && (
@@ -204,6 +237,17 @@ function Agents({ onSignedOut }: { onSignedOut: () => void }) {
                           <button type="button" className="link" disabled={action.busy} onClick={() => reset(a)}>
                             {t('agents.resetPassword')}
                           </button>
+                          {/* A local password is removed only from an agent who has another way in. */}
+                          {a.has_local_password && a.has_linked_identity && (
+                            <button type="button" className="link" disabled={action.busy} onClick={() => removePassword(a)}>
+                              {t('agents.removePassword')}
+                            </button>
+                          )}
+                          {a.has_linked_identity && (
+                            <button type="button" className="link" disabled={action.busy} onClick={() => unlink(a)}>
+                              {t('agents.unlinkIdentity')}
+                            </button>
+                          )}
                           <button type="button" className="link danger" disabled={action.busy} onClick={() => deactivate(a)}>
                             {t('agents.deactivate')}
                           </button>
@@ -222,6 +266,7 @@ function Agents({ onSignedOut }: { onSignedOut: () => void }) {
           </table>
         )}
         <p className="hint">{t('agents.handOutHint')}</p>
+        <p className="hint">{t('agents.signInHint')}</p>
         <Problem error={action.error} />
       </section>
       <AddAgent roles={roles.data} session={session} action={action}

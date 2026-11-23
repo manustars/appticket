@@ -68,6 +68,11 @@ impl Client {
         }
     }
 
+    /// The same agent, signed in to the core of `state`.
+    pub fn in_state(self, state: AppState) -> Client {
+        Client { state, ..self }
+    }
+
     /// A client that authenticates with an add-on's bearer token instead of a session.
     pub fn new_with_token(db: &PgPool, token: &str, agent: Uuid) -> Client {
         Client {
@@ -1145,6 +1150,7 @@ async fn an_agent_without_permissions_changes_nothing(db: PgPool) {
         "/api/admin/roles",
         "/api/admin/addons",
         "/api/admin/mail",
+        "/api/admin/identity-provider",
     ] {
         let (status, _) = api.call("GET", uri, None).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "GET {uri}");
@@ -2446,4 +2452,174 @@ async fn the_sign_in_page_offers_the_identity_provider_only_when_configured(db: 
         options,
         serde_json::json!({"identity_provider": {"label": "Northgate"}, "local_sign_in": true})
     );
+}
+
+/// The core of `db` with an identity provider configured at `issuer`, never asked here.
+pub fn with_identity_provider(db: &PgPool, issuer: &str) -> AppState {
+    let settings = crate::oidc::Settings {
+        issuer: Some(issuer.to_owned()),
+        client_id: Some("helpdesk".to_owned()),
+        client_secret: Some("invented-secret".to_owned()),
+        client_secret_file: None,
+        label: Some("Northgate".to_owned()),
+        session_hours: 12,
+        authorized_group: None,
+        group_claim: "groups".to_owned(),
+    };
+    let config = crate::oidc::Config::from_settings(settings, Some("https://helpdesk.example.com"))
+        .unwrap()
+        .unwrap();
+    let (provider, activity) = super::identity_provider::connect(config).unwrap();
+    AppState {
+        identity_provider: Some(provider),
+        identity_provider_activity: Some(activity),
+        ..AppState::for_tests(db)
+    }
+}
+
+/// Those who manage agents see how each signs in and when they last did, unlink identities and
+/// remove local passwords, under the rules for acting on an agent.
+#[sqlx::test]
+async fn sign_in_is_administered_through_the_api(db: PgPool) {
+    const ISSUER: &str = "https://login.example.com/realms/staff";
+    let admin = Client::new(&db)
+        .await
+        .in_state(with_identity_provider(&db, ISSUER));
+    let cli = crate::roles::Grant::command_line();
+    let lena = crate::agents::add(
+        &db,
+        &cli,
+        "lena.marsh@example.com",
+        "Lena",
+        None,
+        Some("lena's password"),
+    )
+    .await
+    .unwrap()
+    .id;
+    let with_password = crate::auth::sign_in(&db, "lena.marsh@example.com", "lena's password")
+        .await
+        .unwrap()
+        .unwrap();
+    let at_provider = crate::identities::Identity {
+        issuer: ISSUER.to_owned(),
+        subject: "sub-lena".to_owned(),
+        email: Some("lena.marsh@example.com".to_owned()),
+        email_verified: true,
+        name: Some("Lena Marsh".to_owned()),
+        authorized_group: crate::identities::AuthorizedGroup::NotConfigured,
+    };
+    let through = crate::identities::sign_in(&db, &at_provider, time::Duration::hours(12))
+        .await
+        .unwrap()
+        .unwrap()
+        .token;
+    let lena_listed = || async {
+        let agents = admin.get("/api/admin/agents").await;
+        agents
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == lena.to_string())
+            .unwrap()
+            .clone()
+    };
+    let listed = lena_listed().await;
+    assert_eq!(listed["has_local_password"], true, "{listed}");
+    assert_eq!(listed["has_linked_identity"], true, "{listed}");
+    assert!(listed["last_signed_in_at"].is_string(), "{listed}");
+    let works = |token: String| {
+        let db = db.clone();
+        async move { crate::auth::agent_for(&db, &token).await.unwrap().is_some() }
+    };
+
+    let (status, json) = admin
+        .call(
+            "DELETE",
+            &format!("/api/admin/agents/{lena}/password"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    assert!(!works(with_password).await);
+    assert!(works(through.clone()).await);
+    assert_eq!(lena_listed().await["has_local_password"], false);
+
+    let (status, json) = admin
+        .call(
+            "DELETE",
+            &format!("/api/admin/agents/{lena}/identity"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    assert!(!works(through).await);
+    assert_eq!(lena_listed().await["has_linked_identity"], false);
+
+    // Neither is there any more; and nobody changes how they sign in themselves.
+    for what in ["password", "identity"] {
+        let (status, json) = admin
+            .call("DELETE", &format!("/api/admin/agents/{lena}/{what}"), None)
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{what}: {json}");
+        let (status, json) = admin
+            .call(
+                "DELETE",
+                &format!("/api/admin/agents/{}/{what}", admin.agent),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{what}: {json}");
+    }
+
+    // An agent who manages agents, but does not hold every permission of Lena's role.
+    let managers = role_with(&db, "Managers", &[crate::roles::Permission::ManageAgents]).await;
+    let manager = Client::with_role(&db, "mia@northgate.test", managers)
+        .await
+        .in_state(with_identity_provider(&db, ISSUER));
+    let (status, _) = manager
+        .call(
+            "DELETE",
+            &format!("/api/admin/agents/{lena}/identity"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// The state of the identity provider is shown like the state of the mail, to the agents who
+/// view the state of the mail.
+#[sqlx::test]
+async fn the_state_of_the_identity_provider_is_shown_with_the_state_of_the_mail(db: PgPool) {
+    let admin = Client::new(&db).await;
+    let without = admin.get("/api/admin/identity-provider").await;
+    assert_eq!(
+        without,
+        serde_json::json!({"openid_connect": null, "local_sign_in": true})
+    );
+
+    let admin = admin.in_state(with_identity_provider(
+        &db,
+        "https://login.example.com/realms/staff",
+    ));
+    let with = admin.get("/api/admin/identity-provider").await;
+    assert_eq!(
+        with,
+        serde_json::json!({
+            "openid_connect": {
+                "label": "Northgate",
+                "activity": {
+                    "server": "https://login.example.com/realms/staff",
+                    "last_success_at": null,
+                    "last_error": null,
+                    "last_error_at": null,
+                },
+            },
+            "local_sign_in": true,
+        })
+    );
+
+    let mail = role_with(&db, "Mail", &[crate::roles::Permission::ViewMail]).await;
+    let watcher = Client::with_role(&db, "wim@northgate.test", mail).await;
+    watcher.get("/api/admin/identity-provider").await;
 }

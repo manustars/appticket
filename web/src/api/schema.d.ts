@@ -224,6 +224,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/agents/{id}/identity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Unlinks the agent's identity and ends the sessions opened through the identity provider; at
+         *     their next sign-in there, they are linked again by verified e-mail. Refused when they would be
+         *     left without a way to sign in, and for one's own.
+         */
+        delete: operations["unlink_identity"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/agents/{id}/password": {
         parameters: {
             query?: never;
@@ -235,7 +256,11 @@ export interface paths {
         put?: never;
         /** Gives the agent a new, generated password and ends their sessions. */
         post: operations["reset_password"];
-        delete?: never;
+        /**
+         * Removes the agent's local password and ends the sessions opened with it; refused unless they
+         *     have signed in through the identity provider configured now, and for one's own.
+         */
+        delete: operations["remove_password"];
         options?: never;
         head?: never;
         patch?: never;
@@ -268,6 +293,27 @@ export interface paths {
         get?: never;
         /** Gives the agent another role. */
         put: operations["set_role"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/identity-provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether an identity provider is configured and what signing in through it last did since the
+         *     core started, with whether local sign-in is on. Shown with the state of the mail; the settings
+         *     live in the server's configuration.
+         */
+        get: operations["identity_provider_state"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1546,7 +1592,7 @@ export interface components {
              */
             ticket_number?: number | null;
         };
-        /** @description The last outcome of reading or sending mail. */
+        /** @description The last outcome of reading or sending mail, or of signing in through the identity provider. */
         Activity: {
             /** @description The last failure since the core started, with any credentials taken out. */
             last_error?: string | null;
@@ -1554,10 +1600,11 @@ export interface components {
             last_error_at?: string | null;
             /**
              * Format: date-time
-             * @description Reading: the last read that worked. Sending: the last message sent.
+             * @description Reading: the last read that worked. Sending: the last message sent. Identity provider:
+             *     the last sign-in it confirmed.
              */
             last_success_at?: string | null;
-            /** @description The server's host and port; never the credentials. */
+            /** @description The server's host and port, or the identity provider's issuer; never the credentials. */
             server: string;
         };
         AddedAgent: {
@@ -1671,8 +1718,18 @@ export interface components {
              */
             deactivated_at?: string | null;
             email: string;
+            /** @description Whether the agent has an identity of an identity provider linked to them. */
+            has_linked_identity: boolean;
+            /** @description Whether the agent has a local password. */
+            has_local_password: boolean;
             /** Format: uuid */
             id: string;
+            /**
+             * Format: date-time
+             * @description When the agent last signed in, with a local password or through the identity provider;
+             *     empty if they never did.
+             */
+            last_signed_in_at?: string | null;
             name: string;
             /** Format: uuid */
             role_id: string;
@@ -1977,6 +2034,11 @@ export interface components {
         IdentityProviderButton: {
             /** @description What the button names: "Sign in with <label>". */
             label: string;
+        };
+        IdentityProviderState: {
+            /** @description Whether agents can sign in with a local password. */
+            local_sign_in: boolean;
+            openid_connect?: components["schemas"]["ProviderState"] | null;
         };
         ImportFile: {
             /** @description The file's text: CSV with a header of fixed column names, comma or semicolon separated. */
@@ -2334,6 +2396,16 @@ export interface components {
             /** Format: uuid */
             id: string;
             name: string;
+        };
+        ProviderState: {
+            /**
+             * @description Signing in through it since the core started: the issuer as the server, the last sign-in
+             *     it confirmed as the last success, and the last failure in reaching it or in what it
+             *     answered, without the client's secret.
+             */
+            activity: components["schemas"]["Activity"];
+            /** @description What the sign-in button names. */
+            label: string;
         };
         /** @description A rationale as an add-on sends it. */
         RationaleInput: components["schemas"]["BTreeMap"] | string;
@@ -3217,6 +3289,58 @@ export interface operations {
             };
         };
     };
+    unlink_identity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     reset_password: {
         parameters: {
             query?: never;
@@ -3254,6 +3378,58 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    remove_password: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3354,6 +3530,41 @@ export interface operations {
                 };
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    identity_provider_state: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityProviderState"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
