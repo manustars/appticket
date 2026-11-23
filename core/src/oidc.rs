@@ -180,7 +180,7 @@ impl Provider {
     }
 
     /// Sets a sign-in out: where to send the browser, and the state it must bring back.
-    pub async fn begin(&self, db: &PgPool) -> anyhow::Result<Begun> {
+    pub async fn begin(&self, db: &PgPool) -> anyhow::Result<ProviderRedirect> {
         let client = self.client().await?;
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
         let (url, state, nonce) = client
@@ -206,27 +206,27 @@ impl Provider {
         .bind(SIGN_IN_TIME.as_secs_f64())
         .execute(db)
         .await?;
-        Ok(Begun {
+        Ok(ProviderRedirect {
             url,
             state: state.secret().clone(),
         })
     }
 
     /// Checks the browser's return from the provider and the ID token it leads to: who signed
-    /// in. `kept_state` is the state the browser kept from [`Provider::begin`].
+    /// in. `state_cookie` is the state the browser kept from [`Provider::begin`].
     pub async fn finish(
         &self,
         db: &PgPool,
-        kept_state: Option<&str>,
-        back: &Return,
+        state_cookie: Option<&str>,
+        query: &CallbackQuery,
     ) -> anyhow::Result<Identity> {
-        if let Some(error) = &back.error {
+        if let Some(error) = &query.error {
             bail!("the identity provider answered {error}");
         }
-        let (Some(code), Some(state)) = (&back.code, &back.state) else {
+        let (Some(code), Some(state)) = (&query.code, &query.state) else {
             bail!("the identity provider's answer has no code or state");
         };
-        if kept_state != Some(state.as_str()) {
+        if state_cookie != Some(state.as_str()) {
             bail!("the state is not the one this browser set out with");
         }
         let pending: Option<(String, String)> = sqlx::query_as(
@@ -281,8 +281,8 @@ impl Provider {
 /// How long the browser has to come back from the provider.
 const SIGN_IN_TIME: Duration = Duration::from_secs(10 * 60);
 
-/// A sign-in set out.
-pub struct Begun {
+/// Where to send the browser to sign in at the provider, and the state it must bring back.
+pub struct ProviderRedirect {
     /// The provider's page to send the browser to.
     pub url: url::Url,
     /// The state the browser keeps until it comes back.
@@ -292,7 +292,7 @@ pub struct Begun {
 /// What the provider sends the browser back with.
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
-pub struct Return {
+pub struct CallbackQuery {
     pub code: Option<String>,
     pub state: Option<String>,
     /// The provider's refusal, such as `access_denied`.
