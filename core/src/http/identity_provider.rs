@@ -489,6 +489,35 @@ mod tests {
 
     #[sqlx::test]
     #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
+    async fn a_linked_agent_keeps_their_address_when_keycloak_has_not_verified_the_new_one(
+        db: PgPool,
+    ) {
+        let state = state(&db);
+        // Otto was linked with another address; Keycloak has not verified his current one.
+        let otto = agent(&db, "otto.old@example.com", "Otto").await;
+        sqlx::query("INSERT INTO agent_identities (issuer, subject, agent_id) VALUES ($1, $2, $3)")
+            .bind(ISSUER)
+            .bind("6f1c2a0e-8d3b-4c55-9a41-0b7e2d6f3a02")
+            .bind(otto)
+            .execute(&db)
+            .await
+            .unwrap();
+        let answer = sign_in_as(&state, "otto").await;
+        assert_eq!(answer.location, "/");
+        let (name, email): (String, String) =
+            sqlx::query_as("SELECT name, email FROM agents WHERE id = $1")
+                .bind(otto)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(
+            (name.as_str(), email.as_str()),
+            ("Otto Vale", "otto.old@example.com")
+        );
+    }
+
+    #[sqlx::test]
+    #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
     async fn an_email_of_another_agent_is_refused_at_keycloak_sign_in(db: PgPool) {
         let state = state(&db);
         // Lena is linked; her address at Keycloak is now Sam's agent's.
