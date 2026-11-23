@@ -39,10 +39,16 @@ pub struct AnnouncementRecipient {
     pub gave_up: bool,
 }
 
-/// The customers an announcement from the ticket goes to, by id: those of its children.
+/// The customers an announcement from the ticket goes to, each once, by id: those of its children
+/// and those that use the services it links.
 async fn affected_customers(tx: &mut Transaction<'_, Postgres>, ticket: Uuid) -> Result<Vec<Uuid>> {
     Ok(sqlx::query_scalar(
-        "SELECT DISTINCT customer_id FROM tickets WHERE parent_id = $1 ORDER BY customer_id",
+        "SELECT customer_id FROM tickets WHERE parent_id = $1
+         UNION
+         SELECT cs.customer_id FROM ticket_services ts
+         JOIN customer_services cs ON cs.service_id = ts.service_id
+         WHERE ts.ticket_id = $1
+         ORDER BY customer_id",
     )
     .bind(ticket)
     .fetch_all(&mut **tx)
@@ -263,5 +269,76 @@ mod tests {
         assert_eq!(listed[0].body, "Mail is down; we are on it.");
         assert_eq!(listed[0].author_name, "marco");
         assert_eq!(to_whom(&listed[0]), to_whom(&sent));
+    }
+
+    /// An announcement also goes to the key requesters of the customers that use the services the
+    /// parent links, the help desk's own organization among them; each person gets one message,
+    /// however many children their customer has and whether it also uses the services.
+    #[sqlx::test]
+    async fn an_announcement_goes_to_the_users_of_the_parents_services_each_person_once(
+        db: PgPool,
+    ) {
+        let own = testing::help_desk(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let delta = testing::customer(&db, "Delta Works").await;
+        let echo = testing::customer(&db, "Echo Farms").await;
+        let mail = crate::catalog::create_service(&db, "Hosted mail", "")
+            .await
+            .unwrap();
+        let backup = crate::catalog::create_service(&db, "Backup", "")
+            .await
+            .unwrap();
+        for (service, customer) in [(mail, brightfield), (mail, delta), (backup, echo)] {
+            crate::catalog::use_service(&db, service, customer)
+                .await
+                .unwrap();
+        }
+        let mut people = Vec::new();
+        for (customer, address) in [
+            (own, "sara@northgate.test"),
+            (brightfield, "ada@brightfield.test"),
+            (delta, "nora@delta.test"),
+            (echo, "eva@echo.test"),
+        ] {
+            let key = testing::requester(&db, customer, address).await;
+            crate::key_requesters::mark(&db, key, None).await.unwrap();
+            people.push(key);
+        }
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
+        crate::catalog::link_service(&db, outage, mail, true)
+            .await
+            .unwrap();
+        for id in ["a1@brightfield.test", "a2@brightfield.test"] {
+            let child = testing::ticket(&db, brightfield, None, id).await;
+            attach(&db, child, outage).await.unwrap();
+        }
+
+        let sent = send(&db, &testing::sender(), outage, agent, "Mail is back.")
+            .await
+            .unwrap();
+        assert_eq!(
+            to_whom(&sent),
+            [
+                ("Brightfield", "ada@brightfield.test"),
+                ("Delta Works", "nora@delta.test"),
+                ("Northgate", "sara@northgate.test")
+            ]
+        );
+        let queued: Vec<String> = sqlx::query_scalar(
+            "SELECT to_address FROM messages WHERE direction = 'outbound' ORDER BY to_address",
+        )
+        .fetch_all(&db)
+        .await
+        .unwrap();
+        assert_eq!(
+            queued,
+            [
+                "ada@brightfield.test",
+                "nora@delta.test",
+                "sara@northgate.test"
+            ],
+            "one message each"
+        );
     }
 }
