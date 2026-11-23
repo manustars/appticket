@@ -8,6 +8,7 @@ use sqlx::{Acquire, PgPool, Postgres, Transaction};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::catalog::AssetKey;
 use crate::customers::CustomerDetails;
 use crate::error::{Error, Result, rule};
 use crate::requesters::RequesterDetails;
@@ -1446,7 +1447,8 @@ async fn recognised_asset(
     let mut found = None;
     if let Some(serial_number) = serial_number {
         let assets =
-            crate::catalog::assets_with_serial_number(&mut **tx, customer, serial_number).await?;
+            crate::catalog::assets_by(&mut **tx, customer, AssetKey::SerialNumber, serial_number)
+                .await?;
         found = one_of(
             tx,
             customer,
@@ -1461,7 +1463,7 @@ async fn recognised_asset(
     if found.is_none()
         && let Some(name) = name
     {
-        let assets = crate::catalog::assets_named(&mut **tx, customer, name).await?;
+        let assets = crate::catalog::assets_by(&mut **tx, customer, AssetKey::Name, name).await?;
         found = one_of(tx, customer, assets, "are named", name).await?;
         by_name = true;
     }
