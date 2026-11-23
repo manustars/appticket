@@ -308,9 +308,12 @@ impl<'a> Outgoing<'a> {
         .execute(&mut **tx)
         .await;
         match queued {
+            // The check_violation the trigger raises on messages, and no other.
             Err(sqlx::Error::Database(e))
-                if e.message()
-                    .contains("a message goes to the ticket's requester or to a key requester") =>
+                if e.code().as_deref() == Some("23514")
+                    && e.message().contains(
+                        "a message goes to the ticket's requester or to a key requester",
+                    ) =>
             {
                 rule(format!(
                     "{to} is no longer the ticket's requester or a key requester of its customer; reload and try again"
@@ -412,7 +415,8 @@ pub async fn move_to_customer(
     requester: RequesterMove,
 ) -> Result<Moved> {
     let mut tx = db.begin().await?;
-    // Read before any lock: locks are taken customers first, then requesters, then tickets.
+    // Read before any lock: locks are taken customers first, then requesters, then key
+    // requesters, then tickets.
     let (ticket_id, state, current, requester_id): (Uuid, TicketState, Uuid, Option<Uuid>) =
         sqlx::query_as(
             "SELECT id, state, customer_id, requester_id FROM tickets WHERE number = $1",

@@ -210,8 +210,11 @@ pub async fn submit(
                         return rule("a draft reply cannot be empty");
                     }
                     // Without a requester, a reply goes to the customer's key requesters.
+                    // A proposal sends nothing, so the key requesters are read, not locked.
                     if !has_requester {
-                        crate::key_requesters::to_reply_to(&mut tx, customer).await?;
+                        crate::key_requesters::someone_to_reply_to(
+                            crate::key_requesters::of_customer(&mut *tx, customer).await?,
+                        )?;
                     }
                 }
                 Content::Priority { .. } | Content::Triage(_) => {}
