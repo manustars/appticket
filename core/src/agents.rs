@@ -423,16 +423,10 @@ async fn ways_to_sign_in(
 }
 
 /// Unlinks the agent's identities, which ends the sessions they opened through the identity
-/// provider. `provider` is the issuer of the identity provider configured now, if any. Refused
-/// when the agent would be left without a way to sign in: they need a local password, or a
-/// configured identity provider where they link again by verified e-mail at their next sign-in.
-pub async fn unlink_identity(
-    db: &PgPool,
-    by: &Grant,
-    actor: Uuid,
-    agent: Uuid,
-    provider: Option<&str>,
-) -> Result<()> {
+/// provider. Refused unless the agent has a local password: linking again at their next sign-in
+/// needs the provider to vouch for their e-mail and the authorized group to let them in, so
+/// without a password they could be left with no way to sign in.
+pub async fn unlink_identity(db: &PgPool, by: &Grant, actor: Uuid, agent: Uuid) -> Result<()> {
     by.require(Permission::ManageAgents)?;
     not_oneself(actor, agent)?;
     let mut tx = db.begin().await?;
@@ -441,10 +435,10 @@ pub async fn unlink_identity(
     if issuers.is_empty() {
         return rule("this agent has no identity of an identity provider linked to them");
     }
-    if !has_local_password && provider.is_none() {
+    if !has_local_password {
         return rule(
-            "this agent has no local password and no identity provider is configured: unlinked, \
-             they could not sign in at all: give them a password first",
+            "this agent has no local password: unlinked, they might not be able to sign in at \
+             all: reset their password first",
         );
     }
     // The database ends the sessions opened through the identity provider (migration 0030).
@@ -912,14 +906,14 @@ mod tests {
     #[sqlx::test]
     async fn unlinking_an_identity_ends_the_sessions_opened_through_it(db: PgPool) {
         let (ada, lena, with_password, through) = lena_signed_in_both_ways(&db).await;
-        unlink_identity(&db, &Grant::command_line(), ada, lena, Some(ISSUER))
+        unlink_identity(&db, &Grant::command_line(), ada, lena)
             .await
             .unwrap();
         assert!(!works(&db, &through).await);
         assert!(works(&db, &with_password).await);
         assert!(!listed(&list(&db).await.unwrap(), lena).has_linked_identity);
         assert!(matches!(
-            unlink_identity(&db, &Grant::command_line(), ada, lena, Some(ISSUER)).await,
+            unlink_identity(&db, &Grant::command_line(), ada, lena).await,
             Err(Error::Rule(_))
         ));
     }
@@ -945,10 +939,9 @@ mod tests {
         ));
     }
 
-    /// Neither change may leave the agent without a way to sign in that works now: a local
-    /// password needs an identity linked at the identity provider configured now to be removed,
-    /// and an identity is unlinked from an agent without a local password only while an identity
-    /// provider is configured, where they link again by verified e-mail.
+    /// Neither change may leave the agent without a sure way to sign in: a local password needs
+    /// an identity linked at the identity provider configured now to be removed, and an identity
+    /// needs a local password to be unlinked, since linking again depends on the provider.
     #[sqlx::test]
     async fn an_agent_keeps_a_way_to_sign_in(db: PgPool) {
         let cli = Grant::command_line();
@@ -972,13 +965,16 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            unlink_identity(&db, &cli, ada, lena, None).await,
+            unlink_identity(&db, &cli, ada, lena).await,
             Err(Error::Rule(_))
         ));
-        unlink_identity(&db, &cli, ada, lena, elsewhere)
+        assert!(listed(&list(&db).await.unwrap(), lena).has_linked_identity);
+        // With a password again, she can be unlinked; she links again by her verified address at
+        // her next sign-in.
+        reset_password(&db, &cli, lena, Some("lena's new password"))
             .await
             .unwrap();
-        // Linked again by her verified address at her next sign-in.
+        unlink_identity(&db, &cli, ada, lena).await.unwrap();
         through_provider(&db, "sub-lena", "lena.marsh@example.com").await;
         assert!(listed(&list(&db).await.unwrap(), lena).has_linked_identity);
     }
@@ -1012,7 +1008,7 @@ mod tests {
 
         // Lena's role, the default, allows replying, which the manager does not hold.
         assert!(matches!(
-            unlink_identity(&db, &manager, manager_id, lena, Some(ISSUER)).await,
+            unlink_identity(&db, &manager, manager_id, lena).await,
             Err(Error::Forbidden(_))
         ));
         assert!(matches!(
@@ -1021,20 +1017,29 @@ mod tests {
         ));
         let worker = grant(&[Permission::WorkTickets]);
         assert!(matches!(
-            unlink_identity(&db, &worker, manager_id, piet, Some(ISSUER)).await,
+            unlink_identity(&db, &worker, manager_id, piet).await,
             Err(Error::Forbidden(_))
         ));
         assert!(matches!(
             remove_local_password(&db, &worker, manager_id, piet, Some(ISSUER)).await,
             Err(Error::Forbidden(_))
         ));
+        // Only an Administrator acts on an Administrator.
         assert!(matches!(
-            unlink_identity(&db, &cli, ada, Uuid::new_v4(), Some(ISSUER)).await,
+            unlink_identity(&db, &manager, manager_id, ada).await,
+            Err(Error::Forbidden(_))
+        ));
+        assert!(matches!(
+            remove_local_password(&db, &manager, manager_id, ada, Some(ISSUER)).await,
+            Err(Error::Forbidden(_))
+        ));
+        assert!(matches!(
+            unlink_identity(&db, &cli, ada, Uuid::new_v4()).await,
             Err(Error::NotFound(_))
         ));
         // Not on oneself: another agent who manages agents does it.
         assert!(matches!(
-            unlink_identity(&db, &cli, lena, lena, Some(ISSUER)).await,
+            unlink_identity(&db, &cli, lena, lena).await,
             Err(Error::Rule(_))
         ));
         assert!(matches!(
@@ -1048,11 +1053,11 @@ mod tests {
         reset_password(&db, &manager, piet, Some("piet's new password"))
             .await
             .unwrap();
-        unlink_identity(&db, &manager, manager_id, piet, Some(ISSUER))
+        unlink_identity(&db, &manager, manager_id, piet)
             .await
             .unwrap();
         assert!(matches!(
-            unlink_identity(&db, &cli, ada, lena, Some(ISSUER)).await,
+            unlink_identity(&db, &cli, ada, lena).await,
             Ok(())
         ));
     }

@@ -58,7 +58,7 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
   services, parent and child tickets, taking a ticket for oneself), reply to requesters, open
   tickets by hand, assign tickets to others, move tickets to another customer, sort the inbox,
   manage customers, manage the catalog (assets and services), manage agents, manage roles, manage
-  add-ons, and view the state of the mail. The help desk defines the roles.
+  add-ons, and view the state of the mail and of signing in. The help desk defines the roles.
 - Managing customers covers their sites, external references, requesters and key requesters;
   managing the catalog covers asset kinds and every detail of an asset, its holder included.
 - Permissions apply to every customer.
@@ -124,8 +124,11 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   not the address's. The account is what was typed in, trimmed and in lower case, whether or not
   an agent has it; an IPv6 address counts by its /64 network.
 - Unlinking an agent's identity or removing their local password follows the rules for acting on
-  an agent above. Unlinking ends the sessions opened through the identity provider; removing the
-  local password ends the sessions opened with it.
+  an agent above, and is done by another agent: nobody changes how they sign in themselves.
+  Neither leaves an agent without a sure way to sign in: an identity is unlinked only from an
+  agent with a local password, and a local password is removed only from an agent linked to the
+  identity provider configured now. Unlinking ends the sessions opened through the identity
+  provider; removing the local password ends the sessions opened with it.
 
 ## Tickets
 

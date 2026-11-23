@@ -2457,14 +2457,8 @@ async fn the_sign_in_page_offers_the_identity_provider_only_when_configured(db: 
 /// The core of `db` with an identity provider configured at `issuer`, never asked here.
 pub fn with_identity_provider(db: &PgPool, issuer: &str) -> AppState {
     let settings = crate::oidc::Settings {
-        issuer: Some(issuer.to_owned()),
-        client_id: Some("helpdesk".to_owned()),
-        client_secret: Some("invented-secret".to_owned()),
-        client_secret_file: None,
         label: Some("Northgate".to_owned()),
-        session_hours: 12,
-        authorized_group: None,
-        group_claim: "groups".to_owned(),
+        ..crate::oidc::keycloak::settings(issuer, "helpdesk", "invented-secret")
     };
     let config = crate::oidc::Config::from_settings(settings, Some("https://helpdesk.example.com"))
         .unwrap()
@@ -2536,27 +2530,35 @@ async fn sign_in_is_administered_through_the_api(db: PgPool) {
     let (status, json) = admin
         .call(
             "DELETE",
-            &format!("/api/admin/agents/{lena}/password"),
-            None,
-        )
-        .await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
-    assert!(!works(with_password).await);
-    assert!(works(through.clone()).await);
-    assert_eq!(lena_listed().await["has_local_password"], false);
-
-    let (status, json) = admin
-        .call(
-            "DELETE",
             &format!("/api/admin/agents/{lena}/identity"),
             None,
         )
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
     assert!(!works(through).await);
+    assert!(works(with_password.clone()).await);
     assert_eq!(lena_listed().await["has_linked_identity"], false);
 
-    // Neither is there any more; and nobody changes how they sign in themselves.
+    // Linked again at her next sign-in, by her verified address.
+    let through = crate::identities::sign_in(&db, &at_provider, time::Duration::hours(12))
+        .await
+        .unwrap()
+        .unwrap()
+        .token;
+    let (status, json) = admin
+        .call(
+            "DELETE",
+            &format!("/api/admin/agents/{lena}/password"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    assert!(!works(with_password).await);
+    assert!(works(through).await);
+    assert_eq!(lena_listed().await["has_local_password"], false);
+
+    // No password to remove any more, and no identity unlinked from an agent without one; and
+    // nobody changes how they sign in themselves.
     for what in ["password", "identity"] {
         let (status, json) = admin
             .call("DELETE", &format!("/api/admin/agents/{lena}/{what}"), None)

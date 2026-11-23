@@ -236,8 +236,8 @@ export interface paths {
         post?: never;
         /**
          * Unlinks the agent's identity and ends the sessions opened through the identity provider; at
-         *     their next sign-in there, they are linked again by verified e-mail. Refused when they would be
-         *     left without a way to sign in, and for one's own.
+         *     their next sign-in there, they are linked again by verified e-mail. Refused for an agent
+         *     without a local password, and for one's own.
          */
         delete: operations["unlink_identity"];
         options?: never;
