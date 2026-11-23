@@ -143,7 +143,7 @@ pub async fn send(
     .execute(&mut *tx)
     .await?;
     for (customer, key) in &keys {
-        sqlx::query(
+        let recorded = sqlx::query(
             "INSERT INTO announcement_recipients
                  (announcement_id, requester_id, customer_id, name, address)
              VALUES ($1, $2, $3, $4, $5)",
@@ -154,7 +154,23 @@ pub async fn send(
         .bind(&key.name)
         .bind(&key.contact_address)
         .execute(&mut *tx)
-        .await?;
+        .await;
+        match recorded {
+            // The check_violation the trigger raises on recipients, and no other: a child detached
+            // or a customer that stopped using a service meanwhile.
+            Err(sqlx::Error::Database(e))
+                if e.code().as_deref() == Some("23514")
+                    && e.message()
+                        .contains("an announcement goes to a key requester") =>
+            {
+                return rule(format!(
+                    "{} is no longer a key requester of a customer the failure affects; reload and try again",
+                    key.contact_address
+                ));
+            }
+            Err(e) => return Err(e.into()),
+            Ok(_) => {}
+        }
         sqlx::query(
             "INSERT INTO messages (id, ticket_id, direction, rfc_message_id, from_address,
                                    from_name, to_address, author_id, subject, body_text,
