@@ -241,7 +241,10 @@ It reads the provider's configuration and keys from `<issuer>/.well-known/openid
 as a sign-in does, then asks the provider's token endpoint, with the client id and secret, to
 exchange a code the provider never issued. A provider that accepts the client refuses only the
 code (`invalid_grant`), and the check passes; the provider may log that refusal as a failed
-sign-in. The check fails, exits with 1 and says which of these it found:
+sign-in. This relies on the provider checking the client before the code, as Keycloak does; it
+has been tried against Keycloak only, and a provider that checks the code first would refuse it
+the same way whatever the secret, so with another provider a passed check is confirmed by
+signing in once. The check fails, exits with 1 and says which of these it found:
 
 - the provider cannot be reached at the issuer (the reason follows: connection refused, a name
   that does not resolve, a timeout, a certificate the core does not trust);
