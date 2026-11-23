@@ -71,6 +71,12 @@ pub(crate) async fn to_reply_to(
         .into_iter()
         .map(|(_, key)| key)
         .collect();
+    someone_to_reply_to(keys)
+}
+
+/// `keys`, the key requesters of the customer of a ticket without a requester, when there is one
+/// to reply to; refused otherwise.
+pub(crate) fn someone_to_reply_to(keys: Vec<KeyRequester>) -> Result<Vec<KeyRequester>> {
     if keys.is_empty() {
         return rule(
             "the ticket has no requester and its customer has no key requesters: there is nobody to reply to",
@@ -302,6 +308,44 @@ mod tests {
         writing.commit().await.unwrap();
         unmarking.await.unwrap().unwrap();
         assert_eq!(contacts(&db, brightfield).await, [(lena, None)]);
+    }
+
+    /// Key requesters are locked before tickets on every path. Resolving a parent's children holds
+    /// the key requesters, then locks the children; moving a child with its requester, a key
+    /// requester, waits for the key requester before it locks the child, so the two never wait
+    /// for each other.
+    #[sqlx::test]
+    async fn moving_a_key_requester_with_a_ticket_waits_before_the_ticket(db: PgPool) {
+        use crate::tickets::{self, RequesterMove};
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        mark(&db, lena, None).await.unwrap();
+        let hers = testing::ticket(&db, brightfield, Some(lena), "l1@brightfield.test").await;
+
+        // As resolving the children does: the key requesters first, then the tickets.
+        let mut resolving = db.begin().await.unwrap();
+        locked_of_customers(&mut resolving, &[brightfield])
+            .await
+            .unwrap();
+        let moving = tokio::spawn({
+            let db = db.clone();
+            async move { tickets::move_to_customer(&db, hers, harbor, RequesterMove::Move).await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(!moving.is_finished(), "moved while being written to");
+        sqlx::query("SET LOCAL lock_timeout = '3s'")
+            .execute(&mut *resolving)
+            .await
+            .unwrap();
+        sqlx::query("SELECT 1 FROM tickets WHERE number = $1 FOR UPDATE")
+            .bind(hers)
+            .execute(&mut *resolving)
+            .await
+            .expect("the ticket was locked by the move, which waits for the key requester");
+        resolving.commit().await.unwrap();
+        moving.await.unwrap().unwrap();
+        assert_eq!(contacts(&db, harbor).await, [(lena, None)]);
     }
 
     /// Merging a key requester into another leaves the one that remains a key requester: written

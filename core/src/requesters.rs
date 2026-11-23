@@ -484,8 +484,9 @@ pub async fn move_to_customer(
 }
 
 /// Locks what moving `requester` to `customer` changes, in the order every change to requesters
-/// and tickets follows (customers, then requesters, then tickets): both customers, by id, which
-/// must exist and not be offboarded, then the requester. Returns the requester's customer.
+/// and tickets follows (customers, then requesters, then key requesters, then tickets): both
+/// customers, by id, which must exist and not be offboarded, then the requester, then their row as
+/// a key requester, if any. Returns the requester's customer.
 pub(crate) async fn lock_for_move(
     tx: &mut Transaction<'_, Postgres>,
     requester: Uuid,
@@ -510,6 +511,11 @@ pub(crate) async fn lock_for_move(
     if now != Some(current) {
         return rule("the requester has just changed; reload and try again");
     }
+    // A key requester stops being one when moved; their row is taken now, before any ticket.
+    sqlx::query("SELECT 1 FROM key_requesters WHERE requester_id = $1 FOR UPDATE")
+        .bind(requester)
+        .execute(&mut **tx)
+        .await?;
     Ok(current)
 }
 
