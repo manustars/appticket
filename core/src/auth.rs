@@ -51,7 +51,8 @@ pub async fn open_session(
     .bind(opened_with.as_str())
     .bind(lifetime.as_seconds_f64())
     .execute(db)
-    .await?;
+    .await
+    .map_err(crate::local_sign_in::refused_when_off)?;
     Ok(token)
 }
 
@@ -194,6 +195,32 @@ pub(crate) mod tests {
         assert_eq!(
             stored_session(&db, &token).await,
             ("password".to_owned(), 14.0 * 24.0)
+        );
+    }
+
+    /// A sign-in whose password is checked as local sign-in goes off opens no session, and says
+    /// why rather than failing.
+    #[sqlx::test]
+    async fn a_local_password_opens_no_session_once_local_sign_in_is_off(db: PgPool) {
+        crate::agents::add(
+            &db,
+            &Grant::command_line(),
+            "ada@helpdesk.test",
+            "Ada",
+            None,
+            Some("ada's password"),
+        )
+        .await
+        .unwrap();
+        // As the switch does, between the core's look at the setting and the session.
+        sqlx::query("UPDATE installation_settings SET local_sign_in = false")
+            .execute(&db)
+            .await
+            .unwrap();
+        let refused = sign_in(&db, "ada@helpdesk.test", "ada's password").await;
+        assert!(
+            matches!(&refused, Err(e) if e.is::<crate::local_sign_in::Off>()),
+            "{refused:?}"
         );
     }
 }

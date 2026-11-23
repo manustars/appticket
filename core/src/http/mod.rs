@@ -341,6 +341,9 @@ async fn current_session(agent: SignedIn) -> Json<Agent> {
 struct SignInOptions {
     /// The identity provider's button, when one is configured.
     identity_provider: Option<IdentityProviderButton>,
+    /// Whether agents can sign in with a local password; when not, the page offers the identity
+    /// provider only.
+    local_sign_in: bool,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -352,14 +355,15 @@ struct IdentityProviderButton {
 /// How agents can sign in; asked before anyone is signed in.
 #[utoipa::path(get, path = "/api/session/options", tag = "session",
     responses((status = OK, body = SignInOptions)))]
-async fn sign_in_options(State(state): State<AppState>) -> Json<SignInOptions> {
-    Json(SignInOptions {
+async fn sign_in_options(State(state): State<AppState>) -> Result<Json<SignInOptions>, ApiError> {
+    Ok(Json(SignInOptions {
         identity_provider: state.identity_provider.as_ref().map(|provider| {
             IdentityProviderButton {
                 label: provider.label().to_owned(),
             }
         }),
-    })
+        local_sign_in: crate::local_sign_in::is_on(&state.db).await?,
+    }))
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -391,9 +395,11 @@ async fn change_password(
 /// Signs an agent in and sets the session cookie.
 ///
 /// Repeated failures for the e-mail or from the same address are slowed, then refused for a
-/// while (`Retry-After` says how long) without the password being checked.
+/// while (`Retry-After` says how long) without the password being checked. While local sign-in is
+/// off every attempt is refused before anything is checked, the same way for every account.
 #[utoipa::path(post, path = "/api/session", tag = "session", request_body = SignInRequest,
     responses((status = NO_CONTENT), (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, body = Problem, description = "Local sign-in is off"),
         (status = TOO_MANY_REQUESTS, body = Problem,
             headers(("Retry-After" = u64, description = "Seconds until attempts are accepted again")))))]
 async fn sign_in(
@@ -402,18 +408,32 @@ async fn sign_in(
     jar: CookieJar,
     Json(request): Json<SignInRequest>,
 ) -> Result<(CookieJar, StatusCode), ApiError> {
+    // Before the limits: nothing is guessed, so nothing is counted.
+    if !crate::local_sign_in::is_on(&state.db).await? {
+        return Err(local_sign_in_off());
+    }
     let check = auth::sign_in(&state.db, &request.email, &request.password);
     let token = match state
         .sign_in_limits
         .guard(&state.db, &request.email, address, check)
-        .await?
+        .await
     {
-        Guarded::Passed(token) => token,
-        Guarded::Failed => return Err(ApiError::Unauthorized),
-        Guarded::Refused { retry_after } => return Err(ApiError::TooManySignIns { retry_after }),
+        Ok(Guarded::Passed(token)) => token,
+        Ok(Guarded::Failed) => return Err(ApiError::Unauthorized),
+        Ok(Guarded::Refused { retry_after }) => {
+            return Err(ApiError::TooManySignIns { retry_after });
+        }
+        // Switched off while the password was being checked.
+        Err(error) if error.is::<crate::local_sign_in::Off>() => return Err(local_sign_in_off()),
+        Err(error) => return Err(error.into()),
     };
     let cookie = session_cookie(token, time::Duration::days(SESSION_DAYS.into()));
     Ok((jar.add(cookie), StatusCode::NO_CONTENT))
+}
+
+/// The answer to every local sign-in while local sign-in is off.
+fn local_sign_in_off() -> ApiError {
+    ApiError::Forbidden("local sign-in is off: sign in through the identity provider".to_owned())
 }
 
 /// The cookie that carries a session's token, for as long as the session lasts.
