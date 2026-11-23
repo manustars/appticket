@@ -737,7 +737,8 @@ async fn only_valid_and_useful_parts_are_proposed() {
             .is_empty()
     );
 
-    // No requester to reply to; or the help desk wrote last.
+    // No requester, whose language a draft would be in (its replies go to key requesters); or the
+    // help desk wrote last.
     w.answer(claude(ticket_answer(None, &[], Some(DRAFT))));
     w.answer(claude(ticket_answer(None, &[], Some(DRAFT))));
     assert!(

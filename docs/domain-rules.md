@@ -145,8 +145,9 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   identified with the wrong customer, so all of the requester's tickets move with them, closed ones
   included. No ticket is ever left breaking the rules above.
 - A parent ticket belongs to the help desk's own organization; its children keep their own customer
-  and requester. Resolving the children of a parent sends one message to each child's requester and
-  resolves every child that is open or waiting; the parent itself is resolved separately. Before
+  and requester. Resolving the children of a parent sends a message to each child's requester and to
+  the key requesters of each child's customer, each person once, and resolves every child that is
+  open or waiting; the parent itself is resolved separately. Before
   that, at any time and as often as needed, an agent who can reply to requesters sends an
   announcement from a parent that is not closed: it goes to the key requesters of its children's
   customers and of the customers that use the services the parent links. This is

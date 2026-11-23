@@ -110,11 +110,13 @@ conversation with its requester.
 _Avoid_: Mail, e-mail
 
 **Reply**:
-A message an agent writes to the requester of a ticket; it is sent through the outbox.
+A message an agent writes to the requester of a ticket, or to the key requesters of its customer
+on a ticket without one; it is sent through the outbox.
 _Avoid_: Answer, response
 
 **Outbox**:
-Where a reply an agent has written waits until it is sent to the requester.
+Where a reply an agent has written waits until it is sent to the requester, or to the key
+requesters.
 _Avoid_: Queue, spool
 
 **Inbox**:
