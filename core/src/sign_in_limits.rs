@@ -229,8 +229,17 @@ enum Reserved {
 
 /// The account an attempt counts for: what was typed in, trimmed and in lower case, as agents
 /// are looked up by their e-mail.
+/// Longer than any e-mail, it is kept as its SHA-256, which fits the table's index.
 fn account_key(account: &str) -> String {
-    account.trim().to_lowercase()
+    let account = account.trim().to_lowercase();
+    if account.len() <= 254 {
+        return account;
+    }
+    use sha2::Digest;
+    format!(
+        "sha256:{}",
+        hex::encode(sha2::Sha256::digest(account.as_bytes()))
+    )
 }
 
 /// The address an attempt counts for: an IPv4 address (also when mapped into IPv6), or the /64
@@ -419,6 +428,29 @@ mod tests {
         }
         assert!(matches!(
             wrong(&db, &limits, "bo@example.com", "::ffff:203.0.113.7").await,
+            Guarded::Refused { .. }
+        ));
+    }
+
+    /// Whatever is typed in as the e-mail, however long, is counted like any other account.
+    #[sqlx::test]
+    async fn an_overlong_account_is_counted_too(db: PgPool) {
+        let limits = SignInLimits::for_tests(1, 15 * MINUTE);
+        // Text that does not compress, as a repeated one would.
+        let mut seed: u32 = 27;
+        let noise: String = (0..9000)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                char::from(b'a' + ((seed >> 16) % 26) as u8)
+            })
+            .collect();
+        let long = format!("{noise}@Example.com");
+        for n in 1..=5 {
+            let from = format!("203.0.113.{n}");
+            assert_eq!(wrong(&db, &limits, &long, &from).await, Guarded::Failed);
+        }
+        assert!(matches!(
+            wrong(&db, &limits, &long.to_lowercase(), "198.51.100.4").await,
             Guarded::Refused { .. }
         ));
     }
