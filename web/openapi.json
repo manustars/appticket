@@ -570,6 +570,76 @@
         }
       }
     },
+    "/api/admin/agents/{id}": {
+      "put": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Changes an agent's e-mail and name; refused for an agent linked to the identity provider,\nwhich they come from.",
+        "operationId": "edit_agent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The agent",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentDetails"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/agents/{id}/deactivate": {
       "post": {
         "tags": [
@@ -3981,6 +4051,110 @@
         }
       }
     },
+    "/api/session/identity-provider": {
+      "get": {
+        "tags": [
+          "session"
+        ],
+        "summary": "Sends the browser to the identity provider to sign in; it comes back to the callback.",
+        "operationId": "begin",
+        "responses": {
+          "303": {
+            "description": "To the identity provider, or back to the sign-in page with `sign_in_error=failed` when it cannot be reached"
+          },
+          "404": {
+            "description": "No identity provider is configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/session/identity-provider/callback": {
+      "get": {
+        "tags": [
+          "session"
+        ],
+        "summary": "Where the identity provider sends the browser back: opens the product's session and goes to\nthe help desk, or back to the sign-in page with `sign_in_error` saying why not:\n`email_of_another_agent`, `email_not_verified`, `not_an_agent`, `deactivated` or `failed`.",
+        "operationId": "callback",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "state",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "error",
+            "in": "path",
+            "description": "The provider's refusal, such as `access_denied`.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "To the help desk, signed in, or to the sign-in page with the reason"
+          },
+          "404": {
+            "description": "No identity provider is configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/session/options": {
+      "get": {
+        "tags": [
+          "session"
+        ],
+        "summary": "How agents can sign in; asked before anyone is signed in.",
+        "operationId": "sign_in_options",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInOptions"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/session/password": {
       "put": {
         "tags": [
@@ -5694,6 +5868,21 @@
           }
         }
       },
+      "AgentDetails": {
+        "type": "object",
+        "required": [
+          "email",
+          "name"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "AgentEntry": {
         "type": "object",
         "required": [
@@ -6601,6 +6790,18 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "IdentityProviderButton": {
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "What the button names: \"Sign in with <label>\"."
           }
         }
       },
@@ -8042,6 +8243,23 @@
             }
           }
         ]
+      },
+      "SignInOptions": {
+        "type": "object",
+        "description": "How agents can sign in, for the sign-in page.",
+        "properties": {
+          "identity_provider": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IdentityProviderButton",
+                "description": "The identity provider's button, when one is configured."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       },
       "SignInRequest": {
         "type": "object",
