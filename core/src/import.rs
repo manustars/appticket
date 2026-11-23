@@ -1,5 +1,5 @@
-//! Importing customers and their sites from CSV files. Rules are in docs/domain-rules.md
-//! ("Importing").
+//! Importing customers, their sites and their requesters from CSV files. Rules are in
+//! docs/domain-rules.md ("Importing").
 
 use std::collections::HashMap;
 
@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::customers::CustomerDetails;
 use crate::error::{Error, Result, rule};
+use crate::requesters::RequesterDetails;
 use crate::roles::{Grant, Permission};
 
 /// What a file of an import holds, one kind per file. Files are taken in this order, so that a
@@ -20,6 +21,7 @@ use crate::roles::{Grant, Permission};
 pub enum Kind {
     Customers,
     Sites,
+    Requesters,
 }
 
 impl Kind {
@@ -27,6 +29,7 @@ impl Kind {
         match self {
             Kind::Customers => "customers",
             Kind::Sites => "sites",
+            Kind::Requesters => "requesters",
         }
     }
 }
@@ -117,6 +120,20 @@ pub(crate) const SITE_COLUMNS: &[&str] = &[
     "address",
 ];
 
+/// The columns of a requesters file: the requester's customer, by name or by one of its external
+/// references, and the requester.
+pub(crate) const REQUESTER_COLUMNS: &[&str] = &[
+    "customer",
+    "customer_external_system",
+    "customer_external_name",
+    "email_addresses",
+    "name",
+    "phone_numbers",
+    "job_title",
+    "site",
+    "notes",
+];
+
 /// A file read: its columns and rows, and how it was written.
 struct Table {
     /// Where each known column is, by its name.
@@ -193,19 +210,53 @@ impl Table {
             (None, Some(system), Some(reference)) => format!("{reference} in {system}"),
             _ => String::new(),
         };
+        let of_customer = || {
+            customer(
+                "customer",
+                "customer_external_system",
+                "customer_external_name",
+            )
+        };
         match kind {
             Kind::Customers => customer("name", "external_system", "external_name"),
             Kind::Sites => format!(
                 "{} / {}",
-                customer(
-                    "customer",
-                    "customer_external_system",
-                    "customer_external_name"
-                ),
+                of_customer(),
                 self.cell(row, "name").unwrap_or_default()
             ),
+            // A requester by name and first address.
+            Kind::Requesters => {
+                let name = self.cell(row, "name");
+                let address = addresses_in(self.cell(row, "email_addresses"))
+                    .into_iter()
+                    .next();
+                let who = match (name, address) {
+                    (Some(name), Some(address)) => format!("{name} ({address})"),
+                    (name, address) => name.or(address).unwrap_or_default().to_owned(),
+                };
+                format!("{} / {who}", of_customer())
+            }
         }
     }
+}
+
+/// The addresses of a cell: separated by commas, semicolons, spaces or line ends, which an e-mail
+/// address does not contain.
+fn addresses_in(cell: Option<&str>) -> Vec<&str> {
+    cell.unwrap_or_default()
+        .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+        .filter(|a| !a.is_empty())
+        .collect()
+}
+
+/// The phone numbers of a cell: separated by semicolons or line ends, since a number can have
+/// spaces.
+fn phone_numbers_in(cell: Option<&str>) -> Vec<&str> {
+    cell.unwrap_or_default()
+        .split([';', '\n', '\r'])
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .collect()
 }
 
 /// The most rows a file of an import can have: an import runs in one transaction and one request,
@@ -235,6 +286,7 @@ fn read(kind: Kind, content: &[u8]) -> Result<Table> {
     let (known, required): (&[&str], &[&str]) = match kind {
         Kind::Customers => (CUSTOMER_COLUMNS, &["name"]),
         Kind::Sites => (SITE_COLUMNS, &["name", "address"]),
+        Kind::Requesters => (REQUESTER_COLUMNS, &["email_addresses"]),
     };
     let bom = content.starts_with(BOM);
     let content = content.strip_prefix(BOM).unwrap_or(content);
@@ -310,8 +362,8 @@ fn read(kind: Kind, content: &[u8]) -> Result<Table> {
             _ => {}
         }
     }
-    // A site's customer, by name or by external reference.
-    if kind == Kind::Sites
+    // A site's or a requester's customer, by name or by external reference.
+    if matches!(kind, Kind::Sites | Kind::Requesters)
         && !columns.contains_key("customer")
         && !columns.contains_key("customer_external_system")
         && !columns.contains_key("customer_external_name")
@@ -430,6 +482,7 @@ pub async fn run(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -
                     customer_row(&mut savepoint, table, row, &mut so_far, &mut candidates).await
                 }
                 Kind::Sites => site_row(&mut savepoint, table, row, &mut so_far).await,
+                Kind::Requesters => requester_row(&mut savepoint, table, row, &mut so_far).await,
             };
             let (outcome, changes, reason) = match left_out(done)? {
                 Ok(done) => {
@@ -508,6 +561,8 @@ struct SoFar {
     customers: HashMap<Uuid, u64>,
     /// The sites imported, with the line of the row that did.
     sites: HashMap<Uuid, u64>,
+    /// The requesters imported, with the line of the row that did.
+    requesters: HashMap<Uuid, u64>,
     /// The customer rows left out, for the rows that name their customers.
     customers_left_out: Vec<CustomerLeftOut>,
     /// The customer rows imported.
@@ -825,11 +880,13 @@ async fn customer_row(
     })
 }
 
-/// The customer a site row names, which must exist: by external reference, else by name.
-async fn site_customer(
+/// The customer a site or requester row names, which must exist and be served: by external
+/// reference, else by name. `needs` says that the row needs one.
+async fn named_customer(
     tx: &mut Transaction<'_, Postgres>,
     table: &Table,
     row: &Row,
+    needs: &str,
 ) -> Result<Uuid> {
     let name = table.cell(row, "customer");
     let reference = reference(
@@ -839,7 +896,7 @@ async fn site_customer(
         "customer_external_name",
     )?;
     if name.is_none() && reference.is_none() {
-        return rule("a site needs its customer");
+        return rule(needs);
     }
     if let Some(reference) = &reference
         && named_by(tx, reference).await?.is_none()
@@ -879,7 +936,7 @@ async fn site_row(
     if let Some(line) = so_far.new_customer_left_out(table, row) {
         return waits(line);
     }
-    let customer = site_customer(tx, table, row).await?;
+    let customer = named_customer(tx, table, row, "a site needs its customer").await?;
     if let Some(line) = so_far.existing_customer_left_out(customer) {
         return waits(line);
     }
@@ -931,6 +988,216 @@ async fn site_row(
         crate::sites::update_in(tx, id, name, address).await?;
     }
     so_far.sites.insert(id, row.line);
+    Ok(Done::updated(changes))
+}
+
+/// The requester an address of a row belongs to.
+#[derive(sqlx::FromRow)]
+struct AddressOwner {
+    address: String,
+    requester_id: Uuid,
+    customer_id: Uuid,
+    customer_name: String,
+    departed: bool,
+}
+
+/// Who the addresses belong to, those that belong to someone, in their order; nothing is locked,
+/// so that a row that changes nothing waits for no one.
+async fn owners(
+    tx: &mut Transaction<'_, Postgres>,
+    addresses: &[String],
+) -> Result<Vec<AddressOwner>> {
+    Ok(sqlx::query_as(
+        "SELECT a.address, a.requester_id, r.customer_id, c.name AS customer_name,
+                r.departed_at IS NOT NULL AS departed
+         FROM requester_addresses a
+         JOIN requesters r ON r.id = a.requester_id
+         JOIN customers c ON c.id = r.customer_id
+         WHERE a.address = ANY($1)
+         ORDER BY array_position($1, a.address)",
+    )
+    .bind(addresses)
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
+/// The requester of `customer` a row is about, by the owners of its addresses; none for a new
+/// one. A row is about one requester of its customer who has not departed: an import moves,
+/// merges and brings back no one, and takes no address from anyone, not even from a requester
+/// who departed from another customer.
+fn recognised(customer: Uuid, owners: &[AddressOwner], so_far: &SoFar) -> Result<Option<Uuid>> {
+    if let Some(line) = owners
+        .iter()
+        .find_map(|o| so_far.requesters.get(&o.requester_id))
+    {
+        return rule(format!("line {line} already imports this requester"));
+    }
+    if let Some(other) = owners.iter().find(|o| o.customer_id != customer) {
+        let address = &other.address;
+        let customer = &other.customer_name;
+        return rule(if other.departed {
+            format!(
+                "the address {address} belongs to a requester who departed from {customer}: \
+                 to give it to the requester they are now, add them on their customer's page; \
+                 an import takes no address from anyone"
+            )
+        } else {
+            format!(
+                "the address {address} already belongs to a requester of {customer}, and an \
+                 address belongs to one requester"
+            )
+        });
+    }
+    let Some(first) = owners.first() else {
+        return Ok(None);
+    };
+    if let Some(other) = owners.iter().find(|o| o.requester_id != first.requester_id) {
+        return rule(format!(
+            "the addresses {} and {} belong to two requesters: if they are one person, merge \
+             them on the page of the one that remains first; an import does not merge",
+            first.address, other.address
+        ));
+    }
+    if first.departed {
+        return rule(format!(
+            "the address {} belongs to a requester who has departed from {}: bring them back \
+             from their page first; an import does not",
+            first.address, first.customer_name
+        ));
+    }
+    Ok(Some(first.requester_id))
+}
+
+/// A requester's details as they are stored.
+async fn requester_details(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+) -> Result<RequesterDetails> {
+    let (name, phone_numbers, job_title, notes, site_id) = sqlx::query_as(
+        "SELECT name, phone_numbers, job_title, notes, site_id FROM requesters WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(RequesterDetails {
+        name,
+        phone_numbers,
+        job_title,
+        notes,
+        site_id,
+    })
+}
+
+/// The row's filled cells over a requester's details: phone numbers are added to theirs.
+fn requester_merged(
+    before: &RequesterDetails,
+    table: &Table,
+    row: &Row,
+    site: Option<Uuid>,
+) -> RequesterDetails {
+    let mut after = before.clone();
+    let cell = |column| table.cell(row, column).map(str::to_owned);
+    if let Some(name) = cell("name") {
+        after.name = Some(name);
+    }
+    for number in phone_numbers_in(table.cell(row, "phone_numbers")) {
+        if !after.phone_numbers.iter().any(|n| n == number) {
+            after.phone_numbers.push(number.to_owned());
+        }
+    }
+    if let Some(job_title) = cell("job_title") {
+        after.job_title = Some(job_title);
+    }
+    if site.is_some() {
+        after.site_id = site;
+    }
+    if let Some(notes) = cell("notes") {
+        after.notes = notes;
+    }
+    after
+}
+
+/// The columns whose values differ, in the file's order of columns.
+fn requester_changes(before: &RequesterDetails, after: &RequesterDetails) -> Vec<&'static str> {
+    [
+        ("name", before.name == after.name),
+        ("phone_numbers", before.phone_numbers == after.phone_numbers),
+        ("job_title", before.job_title == after.job_title),
+        ("site", before.site_id == after.site_id),
+        ("notes", before.notes == after.notes),
+    ]
+    .into_iter()
+    .filter(|(_, same)| !same)
+    .map(|(column, _)| column)
+    .collect()
+}
+
+/// The site a requester row names, by name within the requester's customer.
+async fn requester_site(
+    tx: &mut Transaction<'_, Postgres>,
+    table: &Table,
+    row: &Row,
+    customer: Uuid,
+) -> Result<Option<Uuid>> {
+    let Some(name) = table.cell(row, "site") else {
+        return Ok(None);
+    };
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM sites
+         WHERE customer_id = $1 AND lower(name) = lower($2) AND retired_at IS NULL",
+    )
+    .bind(customer)
+    .bind(name)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+async fn requester_row(
+    tx: &mut Transaction<'_, Postgres>,
+    table: &Table,
+    row: &Row,
+    so_far: &mut SoFar,
+) -> Result<Done> {
+    let customer = named_customer(tx, table, row, "a requester needs its customer").await?;
+    let mut addresses: Vec<String> = Vec::new();
+    for written in addresses_in(table.cell(row, "email_addresses")) {
+        let address = crate::requesters::clean_address(written)?;
+        if !addresses.contains(&address) {
+            addresses.push(address);
+        }
+    }
+    let owners = owners(tx, &addresses).await?;
+    let found = recognised(customer, &owners, so_far)?;
+    let site = requester_site(tx, table, row, customer).await?;
+    let new: Vec<&String> = addresses
+        .iter()
+        .filter(|a| !owners.iter().any(|o| o.address == **a))
+        .collect();
+    let Some(id) = found else {
+        crate::customers::lock_active(tx, customer).await?;
+        let id = crate::requesters::create_with_new_addresses(tx, customer, &addresses).await?;
+        let details = requester_merged(&RequesterDetails::default(), table, row, site);
+        crate::requesters::update_in(tx, id, &details).await?;
+        so_far.requesters.insert(id, row.line);
+        return Ok(Done::created());
+    };
+    let before = requester_details(tx, id).await?;
+    let mut changes = requester_changes(&before, &requester_merged(&before, table, row, site));
+    if !new.is_empty() {
+        changes.insert(0, "email_addresses");
+    }
+    // Only a requester that changes is written, and locked; their details are read again under
+    // the lock, so that a change made meanwhile is kept.
+    if !changes.is_empty() {
+        crate::requesters::lock_with_customer(tx, id).await?;
+        let before = requester_details(tx, id).await?;
+        for address in new {
+            crate::requesters::add_new_address_in(tx, id, address).await?;
+        }
+        let after = requester_merged(&before, table, row, site);
+        crate::requesters::update_in(tx, id, &after).await?;
+    }
+    so_far.requesters.insert(id, row.line);
     Ok(Done::updated(changes))
 }
 
@@ -1001,6 +1268,202 @@ mod tests {
             kind: Kind::Sites,
             content: csv.as_bytes().to_vec(),
         }
+    }
+
+    fn requesters(csv: &str) -> File {
+        File {
+            kind: Kind::Requesters,
+            content: csv.as_bytes().to_vec(),
+        }
+    }
+
+    /// The customer's requesters, as their pages show them.
+    async fn requesters_of(
+        db: &PgPool,
+        customer: Uuid,
+    ) -> Vec<crate::requesters::RequesterDetail> {
+        let mut shown = Vec::new();
+        for entry in crate::customers::detail(db, customer)
+            .await
+            .unwrap()
+            .requester_list
+        {
+            shown.push(crate::requesters::detail(db, entry.id).await.unwrap());
+        }
+        shown
+    }
+
+    /// A requester of the customer with these addresses and details.
+    async fn requester_with(
+        db: &PgPool,
+        customer: Uuid,
+        addresses: &[&str],
+        details: crate::requesters::RequesterDetails,
+    ) -> Uuid {
+        let id = crate::testing::requester(db, customer, addresses[0]).await;
+        for address in &addresses[1..] {
+            crate::requesters::add_address(db, id, address)
+                .await
+                .unwrap();
+        }
+        crate::requesters::update(db, id, &details).await.unwrap();
+        id
+    }
+
+    #[sqlx::test]
+    async fn requesters_are_created_and_updated_by_any_of_their_addresses(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let office = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let ada = requester_with(
+            &db,
+            brightfield,
+            &["ada@brightfield.test", "ada.ferrini@brightfield.test"],
+            crate::requesters::RequesterDetails {
+                name: Some("Ada Ferrini".into()),
+                phone_numbers: vec!["000 000 0100".into()],
+                job_title: Some("Accountant".into()),
+                notes: "Mornings only".into(),
+                site_id: None,
+            },
+        )
+        .await;
+        let file = "customer,email_addresses,name,phone_numbers,job_title,site,notes\n\
+            Brightfield,Ada.Ferrini@brightfield.test; a.ferrini@brightfield.test,,\
+            000 000 0101,,head office,\n\
+            Brightfield,\"bo@brightfield.test\nbo.vale@brightfield.test\",Bo Vale,\
+            000 000 0102;000 000 0103,Technician,,Ask for the lab key\n";
+
+        let preview = import(&db, vec![requesters(file)], Mode::Preview).await;
+        assert_eq!(
+            outcomes(&preview),
+            [[
+                (2, Outcome::Update, "Brightfield / Ada.Ferrini@brightfield.test"),
+                (3, Outcome::Create, "Brightfield / Bo Vale (bo@brightfield.test)"),
+            ]]
+        );
+        assert_eq!(
+            preview.files[0].rows[0].changes,
+            ["email_addresses", "phone_numbers", "site"]
+        );
+        assert_eq!(requesters_of(&db, brightfield).await.len(), 1);
+
+        import(&db, vec![requesters(file)], Mode::Apply).await;
+        let shown = crate::requesters::detail(&db, ada).await.unwrap();
+        assert_eq!(
+            shown.addresses,
+            [
+                "ada@brightfield.test",
+                "ada.ferrini@brightfield.test",
+                "a.ferrini@brightfield.test"
+            ],
+            "addresses are added, never taken away"
+        );
+        assert_eq!(
+            (
+                shown.name.as_deref(),
+                shown.phone_numbers.as_slice(),
+                shown.job_title.as_deref(),
+                shown.notes.as_str(),
+            ),
+            (
+                Some("Ada Ferrini"),
+                ["000 000 0100".to_owned(), "000 000 0101".to_owned()].as_slice(),
+                Some("Accountant"),
+                "Mornings only"
+            ),
+            "a filled cell sets a value, an empty one leaves it; phone numbers are added"
+        );
+        assert_eq!(shown.site.map(|s| s.id), Some(office));
+        let bo = requesters_of(&db, brightfield)
+            .await
+            .into_iter()
+            .find(|r| r.id != ada)
+            .unwrap();
+        assert_eq!(
+            (
+                bo.addresses.as_slice(),
+                bo.name.as_deref(),
+                bo.phone_numbers.as_slice(),
+                bo.job_title.as_deref(),
+                bo.notes.as_str(),
+                bo.site.is_none(),
+            ),
+            (
+                ["bo@brightfield.test".to_owned(), "bo.vale@brightfield.test".to_owned()]
+                    .as_slice(),
+                Some("Bo Vale"),
+                ["000 000 0102".to_owned(), "000 000 0103".to_owned()].as_slice(),
+                Some("Technician"),
+                "Ask for the lab key",
+                true
+            )
+        );
+    }
+
+    /// A row is about one requester of its customer who has not departed: an import moves,
+    /// merges and brings back no one, and takes no address from anyone.
+    #[sqlx::test]
+    async fn a_row_of_someone_else_s_address_is_left_out(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let harbor = crate::customers::create(&db, "Harbor Lane", &[])
+            .await
+            .unwrap();
+        let cleo = crate::testing::requester(&db, harbor, "cleo@harbor.test").await;
+        let dan = crate::testing::requester(&db, harbor, "dan@harbor.test").await;
+        crate::requesters::depart(&db, dan).await.unwrap();
+        crate::testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        crate::testing::requester(&db, brightfield, "ada.f@brightfield.test").await;
+        let eva = crate::testing::requester(&db, brightfield, "eva@brightfield.test").await;
+        crate::requesters::depart(&db, eva).await.unwrap();
+
+        let file = "customer,email_addresses,name\n\
+            Brightfield,cleo@harbor.test,Cleo\n\
+            Brightfield,dan@harbor.test,Dan\n\
+            Brightfield,ada@brightfield.test ada.f@brightfield.test,Ada\n\
+            Brightfield,eva@brightfield.test,Eva\n\
+            Brightfield,new@brightfield.test cleo@harbor.test,New\n";
+        let report = import(&db, vec![requesters(file)], Mode::Apply).await;
+        let reasons = reasons(&report.files[0]);
+        let expected = [
+            (2, "cleo@harbor.test already belongs to a requester of Harbor Lane"),
+            (3, "departed from Harbor Lane"),
+            (4, "merge them"),
+            (5, "has departed from Brightfield: bring them back"),
+            (6, "cleo@harbor.test already belongs to a requester of Harbor Lane"),
+        ];
+        assert_eq!(reasons.len(), expected.len(), "{reasons:?}");
+        for ((line, why), (expected_line, expected)) in reasons.iter().zip(expected) {
+            assert!(
+                *line == expected_line && why.contains(expected),
+                "line {line}: {why}"
+            );
+        }
+        let mut shown: Vec<(Vec<String>, Option<String>, bool)> =
+            requesters_of(&db, brightfield)
+                .await
+                .into_iter()
+                .map(|r| (r.addresses, r.name, r.departed_at.is_some()))
+                .collect();
+        shown.sort();
+        assert_eq!(
+            shown,
+            [
+                (vec!["ada.f@brightfield.test".to_owned()], None, false),
+                (vec!["ada@brightfield.test".to_owned()], None, false),
+                (vec!["eva@brightfield.test".to_owned()], None, true),
+            ],
+            "nothing changes at Brightfield"
+        );
+        let cleo = crate::requesters::detail(&db, cleo).await.unwrap();
+        assert_eq!((cleo.addresses.len(), cleo.name), (1, None));
+        let dan = crate::requesters::detail(&db, dan).await.unwrap();
+        assert_eq!(dan.addresses, ["dan@harbor.test"], "the address stays with Dan");
     }
 
     /// The customer's sites: name, address and whether retired.
