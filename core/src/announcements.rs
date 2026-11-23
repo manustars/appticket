@@ -125,7 +125,7 @@ pub async fn send(
     }
     if keys.is_empty() {
         return rule(
-            "the customers of the ticket's children and the users of its services have no key requesters: there is nobody to announce to",
+            "the customers of the ticket's children and the customers that use its services have no key requesters: there is nobody to announce to",
         );
     }
 
@@ -331,7 +331,7 @@ mod tests {
     /// parent links, the help desk's own organization among them; each person gets one message,
     /// however many children their customer has and whether it also uses the services.
     #[sqlx::test]
-    async fn an_announcement_goes_to_the_users_of_the_parents_services_each_person_once(
+    async fn an_announcement_goes_to_the_customers_that_use_the_parents_services_each_person_once(
         db: PgPool,
     ) {
         let own = testing::help_desk(&db).await;
@@ -650,8 +650,8 @@ mod tests {
     }
 
     /// An announcement needs something to say and someone to say it to: an empty one is refused,
-    /// and so is one from a parent whose children's customers and service users have no key
-    /// requesters, or that has neither children nor services.
+    /// and so is one from a parent whose children's customers and the customers that use its
+    /// services have no key requesters, or that has neither children nor services.
     #[sqlx::test]
     async fn an_announcement_to_nobody_is_refused(db: PgPool) {
         let own = testing::help_desk(&db).await;
@@ -746,7 +746,7 @@ mod tests {
 
     /// The database keeps an announcement going to someone, each person once, and only to key
     /// requesters at their contact address, of the customers of the parent's children and of the
-    /// users of its services, also when the code is bypassed.
+    /// customers that use the parent's services, also when the code is bypassed.
     #[sqlx::test]
     async fn the_database_keeps_who_an_announcement_goes_to(db: PgPool) {
         let own = testing::help_desk(&db).await;
@@ -852,5 +852,53 @@ mod tests {
             why.contains("messages_one_per_announcement_recipient"),
             "{why}"
         );
+    }
+
+    /// An announcement stays as it was sent, also when the code is bypassed: neither it nor its
+    /// recipients are changed or removed afterwards, a recipient's merge or departure included.
+    #[sqlx::test]
+    async fn the_database_keeps_an_announcement_as_it_was_sent(db: PgPool) {
+        let own = testing::help_desk(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        crate::key_requesters::mark(&db, ada, None).await.unwrap();
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
+        let child = testing::ticket(&db, brightfield, None, "a@brightfield.test").await;
+        attach(&db, child, outage).await.unwrap();
+        let sent = send(&db, &testing::sender(), outage, agent, "Mail is down.")
+            .await
+            .unwrap();
+
+        for change in [
+            "UPDATE announcements SET body = 'Changed.' WHERE id = $1",
+            "UPDATE announcements SET ticket_id = (SELECT id FROM tickets WHERE number = 2)
+             WHERE id = $1",
+            "UPDATE announcement_recipients SET name = 'Someone' WHERE announcement_id = $1",
+            "UPDATE announcement_recipients SET address = 'lena@brightfield.test'
+             WHERE announcement_id = $1",
+            "DELETE FROM announcement_recipients WHERE announcement_id = $1",
+            "DELETE FROM announcements WHERE id = $1",
+        ] {
+            let why = sqlx::query(change)
+                .bind(sent.id)
+                .execute(&db)
+                .await
+                .expect_err(change)
+                .to_string();
+            assert!(why.contains("stays as it was sent"), "{change}: {why}");
+        }
+
+        // The recipient is merged away and the one that remains departs: the list stays.
+        crate::key_requesters::unmark(&db, ada).await.unwrap();
+        crate::requesters::merge(&db, lena, ada).await.unwrap();
+        crate::requesters::depart(&db, lena).await.unwrap();
+        let listed = listed(&db, outage).await;
+        assert_eq!(
+            to_whom(&listed[0]),
+            [("Brightfield", "ada@brightfield.test")]
+        );
+        assert_eq!(listed[0].recipients[0].requester_id, ada);
     }
 }

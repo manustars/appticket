@@ -41,7 +41,7 @@ END;
 $$;
 
 CREATE TRIGGER announcements_come_from_parents_not_closed
-    AFTER INSERT OR UPDATE OF ticket_id ON announcements
+    AFTER INSERT ON announcements
     FOR EACH ROW EXECUTE FUNCTION announcements_come_from_parents_not_closed();
 
 -- Who an announcement went to, as they were when it was sent: the list does not change when a
@@ -105,8 +105,25 @@ END;
 $$;
 
 CREATE TRIGGER announcements_go_to_key_requesters_affected
-    AFTER INSERT OR UPDATE ON announcement_recipients
+    AFTER INSERT ON announcement_recipients
     FOR EACH ROW EXECUTE FUNCTION announcements_go_to_key_requesters_affected();
+
+-- An announcement stays as it was sent: neither it nor its recipients change or go away. Nothing
+-- in the core changes them; a recipient's merge, departure or move leaves them as they are.
+CREATE FUNCTION announcements_stay_as_sent() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'an announcement stays as it was sent, with its recipients'
+        USING ERRCODE = 'check_violation';
+END;
+$$;
+
+CREATE TRIGGER announcements_stay_as_sent
+    BEFORE UPDATE OR DELETE ON announcements
+    FOR EACH ROW EXECUTE FUNCTION announcements_stay_as_sent();
+
+CREATE TRIGGER announcement_recipients_stay_as_sent
+    BEFORE UPDATE OR DELETE ON announcement_recipients
+    FOR EACH ROW EXECUTE FUNCTION announcements_stay_as_sent();
 
 -- The message an announcement is sent in, one per recipient: it leaves through the outbox like a
 -- reply, and a reply to it comes back to the parent.
