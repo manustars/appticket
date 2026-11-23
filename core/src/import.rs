@@ -210,8 +210,9 @@ impl Table {
     }
 }
 
-/// The most rows a file of an import can have: an import runs in one transaction.
-pub const MAX_ROWS: usize = 10_000;
+/// The most rows a file of an import can have: an import runs in one transaction and one request,
+/// and a preview of this many rows can take tens of seconds, close to what proxies wait for.
+pub const MAX_ROWS: usize = 5_000;
 
 /// The byte order mark Excel puts at the start of a "CSV UTF-8" file.
 const BOM: &[u8] = b"\xEF\xBB\xBF";
@@ -1581,7 +1582,7 @@ mod tests {
             many.push_str(&format!("Customer {n}\n"));
         }
         let why = refused(&db, vec![customers(&many)]).await;
-        assert!(why.contains("10000"), "{why}");
+        assert!(why.contains("5000"), "{why}");
 
         let why = refused(
             &db,

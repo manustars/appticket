@@ -159,7 +159,7 @@ breaks a rule is left out with its reason, as is a site whose customer row is le
 other rows are imported. The rows left out come back as a file with the same columns and an
 `error` column giving the reason, ready to correct and import again (an `error` column is
 ignored on import). A file with an unknown or missing column, a file that is not UTF-8, or more
-than 10,000 rows in a file stops the whole import before anything changes. In the UI, the files
+than 5,000 rows in a file stops the whole import before anything changes. In the UI, the files
 of one import can be up to 10 MiB together.
 
 Customers file. A customer is recognised by its external reference, else by its name, ignoring
