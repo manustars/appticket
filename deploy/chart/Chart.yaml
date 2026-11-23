@@ -4,6 +4,6 @@ description: >-
   The help desk: the core (API, agents' UI, mail) and, optionally, the Assistant add-on, with an
   optional PostgreSQL cluster managed by CloudNativePG.
 type: application
-version: 0.2.0
-appVersion: "0.2.0"
+version: 0.3.0
+appVersion: "0.3.0"
 kubeVersion: ">=1.27.0-0"
