@@ -70,19 +70,21 @@ const providerErrors = {
 } as const
 type ProviderError = keyof typeof providerErrors
 
-/** The reason the core sent the browser back with, taken out of the address so a reload drops it. */
-function takeProviderError(): ProviderError | null {
-  const params = new URLSearchParams(window.location.search)
-  const reason = params.get('sign_in_error')
+/** The reason the core sent the browser back to the sign-in page with, if any. Only reads. */
+function providerErrorInAddress(): ProviderError | null {
+  const reason = new URLSearchParams(window.location.search).get('sign_in_error')
   if (reason === null) return null
-  params.delete('sign_in_error')
-  const query = params.toString()
-  window.history.replaceState(null, '', window.location.pathname + (query ? `?${query}` : '') + window.location.hash)
   return reason in providerErrors ? (reason as ProviderError) : 'failed'
 }
 
-/** Taken once, when the page loads; shown by the first sign-in page only. */
-let pendingProviderError = takeProviderError()
+/** Takes the reason out of the address, so that a reload or a later sign-in page drops it. */
+function dropProviderErrorFromAddress() {
+  const params = new URLSearchParams(window.location.search)
+  if (!params.has('sign_in_error')) return
+  params.delete('sign_in_error')
+  const query = params.toString()
+  window.history.replaceState(null, '', window.location.pathname + (query ? `?${query}` : '') + window.location.hash)
+}
 
 function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
   const { t } = useI18n()
@@ -90,11 +92,12 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
   const [password, setPassword] = useState('')
   const [failed, setFailed] = useState<'wrong' | 'tooManyFailures' | 'unreachable' | null>(null)
   const [busy, setBusy] = useState(false)
-  const [providerError] = useState(() => pendingProviderError)
+  // Read while the address still has it: React may call this twice, which reads the same.
+  const [providerError] = useState(providerErrorInAddress)
   const [provider, setProvider] = useState<string | null>(null)
 
   useEffect(() => {
-    pendingProviderError = null
+    dropProviderErrorFromAddress()
     // Without an answer the page offers the password only, as without a provider.
     signInOptions().then((options) => setProvider(options.identity_provider?.label ?? null), () => {})
   }, [])
