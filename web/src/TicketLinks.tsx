@@ -12,9 +12,7 @@ import {
   setParent,
   unlinkTicketAsset,
   unlinkTicketService,
-  type Announcement,
   type Asset,
-  type ResolvedChildren,
   type Service,
   type TicketDetail,
 } from './api/client'
@@ -265,33 +263,23 @@ function RelatedLink({ ticket }: { ticket: TicketDetail['children'][number] }) {
 
 function Children({ ticket, onChanged, onSignedOut }: Props) {
   const { t } = useI18n()
-  const action = useAction(onSignedOut)
-  const [open, setOpen] = useState(false)
-  const [body, setBody] = useState('')
-  // What the last resolve did, kept after the children it resolved have changed state.
-  const [done, setDone] = useState<ResolvedChildren | null>(null)
   const id = useId()
   const { can } = useSession()
   // Resolving replies to each child's requester and changes the children's state.
   const pending = can('tickets.work') && can('tickets.reply')
     ? ticket.children.filter((c) => c.state === 'open' || c.state === 'waiting').length
     : 0
+  // Announcing changes no state, as often as needed while the parent is not closed.
+  const announcing = ticket.state !== 'closed' && can('tickets.reply')
 
-  function submit(event: FormEvent) {
-    event.preventDefault()
-    if (!body.trim()) return
-    if (!window.confirm(t('parent.confirmResolve', { count: pending, number: ticket.number }))) return
-    let result: ResolvedChildren | null = null
-    void action.run(async () => {
-      result = await resolveChildren(ticket.number, body)
-    }).then(async (ok) => {
-      if (ok) {
-        setDone(result)
-        setBody('')
-        setOpen(false)
-      }
-      await onChanged()
-    })
+  async function resolve(body: string) {
+    const done = await resolveChildren(ticket.number, body)
+    return `${t('parent.resolved', { count: done.resolved })} ${t('parent.writtenTo', { count: done.people_written_to })}`
+  }
+
+  async function sendAnnouncement(body: string) {
+    const sent = await announce(ticket.number, body)
+    return t('parent.announced', { count: sent.recipients.length })
   }
 
   return (
@@ -304,60 +292,57 @@ function Children({ ticket, onChanged, onSignedOut }: Props) {
           {ticket.children.map((c) => <li key={c.number}><RelatedLink ticket={c} /></li>)}
         </ul>
       )}
-      {done && (
-        <p className="done" role="status">
-          {t('parent.resolved', { count: done.resolved })} {t('parent.writtenTo', { count: done.people_written_to })}
-        </p>
+      {pending > 0 && (
+        <SendForm button={t('parent.resolveChildren')} field={t('parent.message')}
+          hint={t('parent.resolveHint', { count: pending })}
+          confirm={t('parent.confirmResolve', { count: pending, number: ticket.number })}
+          send={resolve} onChanged={onChanged} onSignedOut={onSignedOut} />
       )}
-      {pending > 0 && !open && (
-        <div>
-          <button type="button" onClick={() => { setOpen(true); setDone(null) }}>{t('parent.resolveChildren')}</button>
-        </div>
-      )}
-      {pending > 0 && open && (
-        <form className="resolve" onSubmit={submit}>
-          <label htmlFor={`${id}-body`}>{t('parent.message')}</label>
-          <textarea id={`${id}-body`} rows={4} value={body} aria-describedby={`${id}-hint`}
-            onChange={(e) => setBody(e.target.value)} />
-          <p className="hint" id={`${id}-hint`}>{t('parent.resolveHint', { count: pending })}</p>
-          <div className="move-foot">
-            <button type="button" onClick={() => { setOpen(false); action.clear() }}>{t('action.cancel')}</button>
-            <button type="submit" disabled={action.busy || !body.trim()}>{t('parent.resolveChildren')}</button>
-          </div>
-        </form>
-      )}
-      <Problem error={action.error} />
-      {ticket.state !== 'closed' && can('tickets.reply') && (
-        <Announce ticket={ticket} onChanged={onChanged} onSignedOut={onSignedOut} />
+      {announcing && (
+        <SendForm button={t('parent.announce')} field={t('parent.announcement')}
+          hint={t('parent.announceHint')} confirm={t('parent.confirmAnnounce', { number: ticket.number })}
+          send={sendAnnouncement} onChanged={onChanged} onSignedOut={onSignedOut} />
       )}
     </section>
   )
 }
 
+interface SendFormProps {
+  /** What the button that opens the form, and sends it, says. */
+  button: string
+  /** The label of the message's field. */
+  field: string
+  hint: string
+  /** The question asked before sending. */
+  confirm: string
+  /** Sends the message; returns what to say once it is sent. */
+  send: (body: string) => Promise<string>
+  onChanged: () => Promise<void>
+  onSignedOut: () => void
+}
+
 /**
- * Sending an announcement from a parent that is not closed, as often as needed: it goes to the key
- * requesters of the customers the failure affects, and changes no ticket's state.
+ * A message written from a parent ticket to the people its failure affects: a button opens the
+ * form, and sending asks first. What was done stays shown until the form is opened again.
  */
-function Announce({ ticket, onChanged, onSignedOut }: Props) {
+function SendForm({ button, field, hint, confirm, send, onChanged, onSignedOut }: SendFormProps) {
   const { t } = useI18n()
   const action = useAction(onSignedOut)
   const [open, setOpen] = useState(false)
   const [body, setBody] = useState('')
-  // How many people the last announcement was queued to.
-  const [done, setDone] = useState<number | null>(null)
+  const [done, setDone] = useState<string | null>(null)
   const id = useId()
 
   function submit(event: FormEvent) {
     event.preventDefault()
     if (!body.trim()) return
-    if (!window.confirm(t('parent.confirmAnnounce', { number: ticket.number }))) return
-    let sent: Announcement | null = null
+    if (!window.confirm(confirm)) return
+    let said: string | null = null
     void action.run(async () => {
-      sent = await announce(ticket.number, body)
+      said = await send(body)
     }).then(async (ok) => {
-      const recipients = (sent as Announcement | null)?.recipients
-      if (ok && recipients) {
-        setDone(recipients.length)
+      if (ok) {
+        setDone(said)
         setBody('')
         setOpen(false)
       }
@@ -367,21 +352,21 @@ function Announce({ ticket, onChanged, onSignedOut }: Props) {
 
   return (
     <>
-      {done !== null && <p className="done" role="status">{t('parent.announced', { count: done })}</p>}
+      {done !== null && <p className="done" role="status">{done}</p>}
       {!open && (
         <div>
-          <button type="button" onClick={() => { setOpen(true); setDone(null) }}>{t('parent.announce')}</button>
+          <button type="button" onClick={() => { setOpen(true); setDone(null) }}>{button}</button>
         </div>
       )}
       {open && (
         <form className="resolve" onSubmit={submit}>
-          <label htmlFor={`${id}-body`}>{t('parent.announcement')}</label>
+          <label htmlFor={`${id}-body`}>{field}</label>
           <textarea id={`${id}-body`} rows={4} value={body} aria-describedby={`${id}-hint`}
             onChange={(e) => setBody(e.target.value)} />
-          <p className="hint" id={`${id}-hint`}>{t('parent.announceHint')}</p>
+          <p className="hint" id={`${id}-hint`}>{hint}</p>
           <div className="move-foot">
             <button type="button" onClick={() => { setOpen(false); action.clear() }}>{t('action.cancel')}</button>
-            <button type="submit" disabled={action.busy || !body.trim()}>{t('parent.announce')}</button>
+            <button type="submit" disabled={action.busy || !body.trim()}>{button}</button>
           </div>
         </form>
       )}
