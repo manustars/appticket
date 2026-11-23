@@ -248,6 +248,40 @@ A session opened through the provider lasts `sessionHours`, so that an account d
 loses access within hours; one opened with a local password lasts 14 days. Signing out ends the
 help desk's session only, not the one at the provider. Linked agents keep their local password.
 
+#### Switching local sign-in off
+
+Once agents sign in through the provider, local passwords can be switched off for the whole
+installation, so that the provider decides who comes in. Whether local sign-in is on is kept in
+the database, not in the deployment, and changed with `hd`:
+
+```sh
+kubectl -n helpdesk exec deploy/hd-core -- hd sign-in local off   # agents sign in through the provider only
+kubectl -n helpdesk exec deploy/hd-core -- hd sign-in local       # says whether it is on or off
+kubectl -n helpdesk exec deploy/hd-core -- hd sign-in local on    # local passwords work again
+```
+
+Switching it off ends every session opened with a local password, at once; sessions opened
+through the provider go on. From then on the sign-in page shows only the "Sign in with …" button,
+and the API refuses every local password, right or wrong, with 403 before checking it (nothing is
+counted as a failed sign-in). It is refused while no identity provider is configured: `hd` reads
+the provider's settings from its environment, so run it in the core's container as above, where
+the chart sets them. Make sure an agent with the Administrator role can sign in through the provider
+before switching it off. Agents keep their local passwords, unused while it is off.
+
+The command line can always switch local sign-in back on: it needs nothing but the database. If
+the provider cannot be reached, or its settings were removed, while local sign-in is off:
+
+```sh
+kubectl -n helpdesk exec deploy/hd-core -- hd sign-in local on
+kubectl -n helpdesk exec deploy/hd-core -- hd agent set-password agent@example.com   # generated and printed
+```
+
+and that agent signs in with the password. The core starts even with local sign-in off and no
+identity provider configured, so that `hd` can be run in its container; it then logs an error, and
+the sign-in page says that nobody can sign in until local sign-in is switched back on. When the
+core starts with local sign-in off, it also ends any session opened with a local password that is
+still there.
+
 ### Importing customers, sites, requesters and assets
 
 Customers, their sites, their requesters and their assets can be imported from CSV files, in
