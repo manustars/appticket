@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Migrate | Command::Openapi => Ok(()),
         Command::Customer(command) => cli::customer(&db, command).await,
-        Command::Agent(command) => cli::agent(&db, command).await,
+        Command::Agent(command) => cli::agent(&db, command, cli::password_from_env()).await,
         Command::Role(command) => cli::role(&db, command).await,
         Command::Addon(command) => cli::addon(&db, command).await,
         Command::SignIn(command) => cli::sign_in(&db, command, &mut std::io::stdout()).await,

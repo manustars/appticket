@@ -338,6 +338,78 @@ async fn with_local_sign_in_off_a_password_is_refused_the_same_way_for_every_acc
     assert_eq!(counted, 0);
 }
 
+/// An installation with local sign-in off whose identity provider cannot be reached is recovered
+/// with the command line alone: local sign-in switched back on, a password set, and the agent
+/// signs in with it.
+#[sqlx::test]
+async fn local_sign_in_off_and_an_unreachable_provider_are_recovered_with_the_command_line(
+    db: PgPool,
+) {
+    let api = Client::new(&db).await;
+    // Configured, but nothing answers there: a closed port on this machine.
+    let settings = crate::oidc::Settings {
+        issuer: Some("http://127.0.0.1:9/realms/staff".to_owned()),
+        client_id: Some("helpdesk".to_owned()),
+        client_secret: Some("invented-secret".to_owned()),
+        client_secret_file: None,
+        label: Some("Northgate".to_owned()),
+        session_hours: 12,
+    };
+    let public_url = "http://127.0.0.1:8080".to_owned();
+    let config = crate::oidc::Config::from_settings(settings.clone(), Some(&public_url))
+        .unwrap()
+        .unwrap();
+    let state = AppState {
+        identity_provider: Some(crate::oidc::Provider::new(config).unwrap()),
+        ..api.state.clone()
+    };
+    use crate::cli::{LocalSignIn, SignInCommand};
+    let switch = |switch| SignInCommand::Local {
+        switch: Some(switch),
+    };
+    let off = LocalSignIn::Off {
+        identity_provider: settings,
+        public_url: Some(public_url),
+    };
+    crate::cli::sign_in(&db, switch(off), &mut Vec::new())
+        .await
+        .unwrap();
+
+    // Nobody gets in: the password is refused, and the provider cannot be reached.
+    let refused = sign_in_from(&state, "192.0.2.1", &[], "marco@northgate.test", "pw").await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN);
+    let begin = Request::get("/api/session/identity-provider")
+        .extension(connection_from("192.0.2.1"))
+        .body(Body::empty())
+        .unwrap();
+    let begun = router(state.clone()).oneshot(begin).await.unwrap();
+    assert_eq!(begun.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        begun.headers()[header::LOCATION],
+        "/?sign_in_error=failed",
+        "the provider cannot be reached"
+    );
+
+    // The command line alone lets the administrator in again.
+    crate::cli::sign_in(&db, switch(LocalSignIn::On), &mut Vec::new())
+        .await
+        .unwrap();
+    let set_password = crate::cli::AgentCommand::SetPassword {
+        email: "marco@northgate.test".to_owned(),
+    };
+    let password = "a fresh password for Marco";
+    crate::cli::agent(&db, set_password, Some(password.to_owned()))
+        .await
+        .unwrap();
+    let signed_in = sign_in_from(&state, "192.0.2.1", &[], "marco@northgate.test", password).await;
+    assert_eq!(
+        signed_in.status,
+        StatusCode::NO_CONTENT,
+        "{}",
+        signed_in.body
+    );
+}
+
 fn numbers(list: &Value) -> Vec<i64> {
     let mut n: Vec<i64> = list
         .as_array()
