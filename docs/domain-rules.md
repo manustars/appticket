@@ -114,7 +114,15 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   and per address, before a directory's own lockout would trigger. The address is that of the
   connection; behind a reverse proxy it is taken from the forwarded headers only when the
   connection comes from a proxy the installation lists as trusted, so that a client cannot
-  choose the address it is counted under.
+  choose the address it is counted under. After a number of failures within a window (5 in 15
+  minutes unless the installation says otherwise), for the account or from the address, the next
+  four attempts wait 1, 2, 4 and 8 seconds before the password is checked; attempts after those
+  are refused, without checking the password, until a window has passed since the last failure.
+  So at most that number plus four passwords are checked per account within a window. A refused
+  attempt is answered the same way whether or not the account exists, and is not counted. A
+  password that could not be checked is no failure. Signing in clears the account's failures,
+  not the address's. The account is what was typed in, trimmed and in lower case, whether or not
+  an agent has it; an IPv6 address counts by its /64 network.
 - Unlinking an agent's identity or removing their local password follows the rules for acting on
   an agent above.
 

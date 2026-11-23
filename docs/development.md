@@ -35,6 +35,10 @@ HD_SMTP_URL=smtp://127.0.0.1:55025
 Other variables: `HD_LISTEN` (default `127.0.0.1:8080`), `HD_MAIL_FROM_NAME` (default `Help desk`),
 `HD_LOG` (a `tracing` filter, default `info,sqlx=warn`) and `HD_WEB_DIR` (the built UI, `web/dist`,
 for the core to serve itself, as the container image does; in development Vite serves the UI).
+`HD_SIGN_IN_FAILURES` (default 5), `HD_SIGN_IN_WINDOW_SECONDS` (default 900) and
+`HD_TRUSTED_PROXIES` (none by default) set the limits on failed sign-ins and the reverse proxies
+whose `X-Forwarded-For` is believed; Vite's development proxy is not one of them, so in
+development every sign-in counts under `127.0.0.1`.
 Production deployment: [`deploy.md`](deploy.md).
 
 Real mail servers need TLS:
