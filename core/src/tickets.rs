@@ -1396,6 +1396,49 @@ mod tests {
         assert_eq!(at(&db, open).await, Vec::<String>::new());
     }
 
+    /// Closing a ticket reads where its assets are without waiting for a change being made to them,
+    /// which locks them before any ticket: the ticket is closed where they were before that change.
+    #[sqlx::test]
+    async fn closing_does_not_wait_for_an_asset_being_moved(db: PgPool) {
+        let c = testing::customer(&db, "Brightfield").await;
+        let head = site(&db, c, "Head office").await;
+        let lab = site(&db, c, "Lab").await;
+        let printer = testing::asset_kind(&db, "Printer").await;
+        let printer_2f = crate::catalog::create_asset(
+            &db,
+            c,
+            &testing::asset_details(printer, "Printer 2F", None, Some(head), None),
+        )
+        .await
+        .unwrap();
+        let n = testing::ticket(&db, c, None, "a1@brightfield.test").await;
+        crate::catalog::link_asset(&db, n, printer_2f, true)
+            .await
+            .unwrap();
+
+        let mut moving = db.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM assets WHERE id = $1 FOR NO KEY UPDATE")
+            .bind(printer_2f)
+            .execute(&mut *moving)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE assets SET site_id = $2 WHERE id = $1")
+            .bind(printer_2f)
+            .bind(lab)
+            .execute(&mut *moving)
+            .await
+            .unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            set_state(&db, n, TicketState::Closed),
+        )
+        .await
+        .expect("closing waited for the asset")
+        .unwrap();
+        moving.commit().await.unwrap();
+        assert_eq!(at(&db, n).await, ["Head office"]);
+    }
+
     /// The tickets already closed when the sites of tickets came in stay at the sites they were at
     /// then, by their assets or their requester.
     #[sqlx::test(migrations = false)]
