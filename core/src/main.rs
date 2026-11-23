@@ -202,7 +202,9 @@ async fn main() -> anyhow::Result<()> {
                 }
                 None => None,
             };
-            local_sign_in::at_startup(&db, identity_provider.is_some()).await?;
+            local_sign_in::at_startup(&db, identity_provider.is_some())
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
             if let Some(dir) = &web_dir
                 && !dir.join("index.html").is_file()
             {

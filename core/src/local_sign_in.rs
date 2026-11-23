@@ -30,7 +30,7 @@ pub fn refused_when_off(error: sqlx::Error) -> anyhow::Error {
 
 /// Whether agents can sign in with a local password now. Read at every use: the command line
 /// changes it while the core runs.
-pub async fn is_on(db: impl PgExecutor<'_>) -> anyhow::Result<bool> {
+pub async fn is_on(db: impl PgExecutor<'_>) -> Result<bool> {
     Ok(
         sqlx::query_scalar("SELECT local_sign_in FROM installation_settings")
             .fetch_one(db)
@@ -41,11 +41,8 @@ pub async fn is_on(db: impl PgExecutor<'_>) -> anyhow::Result<bool> {
 /// Switches local sign-in off, which ends every session opened with a local password and keeps
 /// those opened through the identity provider; refused while no identity provider is configured.
 /// Returns how many sessions ended.
-pub async fn switch_off(
-    db: &PgPool,
-    identity_provider: Option<&crate::oidc::Config>,
-) -> Result<u64> {
-    if identity_provider.is_none() {
+pub async fn switch_off(db: &PgPool, identity_provider_configured: bool) -> Result<u64> {
+    if !identity_provider_configured {
         return rule(
             "local sign-in cannot be switched off while no identity provider is configured: \
              agents could not sign in at all",
@@ -57,6 +54,7 @@ pub async fn switch_off(
     sqlx::query("SELECT 1 FROM installation_settings FOR UPDATE")
         .execute(&mut *tx)
         .await?;
+    // The trigger on the setting would end these sessions too, but would not say how many.
     let ended = sqlx::query("DELETE FROM agent_sessions WHERE opened_with = 'password'")
         .execute(&mut *tx)
         .await?
@@ -82,7 +80,7 @@ pub async fn switch_on(db: &PgPool) -> Result<()> {
 /// configured, since then nobody can sign in until the command line switches local sign-in back
 /// on. It does not switch it on itself: that is the command line's to do. Returns how many
 /// sessions ended.
-pub async fn at_startup(db: &PgPool, identity_provider_configured: bool) -> anyhow::Result<u64> {
+pub async fn at_startup(db: &PgPool, identity_provider_configured: bool) -> Result<u64> {
     if is_on(db).await? {
         return Ok(0);
     }
@@ -105,7 +103,7 @@ pub async fn at_startup(db: &PgPool, identity_provider_configured: bool) -> anyh
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use sqlx::PgPool;
     use uuid::Uuid;
 
@@ -231,39 +229,17 @@ pub(crate) mod tests {
         assert!(sessions(&db).await.is_empty());
     }
 
-    /// An identity provider as the deployment configures it.
-    pub(crate) fn identity_provider() -> crate::oidc::Config {
-        let settings = crate::oidc::Settings {
-            issuer: Some("https://login.example.com/realms/staff".to_owned()),
-            client_id: Some("helpdesk".to_owned()),
-            client_secret: Some("invented-secret".to_owned()),
-            client_secret_file: None,
-            label: Some("Northgate".to_owned()),
-            session_hours: 12,
-        };
-        crate::oidc::Config::from_settings(settings, Some("https://helpdesk.example.com"))
-            .unwrap()
-            .unwrap()
-    }
-
     #[sqlx::test]
     async fn switching_local_sign_in_off_ends_password_sessions_and_keeps_the_others(db: PgPool) {
         agent_with_sessions(&db).await;
         assert!(super::is_on(&db).await.unwrap());
-        let ended = super::switch_off(&db, Some(&identity_provider()))
-            .await
-            .unwrap();
+        let ended = super::switch_off(&db, true).await.unwrap();
         assert_eq!(ended, 1);
         assert!(!super::is_on(&db).await.unwrap());
         assert_eq!(sessions(&db).await, ["openid_connect"]);
 
         // Switching it off again changes nothing; switching it on lets passwords in again.
-        assert_eq!(
-            super::switch_off(&db, Some(&identity_provider()))
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(super::switch_off(&db, true).await.unwrap(), 0);
         super::switch_on(&db).await.unwrap();
         assert!(super::is_on(&db).await.unwrap());
     }
@@ -271,7 +247,7 @@ pub(crate) mod tests {
     #[sqlx::test]
     async fn local_sign_in_stays_on_while_no_identity_provider_is_configured(db: PgPool) {
         agent_with_sessions(&db).await;
-        let refused = super::switch_off(&db, None).await;
+        let refused = super::switch_off(&db, false).await;
         assert!(
             matches!(&refused, Err(crate::error::Error::Rule(why)) if why.contains("identity provider")),
             "{refused:?}"
