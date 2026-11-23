@@ -280,9 +280,8 @@ and that agent signs in with the password. The core starts even with local sign-
 identity provider configured, so that `hd` can be run in its container; it then logs an error, and
 the sign-in page says that nobody can sign in until local sign-in is switched back on. A provider
 configured in part, or a client secret file that cannot be read, still stops the core: fix or
-remove those settings first, then switch local sign-in on. When the
-core starts with local sign-in off, it also ends any session opened with a local password that is
-still there.
+remove those settings first, then switch local sign-in on. When the core starts with local
+sign-in off, it also ends any session opened with a local password that is still there.
 
 ### Importing customers, sites, requesters and assets
 
