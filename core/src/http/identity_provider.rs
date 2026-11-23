@@ -148,6 +148,8 @@ mod tests {
     const ISSUER: &str = "http://127.0.0.1:55080/realms/helpdesk";
     /// Lena's stable identifier at Keycloak.
     const LENA: &str = "6f1c2a0e-8d3b-4c55-9a41-0b7e2d6f3a01";
+    /// Otto's stable identifier at Keycloak, where his address is not verified.
+    const OTTO: &str = "6f1c2a0e-8d3b-4c55-9a41-0b7e2d6f3a02";
 
     fn state(db: &PgPool) -> AppState {
         state_with_issuer(db, ISSUER)
@@ -515,24 +517,24 @@ mod tests {
         );
     }
 
-    #[sqlx::test]
-    #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
-    async fn a_linked_agent_keeps_their_address_when_keycloak_has_not_verified_the_new_one(
-        db: PgPool,
-    ) {
-        let state = state(&db);
-        // Otto was linked with another address; Keycloak has not verified his current one.
-        let otto = agent(&db, "otto.old@example.com", "Otto").await;
+    /// Otto's agent, linked to his identity at Keycloak when his address was `otto.old`.
+    async fn otto_linked(db: &PgPool) -> Uuid {
+        let otto = agent(db, "otto.old@example.com", "Otto").await;
         sqlx::query("INSERT INTO agent_identities (issuer, subject, agent_id) VALUES ($1, $2, $3)")
             .bind(ISSUER)
-            .bind("6f1c2a0e-8d3b-4c55-9a41-0b7e2d6f3a02")
+            .bind(OTTO)
             .bind(otto)
-            .execute(&db)
+            .execute(db)
             .await
             .unwrap();
-        // The unverified address is another agent's: it is not taken over, so no reason to
-        // refuse.
-        agent(&db, "otto.vale@example.com", "Someone else").await;
+        otto
+    }
+
+    #[sqlx::test]
+    #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
+    async fn a_linked_agent_takes_over_the_address_keycloak_has_not_verified(db: PgPool) {
+        let state = state(&db);
+        let otto = otto_linked(&db).await;
         let answer = sign_in_as(&state, "otto").await;
         assert_eq!(answer.location, "/");
         let (name, email): (String, String) =
@@ -543,8 +545,26 @@ mod tests {
                 .unwrap();
         assert_eq!(
             (name.as_str(), email.as_str()),
-            ("Otto Vale", "otto.old@example.com")
+            ("Otto Vale", "otto.vale@example.com")
         );
+    }
+
+    #[sqlx::test]
+    #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
+    async fn an_unverified_email_of_another_agent_is_refused_at_keycloak_sign_in(db: PgPool) {
+        let state = state(&db);
+        let otto = otto_linked(&db).await;
+        // The address Keycloak has not verified is another agent's.
+        agent(&db, "otto.vale@example.com", "Someone else").await;
+        let answer = sign_in_as(&state, "otto").await;
+        assert_eq!(answer.location, "/?sign_in_error=email_of_another_agent");
+        assert!(answer.cookie("hd_session").is_none());
+        let email: String = sqlx::query_scalar("SELECT email FROM agents WHERE id = $1")
+            .bind(otto)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(email, "otto.old@example.com");
     }
 
     #[sqlx::test]
