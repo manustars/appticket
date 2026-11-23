@@ -344,6 +344,172 @@ pub async fn bring_back(db: &PgPool, id: Uuid) -> Result<()> {
     Ok(())
 }
 
+/// Merges `merged` into `kept`: two requesters of the same customer who are one person. The
+/// addresses and tickets of `merged` pass to `kept`, which remains, and `merged` is removed; the
+/// details `kept` lacks are taken from `merged`, so that nothing about the person is lost. A merge
+/// cannot be undone. Requesters of different customers are never merged, nor departed ones, nor
+/// those of an offboarded customer.
+pub async fn merge(db: &PgPool, kept: Uuid, merged: Uuid) -> Result<()> {
+    if kept == merged {
+        return rule("a requester cannot be merged with themselves");
+    }
+    let mut tx = db.begin().await?;
+    let customer = lock_with_customer(&mut tx, kept).await?;
+    // The customer's lock keeps the other one where it is; one of another customer is not locked.
+    let other: (Uuid, bool) =
+        sqlx::query_as("SELECT customer_id, departed_at IS NOT NULL FROM requesters WHERE id = $1")
+            .bind(merged)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(Error::NotFound("requester"))?;
+    if other.0 != customer {
+        return rule("requesters of different customers are never merged");
+    }
+    // Locked in a fixed order; the other one may have moved before it was locked.
+    let (departed, together): (bool, bool) = sqlx::query_as(
+        "SELECT bool_or(departed_at IS NOT NULL), bool_and(customer_id = $3) FROM
+             (SELECT departed_at, customer_id FROM requesters WHERE id IN ($1, $2)
+              ORDER BY id FOR UPDATE) r",
+    )
+    .bind(kept)
+    .bind(merged)
+    .bind(customer)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !together {
+        return rule("the requester has just moved to another customer; reload and try again");
+    }
+    if departed {
+        return rule(
+            "a departed requester is not merged: bring them back first, or leave them departed",
+        );
+    }
+    sqlx::query("INSERT INTO requester_merges (merged_id, kept_id) VALUES ($1, $2)")
+        .bind(merged)
+        .bind(kept)
+        .execute(&mut *tx)
+        .await?;
+    // Earlier merges into `merged` now lead to `kept`.
+    sqlx::query("UPDATE requester_merges SET kept_id = $2 WHERE kept_id = $1")
+        .bind(merged)
+        .bind(kept)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE requesters k SET
+             name = coalesce(k.name, m.name),
+             job_title = coalesce(k.job_title, m.job_title),
+             site_id = coalesce(k.site_id, m.site_id),
+             phone_numbers = k.phone_numbers
+                 || ARRAY(SELECT p FROM unnest(m.phone_numbers) WITH ORDINALITY AS u(p, i)
+                          WHERE p <> ALL (k.phone_numbers) ORDER BY i),
+             notes = CASE WHEN m.notes = '' THEN k.notes WHEN k.notes = '' THEN m.notes
+                          ELSE k.notes || E'\\n\\n' || m.notes END
+         FROM requesters m
+         WHERE k.id = $1 AND m.id = $2",
+    )
+    .bind(kept)
+    .bind(merged)
+    .execute(&mut *tx)
+    .await?;
+    // Passed addresses count as newly registered, in their order, so the first address of `kept`
+    // stays first.
+    sqlx::query(
+        "UPDATE requester_addresses SET requester_id = $1,
+             created_at = now() + (created_at - (SELECT min(created_at) FROM requester_addresses
+                                                 WHERE requester_id = $2))
+         WHERE requester_id = $2",
+    )
+    .bind(kept)
+    .bind(merged)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE tickets SET requester_id = $1, updated_at = now() WHERE requester_id = $2")
+        .bind(kept)
+        .bind(merged)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM requesters WHERE id = $1")
+        .bind(merged)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Moves a requester identified with the wrong customer to `customer`, from their own page: under
+/// the rule for moving tickets, all their tickets move with them, closed ones included, and the
+/// links that do not fit the new customer are removed. They leave their site. An offboarded
+/// customer's requesters do not move.
+pub async fn move_to_customer(
+    db: &PgPool,
+    id: Uuid,
+    customer: Uuid,
+) -> Result<crate::tickets::Moved> {
+    let mut tx = db.begin().await?;
+    lock_with_customer(&mut tx, id).await?;
+    let moved = crate::tickets::move_requester(&mut tx, id, customer).await?;
+    tx.commit().await?;
+    Ok(moved)
+}
+
+/// What moving a requester to another customer would do, for the agent to see before confirming.
+#[derive(Serialize, ToSchema)]
+pub struct MovePreview {
+    /// How many tickets would move with the requester, closed ones included.
+    pub tickets: i64,
+    /// The assets linked to their tickets: they belong to the old customer, so they are unlinked.
+    pub assets: Vec<crate::catalog::LinkedAsset>,
+    /// The services linked to their tickets that the new customer does not use: unlinked too.
+    pub services: Vec<crate::catalog::LinkedService>,
+}
+
+/// What [`move_to_customer`] would move and unlink, across all the requester's tickets.
+pub async fn move_preview(db: &PgPool, id: Uuid, customer: Uuid) -> Result<MovePreview> {
+    let tickets: Option<i64> = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM tickets t WHERE t.requester_id = r.id)
+         FROM requesters r WHERE r.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    let tickets = tickets.ok_or(Error::NotFound("requester"))?;
+    let known: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM customers WHERE id = $1)")
+        .bind(customer)
+        .fetch_one(db)
+        .await?;
+    if !known {
+        return Err(Error::NotFound("customer"));
+    }
+    let assets = sqlx::query_as(
+        "SELECT a.id, k.name AS kind, a.name FROM assets a JOIN asset_kinds k ON k.id = a.kind_id
+         WHERE a.id IN (SELECT ta.asset_id FROM ticket_assets ta
+                        JOIN tickets t ON t.id = ta.ticket_id WHERE t.requester_id = $1)
+         ORDER BY lower(k.name), a.name",
+    )
+    .bind(id)
+    .fetch_all(db)
+    .await?;
+    // The same predicate as the move's (crate::catalog::unlink_for_move).
+    let services = sqlx::query_as(
+        "SELECT s.id, s.name FROM services s
+         WHERE s.id IN (SELECT ts.service_id FROM ticket_services ts
+                        JOIN tickets t ON t.id = ts.ticket_id WHERE t.requester_id = $1)
+           AND NOT EXISTS (SELECT 1 FROM customer_services cs
+                           WHERE cs.customer_id = $2 AND cs.service_id = s.id)
+         ORDER BY s.name",
+    )
+    .bind(id)
+    .bind(customer)
+    .fetch_all(db)
+    .await?;
+    Ok(MovePreview {
+        tickets,
+        assets,
+        services,
+    })
+}
+
 /// Trimmed, or `None` when blank.
 fn filled(text: Option<&str>) -> Option<&str> {
     text.map(str::trim).filter(|t| !t.is_empty())
@@ -394,7 +560,10 @@ pub async fn update(db: &PgPool, id: Uuid, details: &RequesterDetails) -> Result
 
 /// Locks the requester's customer, which must not be offboarded, then the requester, for any
 /// change to the requester; retiring a site locks the customer first too. Returns the customer.
-async fn lock_with_customer(tx: &mut Transaction<'_, Postgres>, requester: Uuid) -> Result<Uuid> {
+pub(crate) async fn lock_with_customer(
+    tx: &mut Transaction<'_, Postgres>,
+    requester: Uuid,
+) -> Result<Uuid> {
     let customer: Uuid = sqlx::query_scalar("SELECT customer_id FROM requesters WHERE id = $1")
         .bind(requester)
         .fetch_optional(&mut **tx)
@@ -402,11 +571,13 @@ async fn lock_with_customer(tx: &mut Transaction<'_, Postgres>, requester: Uuid)
         .ok_or(Error::NotFound("requester"))?;
     crate::customers::lock_active(tx, customer).await?;
     // A requester can be moved to another customer in between: check under the lock.
+    // It can also have been merged into another requester, and be gone.
     let now: Uuid =
         sqlx::query_scalar("SELECT customer_id FROM requesters WHERE id = $1 FOR UPDATE")
             .bind(requester)
-            .fetch_one(&mut **tx)
-            .await?;
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or(Error::NotFound("requester"))?;
     if now != customer {
         return rule("the requester has just moved to another customer; reload and try again");
     }
@@ -981,6 +1152,391 @@ mod tests {
         depart(&db, ada).await.unwrap();
         assert!(pass(lena).await.is_err(), "given within their own customer");
         assert!(pass(ivo).await.is_ok());
+    }
+
+    /// Two requesters of the same customer who are one person are merged: the addresses and
+    /// tickets of one pass to the other, which remains, and each ticket still replies where the
+    /// requester last wrote from on it.
+    #[sqlx::test]
+    async fn merging_leaves_one_requester_with_the_addresses_and_tickets_of_both(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let twin = testing::requester(&db, brightfield, "a.ferrini@home.test").await;
+        add_address(&db, twin, "ada.f@studio.test").await.unwrap();
+        let hers = testing::ticket(&db, brightfield, Some(ada), "a1@brightfield.test").await;
+        let twins = testing::ticket(&db, brightfield, Some(twin), "t1@home.test").await;
+        testing::message_from(&db, twins, "ada.f@studio.test").await;
+
+        merge(&db, ada, twin).await.unwrap();
+        assert_eq!(
+            detail(&db, ada).await.unwrap().addresses,
+            [
+                "ada@brightfield.test",
+                "a.ferrini@home.test",
+                "ada.f@studio.test"
+            ]
+        );
+        assert!(
+            matches!(detail(&db, twin).await, Err(Error::NotFound(_))),
+            "the merged requester is gone"
+        );
+        for n in [hers, twins] {
+            let requester = crate::tickets::detail(&db, n).await.unwrap().requester;
+            assert_eq!(requester.map(|r| (r.id, r.ticket_count)), Some((ada, 2)));
+        }
+        let requester = crate::tickets::detail(&db, twins)
+            .await
+            .unwrap()
+            .requester
+            .unwrap();
+        assert_eq!(requester.reply_to.as_deref(), Some("ada.f@studio.test"));
+    }
+
+    /// A requester identified with the wrong customer is moved from their page: all their tickets
+    /// move with them, closed ones included, links that do not fit the new customer are removed,
+    /// and they leave their site.
+    #[sqlx::test]
+    async fn moving_a_requester_from_their_page_takes_all_their_tickets(db: PgPool) {
+        use crate::tickets::{self, TicketState};
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let at_head = RequesterDetails {
+            site_id: Some(head),
+            ..RequesterDetails::default()
+        };
+        update(&db, ada, &at_head).await.unwrap();
+        let open = testing::ticket(&db, brightfield, Some(ada), "a1@brightfield.test").await;
+        let closed = testing::ticket(&db, brightfield, Some(ada), "a2@brightfield.test").await;
+        let laptop = testing::asset(&db, brightfield, "Laptop", "BF-LT-07").await;
+        crate::catalog::link_asset(&db, closed, laptop, true)
+            .await
+            .unwrap();
+        tickets::set_state(&db, closed, TicketState::Closed)
+            .await
+            .unwrap();
+        let other = testing::ticket(&db, brightfield, None, "o1@brightfield.test").await;
+
+        let moved = move_to_customer(&db, ada, harbor).await.unwrap();
+        assert_eq!((moved.moved, moved.unlinked), (2, 1));
+        for n in [open, closed] {
+            assert_eq!(tickets::detail(&db, n).await.unwrap().customer.id, harbor);
+        }
+        assert_eq!(
+            tickets::detail(&db, other).await.unwrap().customer.id,
+            brightfield,
+            "other requesters' tickets stay"
+        );
+        let seen = detail(&db, ada).await.unwrap();
+        assert_eq!(seen.customer.id, harbor);
+        assert!(seen.site.is_none(), "a site of the old customer");
+    }
+
+    /// Before a requester is moved, the agent is told what the move unlinks across all their
+    /// tickets: the old customer's assets, and the services the new customer does not use.
+    #[sqlx::test]
+    async fn a_requester_s_move_is_previewed(db: PgPool) {
+        use crate::catalog;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let first = testing::ticket(&db, brightfield, Some(ada), "a1@brightfield.test").await;
+        let second = testing::ticket(&db, brightfield, Some(ada), "a2@brightfield.test").await;
+        let laptop = testing::asset(&db, brightfield, "Laptop", "BF-LT-07").await;
+        let printer = testing::asset(&db, brightfield, "Printer", "BF-PR-02").await;
+        let mail = catalog::create_service(&db, "Hosted mail", "")
+            .await
+            .unwrap();
+        let backup = catalog::create_service(&db, "Backup", "").await.unwrap();
+        for service in [mail, backup] {
+            catalog::use_service(&db, service, brightfield)
+                .await
+                .unwrap();
+        }
+        catalog::use_service(&db, mail, harbor).await.unwrap();
+        catalog::link_asset(&db, first, laptop, true).await.unwrap();
+        catalog::link_asset(&db, second, laptop, true)
+            .await
+            .unwrap();
+        catalog::link_asset(&db, second, printer, true)
+            .await
+            .unwrap();
+        catalog::link_service(&db, first, mail, true).await.unwrap();
+        catalog::link_service(&db, second, backup, true)
+            .await
+            .unwrap();
+
+        let preview = move_preview(&db, ada, harbor).await.unwrap();
+        assert_eq!(preview.tickets, 2);
+        let names = |names: Vec<&str>| names.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(
+            preview
+                .assets
+                .into_iter()
+                .map(|a| a.name)
+                .collect::<Vec<_>>(),
+            names(vec!["BF-LT-07", "BF-PR-02"])
+        );
+        assert_eq!(
+            preview
+                .services
+                .into_iter()
+                .map(|s| s.name)
+                .collect::<Vec<_>>(),
+            names(vec!["Backup"])
+        );
+        let moved = move_to_customer(&db, ada, harbor).await.unwrap();
+        assert_eq!(
+            moved.unlinked, 4,
+            "both laptop links, the printer and backup"
+        );
+    }
+
+    /// A requester without tickets, or with only closed ones, is moved all the same.
+    #[sqlx::test]
+    async fn a_requester_without_open_tickets_is_moved_too(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        let n = testing::ticket(&db, brightfield, Some(lena), "l1@brightfield.test").await;
+        crate::tickets::set_state(&db, n, crate::tickets::TicketState::Closed)
+            .await
+            .unwrap();
+
+        assert_eq!(move_to_customer(&db, ada, harbor).await.unwrap().moved, 0);
+        assert_eq!(detail(&db, ada).await.unwrap().customer.id, harbor);
+        assert_eq!(move_to_customer(&db, lena, harbor).await.unwrap().moved, 1);
+        let ticket = crate::tickets::detail(&db, n).await.unwrap();
+        assert_eq!(ticket.customer.id, harbor);
+        assert_eq!(ticket.requester.map(|r| r.id), Some(lena));
+    }
+
+    /// A requester is not moved to their own customer or to an offboarded one, nor away from an
+    /// offboarded one, nor with a parent ticket, which stays with the help desk's own organization.
+    #[sqlx::test]
+    async fn moving_a_requester_is_refused_where_their_tickets_cannot_go(db: PgPool) {
+        use crate::tickets::{self, RequesterMove};
+        let northgate = crate::customers::create(&db, "Northgate Studio", &[])
+            .await
+            .unwrap();
+        sqlx::query("UPDATE customers SET is_help_desk = true WHERE id = $1")
+            .bind(northgate)
+            .execute(&db)
+            .await
+            .unwrap();
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let gone = testing::customer(&db, "Old Mill").await;
+        crate::customers::offboard(&db, gone).await.unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let refused = |requester: Uuid, customer: Uuid| {
+            let db = db.clone();
+            async move {
+                match move_to_customer(&db, requester, customer).await {
+                    Err(Error::Rule(why)) => why,
+                    other => panic!("move accepted: {other:?}"),
+                }
+            }
+        };
+        assert!(refused(ada, brightfield).await.contains("already"));
+        assert!(refused(ada, gone).await.contains("offboarded"));
+        assert!(matches!(
+            move_to_customer(&db, ada, Uuid::new_v4()).await,
+            Err(Error::NotFound(_))
+        ));
+
+        // Marco of the help desk opened a parent ticket for a failure; moving him would take it.
+        let marco = testing::requester(&db, northgate, "marco@northgate.test").await;
+        let parent = testing::ticket(&db, northgate, Some(marco), "p1@northgate.test").await;
+        let report = testing::ticket(&db, northgate, Some(marco), "p2@northgate.test").await;
+        let child = testing::ticket(&db, brightfield, None, "c1@brightfield.test").await;
+        crate::parents::attach(&db, child, parent).await.unwrap();
+        assert!(refused(marco, harbor).await.contains("parent"));
+        let Err(Error::Rule(why)) =
+            tickets::move_to_customer(&db, report, harbor, RequesterMove::Move).await
+        else {
+            panic!("a parent ticket moved along with its requester");
+        };
+        assert!(why.contains("parent"), "{why}");
+
+        crate::customers::offboard(&db, brightfield).await.unwrap();
+        assert!(refused(ada, harbor).await.contains("offboarded"));
+    }
+
+    /// The requester that remains keeps their details and takes those they lack from the merged
+    /// one, so that nothing about the person is lost.
+    #[sqlx::test]
+    async fn merging_keeps_the_details_of_both(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let twin = testing::requester(&db, brightfield, "a.ferrini@home.test").await;
+        let details =
+            |name: &str, phones: &[&str], job: Option<&str>, notes: &str, site| RequesterDetails {
+                name: Some(name.into()),
+                phone_numbers: phones.iter().map(|p| (*p).into()).collect(),
+                job_title: job.map(Into::into),
+                notes: notes.into(),
+                site_id: site,
+            };
+        update(
+            &db,
+            ada,
+            &details(
+                "Ada Ferrini",
+                &["000 000 0101"],
+                None,
+                "Works mornings.",
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+        update(
+            &db,
+            twin,
+            &details(
+                "A. Ferrini",
+                &["000 000 0102", "000 000 0101"],
+                Some("Office manager"),
+                "Prefers phone calls.",
+                Some(head),
+            ),
+        )
+        .await
+        .unwrap();
+
+        merge(&db, ada, twin).await.unwrap();
+        let seen = detail(&db, ada).await.unwrap();
+        assert_eq!(seen.name.as_deref(), Some("Ada Ferrini"));
+        assert_eq!(seen.phone_numbers, ["000 000 0101", "000 000 0102"]);
+        assert_eq!(seen.job_title.as_deref(), Some("Office manager"));
+        assert_eq!(
+            seen.notes,
+            "Works mornings.
+
+Prefers phone calls."
+        );
+        assert_eq!(seen.site.map(|s| s.id), Some(head));
+    }
+
+    /// Requesters of different customers are never merged, nor a requester with themselves; a
+    /// departed requester and an offboarded customer's requesters are not merged either.
+    #[sqlx::test]
+    async fn merging_is_refused_unless_both_are_present_requesters_of_one_customer(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let twin = testing::requester(&db, brightfield, "a.ferrini@home.test").await;
+        let ivo = testing::requester(&db, harbor, "ivo@harbor.test").await;
+        let refused = |kept: Uuid, merged: Uuid| {
+            let db = db.clone();
+            async move {
+                match merge(&db, kept, merged).await {
+                    Err(Error::Rule(why)) => why,
+                    other => panic!("merge accepted: {other:?}"),
+                }
+            }
+        };
+
+        assert!(refused(ada, ivo).await.contains("different customers"));
+        assert!(refused(ivo, ada).await.contains("different customers"));
+        assert!(refused(ada, ada).await.contains("themselves"));
+        assert!(matches!(
+            merge(&db, ada, Uuid::new_v4()).await,
+            Err(Error::NotFound(_))
+        ));
+        depart(&db, twin).await.unwrap();
+        assert!(refused(ada, twin).await.contains("departed"));
+        assert!(refused(twin, ada).await.contains("departed"));
+        bring_back(&db, twin).await.unwrap();
+        crate::customers::offboard(&db, brightfield).await.unwrap();
+        assert!(refused(ada, twin).await.contains("offboarded"));
+        for (requester, address) in [(ada, "ada@brightfield.test"), (twin, "a.ferrini@home.test")] {
+            assert_eq!(addresses(&db, requester).await.unwrap(), [address]);
+        }
+    }
+
+    /// The database keeps the merge rules even when the code is bypassed: a merge joins two
+    /// present requesters of one customer that is not offboarded, and the merged one is gone.
+    #[sqlx::test]
+    async fn the_database_keeps_the_merge_rules(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let twin = testing::requester(&db, brightfield, "a.ferrini@home.test").await;
+        let ivo = testing::requester(&db, harbor, "ivo@harbor.test").await;
+        // A merge of `merged` into `kept` done by hand; `remove` deletes the merged requester.
+        let by_hand = |kept: Uuid, merged: Uuid, remove: bool| {
+            let db = db.clone();
+            async move {
+                let mut tx = db.begin().await?;
+                sqlx::query("INSERT INTO requester_merges (merged_id, kept_id) VALUES ($1, $2)")
+                    .bind(merged)
+                    .bind(kept)
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query(
+                    "UPDATE requester_addresses SET requester_id = $1 WHERE requester_id = $2",
+                )
+                .bind(kept)
+                .bind(merged)
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query("UPDATE tickets SET requester_id = $1 WHERE requester_id = $2")
+                    .bind(kept)
+                    .bind(merged)
+                    .execute(&mut *tx)
+                    .await?;
+                if remove {
+                    sqlx::query("DELETE FROM requesters WHERE id = $1")
+                        .bind(merged)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+                tx.commit().await
+            }
+        };
+        testing::ticket(&db, harbor, Some(ivo), "i1@harbor.test").await;
+
+        assert!(by_hand(ada, ivo, true).await.is_err(), "across customers");
+        assert!(by_hand(ada, ada, true).await.is_err(), "with themselves");
+        assert!(
+            by_hand(ada, twin, false).await.is_err(),
+            "the merged one remains"
+        );
+        let pass = sqlx::query(
+            "UPDATE requester_addresses SET requester_id = $1 WHERE address = 'a.ferrini@home.test'",
+        )
+        .bind(ada)
+        .execute(&db)
+        .await;
+        assert!(
+            pass.is_err(),
+            "an address passed within the customer without a merge"
+        );
+        depart(&db, twin).await.unwrap();
+        assert!(
+            by_hand(ada, twin, true).await.is_err(),
+            "a departed requester"
+        );
+        bring_back(&db, twin).await.unwrap();
+        crate::customers::offboard(&db, brightfield).await.unwrap();
+        assert!(
+            by_hand(ada, twin, true).await.is_err(),
+            "an offboarded customer"
+        );
+        crate::customers::bring_back(&db, brightfield)
+            .await
+            .unwrap();
+        let merged = by_hand(ada, twin, true).await;
+        assert!(merged.is_ok(), "{merged:?}");
     }
 
     /// The database keeps the departed requesters' rules even when the code is bypassed.

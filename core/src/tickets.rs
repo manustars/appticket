@@ -293,8 +293,8 @@ pub struct Moved {
 }
 
 /// Moves the ticket to another customer. A requester of the old customer either moves along,
-/// taking all of their tickets (closed ones too), or leaves this ticket. Links that do not fit the
-/// new customer are removed.
+/// taking all of their tickets (closed ones too, see [`move_requester`]), or leaves this ticket.
+/// Links that do not fit the new customer are removed.
 pub async fn move_to_customer(
     db: &PgPool,
     number: i64,
@@ -312,57 +312,14 @@ pub async fn move_to_customer(
     if current == customer {
         return rule("the ticket already belongs to this customer");
     }
-    let is_parent: bool =
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM tickets WHERE parent_id = $1)")
-            .bind(ticket_id)
-            .fetch_one(&mut *tx)
-            .await?;
-    if is_parent {
-        return rule("a parent ticket stays with the help desk's own organization");
-    }
-    let offboarded: Option<bool> =
-        sqlx::query_scalar("SELECT offboarded_at IS NOT NULL FROM customers WHERE id = $1")
-            .bind(customer)
-            .fetch_optional(&mut *tx)
-            .await?;
-    match offboarded {
-        None => return Err(Error::NotFound("customer")),
-        Some(true) => return rule("the customer is offboarded and gets no tickets"),
-        Some(false) => {}
-    }
-
-    let affected: Vec<Uuid> = match (requester_id, requester) {
-        (Some(requester_id), RequesterMove::Move) => {
-            sqlx::query_scalar("SELECT id FROM tickets WHERE requester_id = $1")
-                .bind(requester_id)
-                .fetch_all(&mut *tx)
-                .await?
-        }
-        _ => vec![ticket_id],
-    };
-    let unlinked = crate::catalog::unlink_for_move(&mut tx, &affected, customer).await?;
-
     let moved = match (requester_id, requester) {
         (Some(requester_id), RequesterMove::Move) => {
-            // The foreign key cascades the new customer to every ticket of the requester. Their
-            // site is one of the old customer's, so they leave it.
-            sqlx::query("UPDATE requesters SET customer_id = $2, site_id = NULL WHERE id = $1")
-                .bind(requester_id)
-                .bind(customer)
-                .execute(&mut *tx)
-                .await?;
-            let moved: i64 =
-                sqlx::query_scalar("SELECT count(*) FROM tickets WHERE requester_id = $1")
-                    .bind(requester_id)
-                    .fetch_one(&mut *tx)
-                    .await?;
-            sqlx::query("UPDATE tickets SET updated_at = now() WHERE requester_id = $1")
-                .bind(requester_id)
-                .execute(&mut *tx)
-                .await?;
-            moved
+            crate::requesters::lock_with_customer(&mut tx, requester_id).await?;
+            move_requester(&mut tx, requester_id, customer).await?
         }
         (Some(_), RequesterMove::Remove) | (None, _) => {
+            receives_tickets(&mut tx, customer, &[ticket_id]).await?;
+            let unlinked = crate::catalog::unlink_for_move(&mut tx, &[ticket_id], customer).await?;
             sqlx::query(
                 "UPDATE tickets SET customer_id = $2, requester_id = NULL, updated_at = now()
                  WHERE id = $1",
@@ -371,11 +328,77 @@ pub async fn move_to_customer(
             .bind(customer)
             .execute(&mut *tx)
             .await?;
-            1
+            Moved { moved: 1, unlinked }
         }
     };
     tx.commit().await?;
-    Ok(Moved { moved, unlinked })
+    Ok(moved)
+}
+
+/// Moves a requester identified with the wrong customer to `customer`, with all of their tickets,
+/// closed ones included; links that do not fit the new customer are removed. The requester and
+/// their customer are locked by the caller. Their site is one of the old customer's, so they
+/// leave it.
+pub(crate) async fn move_requester(
+    tx: &mut Transaction<'_, Postgres>,
+    requester: Uuid,
+    customer: Uuid,
+) -> Result<Moved> {
+    let current: Uuid = sqlx::query_scalar("SELECT customer_id FROM requesters WHERE id = $1")
+        .bind(requester)
+        .fetch_one(&mut **tx)
+        .await?;
+    if current == customer {
+        return rule("the requester already belongs to this customer");
+    }
+    let affected: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM tickets WHERE requester_id = $1")
+        .bind(requester)
+        .fetch_all(&mut **tx)
+        .await?;
+    receives_tickets(tx, customer, &affected).await?;
+    let unlinked = crate::catalog::unlink_for_move(tx, &affected, customer).await?;
+    // The foreign key cascades the new customer to every ticket of the requester.
+    sqlx::query("UPDATE requesters SET customer_id = $2, site_id = NULL WHERE id = $1")
+        .bind(requester)
+        .bind(customer)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("UPDATE tickets SET updated_at = now() WHERE requester_id = $1")
+        .bind(requester)
+        .execute(&mut **tx)
+        .await?;
+    Ok(Moved {
+        moved: affected.len() as i64,
+        unlinked,
+    })
+}
+
+/// Refuses to move `tickets` to `customer` when it is missing or offboarded, or when one of them is
+/// a parent ticket, which stays with the help desk's own organization.
+async fn receives_tickets(
+    tx: &mut Transaction<'_, Postgres>,
+    customer: Uuid,
+    tickets: &[Uuid],
+) -> Result<()> {
+    let offboarded: Option<bool> =
+        sqlx::query_scalar("SELECT offboarded_at IS NOT NULL FROM customers WHERE id = $1")
+            .bind(customer)
+            .fetch_optional(&mut **tx)
+            .await?;
+    match offboarded {
+        None => return Err(Error::NotFound("customer")),
+        Some(true) => return rule("the customer is offboarded and gets no tickets"),
+        Some(false) => {}
+    }
+    let parent: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM tickets WHERE parent_id = ANY($1))")
+            .bind(tickets)
+            .fetch_one(&mut **tx)
+            .await?;
+    if parent {
+        return rule("a parent ticket stays with the help desk's own organization");
+    }
+    Ok(())
 }
 
 /// "Re: <title> [#<number>]", without stacking "Re:".

@@ -3017,6 +3017,196 @@
         }
       }
     },
+    "/api/requesters/{id}/merge": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Merges another requester of the same customer, who is the same person, into this one, which\nremains. A merge cannot be undone; requesters of different customers are never merged, nor\ndeparted ones.",
+        "operationId": "merge_requester",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The requester that remains",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergedRequester"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/requesters/{id}/move": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Moves a requester identified with the wrong customer to the right one, under the rule for\nmoving tickets: all their tickets move with them, closed ones included, and linked assets and\nservices that do not fit the new customer are unlinked. They leave their site.",
+        "operationId": "move_requester",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The requester",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequesterMoveTarget"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Moved"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/requesters/{id}/move-preview": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "What moving the requester to another customer would do: how many tickets move with them, and\nthe links of those tickets that do not fit the new customer and would be removed.",
+        "operationId": "preview_requester_move",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The requester",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "customer_id",
+            "in": "query",
+            "description": "The customer the requester is moved to.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovePreview"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/services": {
       "get": {
         "tags": [
@@ -5975,6 +6165,19 @@
           }
         }
       },
+      "MergedRequester": {
+        "type": "object",
+        "required": [
+          "requester_id"
+        ],
+        "properties": {
+          "requester_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The requester merged into this one: their addresses and tickets pass to this one, and they\nare removed."
+          }
+        }
+      },
       "MessageEntry": {
         "type": "object",
         "required": [
@@ -6044,6 +6247,36 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "MovePreview": {
+        "type": "object",
+        "description": "What moving a requester to another customer would do, for the agent to see before confirming.",
+        "required": [
+          "tickets",
+          "assets",
+          "services"
+        ],
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkedAsset"
+            },
+            "description": "The assets linked to their tickets: they belong to the old customer, so they are unlinked."
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkedService"
+            },
+            "description": "The services linked to their tickets that the new customer does not use: unlinked too."
+          },
+          "tickets": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many tickets would move with the requester, closed ones included."
           }
         }
       },
@@ -6841,6 +7074,19 @@
           "move",
           "remove"
         ]
+      },
+      "RequesterMoveTarget": {
+        "type": "object",
+        "required": [
+          "customer_id"
+        ],
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The customer the requester is moved to."
+          }
+        }
       },
       "ResolveChildren": {
         "type": "object",

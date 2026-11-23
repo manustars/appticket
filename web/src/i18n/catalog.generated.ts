@@ -161,6 +161,7 @@ export interface Messages {
   "move.unlinkAsset": { plural: false; placeholders: "customer" | "kind" | "name"; tags: never }
   "move.unlinkService": { plural: false; placeholders: "customer" | "name"; tags: never }
   "move.keepsLinks": { plural: false; placeholders: "customer"; tags: never }
+  "move.willUnlinkWithRequester": { plural: false; placeholders: never; tags: never }
   "links.assets": { plural: false; placeholders: never; tags: never }
   "links.services": { plural: false; placeholders: never; tags: never }
   "links.noAssets": { plural: false; placeholders: never; tags: never }
@@ -268,6 +269,24 @@ export interface Messages {
   "requester.comeBackHint": { plural: false; placeholders: never; tags: never }
   "requester.comeBackNeedsAddress": { plural: false; placeholders: never; tags: never }
   "requester.comeBack": { plural: false; placeholders: never; tags: never }
+  "requester.merge": { plural: false; placeholders: never; tags: never }
+  "requester.mergeHint": { plural: false; placeholders: "customer"; tags: never }
+  "requester.mergeWith": { plural: false; placeholders: never; tags: never }
+  "requester.choose": { plural: false; placeholders: never; tags: never }
+  "requester.mergeSubmit": { plural: false; placeholders: never; tags: never }
+  "requester.noneToMerge": { plural: false; placeholders: "customer"; tags: never }
+  "requester.confirmMerge": { plural: false; placeholders: "name" | "other"; tags: never }
+  "requester.merged": { plural: false; placeholders: "other"; tags: never }
+  "requester.move": { plural: false; placeholders: never; tags: never }
+  "requester.moveHint": { plural: false; placeholders: never; tags: never }
+  "requester.moveTo": { plural: false; placeholders: never; tags: never }
+  "requester.moveTakesTickets": { plural: true; placeholders: "count"; tags: never }
+  "requester.moveNoTickets": { plural: false; placeholders: never; tags: never }
+  "requester.moveLeavesSite": { plural: false; placeholders: "customer" | "site"; tags: never }
+  "requester.moveWillUnlink": { plural: false; placeholders: never; tags: never }
+  "requester.moveSubmit": { plural: false; placeholders: never; tags: never }
+  "requester.moved": { plural: false; placeholders: never; tags: never }
+  "requester.movedWithTickets": { plural: true; placeholders: "count"; tags: never }
   "sites.title": { plural: false; placeholders: never; tags: never }
   "sites.hint": { plural: false; placeholders: never; tags: never }
   "sites.empty": { plural: false; placeholders: never; tags: never }
