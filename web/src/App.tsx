@@ -62,7 +62,7 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
   const { t } = useI18n()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [failed, setFailed] = useState<'wrong' | 'later' | 'unreachable' | null>(null)
+  const [failed, setFailed] = useState<'wrong' | 'tooManyFailures' | 'unreachable' | null>(null)
   const [busy, setBusy] = useState(false)
 
   async function submit(event: FormEvent) {
@@ -101,7 +101,7 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
         {failed && (
           <p className="error" role="alert">
             {failed === 'wrong' ? t('signIn.wrong')
-              : failed === 'later' ? t('signIn.later')
+              : failed === 'tooManyFailures' ? t('signIn.tooManyFailures')
                 : t('error.unreachable')}
           </p>
         )}

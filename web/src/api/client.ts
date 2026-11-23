@@ -88,16 +88,16 @@ export async function currentAgent(): Promise<Agent | null> {
 }
 
 /**
- * Whether the agent is signed in; `wrong` when the e-mail or the password is wrong, `later` when
- * too many sign-ins failed and attempts are refused for a while.
+ * Whether the agent is signed in; `wrong` when the e-mail or the password is wrong,
+ * `tooManyFailures` when too many sign-ins failed and attempts are refused for a while.
  */
-export async function signIn(email: string, password: string): Promise<'signedIn' | 'wrong' | 'later'> {
+export async function signIn(email: string, password: string): Promise<'signedIn' | 'wrong' | 'tooManyFailures'> {
   try {
     await call('POST', '/api/session', { email, password })
     return 'signedIn'
   } catch (error) {
     if (error instanceof Unauthorized) return 'wrong'
-    if (error instanceof Refused && error.status === 429) return 'later'
+    if (error instanceof Refused && error.status === 429) return 'tooManyFailures'
     throw error
   }
 }
