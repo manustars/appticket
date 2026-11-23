@@ -277,7 +277,7 @@ impl AccountKey {
 }
 
 /// The address an attempt counts for, as stored.
-struct AddressKey(String);
+pub(crate) struct AddressKey(pub(crate) String);
 
 /// What failures are counted for.
 enum CountedFor<'a> {
@@ -297,7 +297,7 @@ async fn withdraw(db: impl PgExecutor<'_>, attempt: Uuid) -> sqlx::Result<()> {
 impl AddressKey {
     /// An IPv4 address (also when mapped into IPv6), or the /64 network of an IPv6 address, as
     /// one client usually holds a whole /64.
-    fn new(address: IpAddr) -> AddressKey {
+    pub(crate) fn new(address: IpAddr) -> AddressKey {
         AddressKey(match address.to_canonical() {
             IpAddr::V4(v4) => v4.to_string(),
             IpAddr::V6(v6) => ipnet::Ipv6Net::new_assert(v6, 64).trunc().to_string(),

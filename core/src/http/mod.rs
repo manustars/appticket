@@ -170,6 +170,11 @@ pub enum ApiError {
     TooManySignIns {
         retry_after: std::time::Duration,
     },
+    /// Too many sign-ins through the identity provider under way from the address: the first
+    /// ends after `retry_after`.
+    TooManySignInsUnderWay {
+        retry_after: std::time::Duration,
+    },
     Internal(anyhow::Error),
 }
 
@@ -189,11 +194,19 @@ impl IntoResponse for ApiError {
             ApiError::Conflict(why) => (StatusCode::CONFLICT, why),
             ApiError::Forbidden(why) => (StatusCode::FORBIDDEN, why),
             ApiError::TooManySignIns { retry_after: wait } => {
-                // Whole seconds, rounded up, so that a client retrying then is not refused again.
-                retry_after = Some(wait.as_secs() + u64::from(wait.subsec_nanos() > 0));
+                retry_after = Some(whole_seconds(wait));
                 (
                     StatusCode::TOO_MANY_REQUESTS,
                     "too many failed sign-ins: try again later".to_owned(),
+                )
+            }
+            ApiError::TooManySignInsUnderWay { retry_after: wait } => {
+                retry_after = Some(whole_seconds(wait));
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "too many sign-ins through the identity provider are under way from this \
+                     address: try again later"
+                        .to_owned(),
                 )
             }
             ApiError::Internal(error) => {
@@ -218,6 +231,12 @@ impl IntoResponse for ApiError {
         }
         response
     }
+}
+
+/// Whole seconds for `Retry-After`, rounded up, so that a client retrying then is not refused
+/// again.
+fn whole_seconds(wait: std::time::Duration) -> u64 {
+    wait.as_secs() + u64::from(wait.subsec_nanos() > 0)
 }
 
 /// Shown to agents as is: capitalised and ending with a full stop.

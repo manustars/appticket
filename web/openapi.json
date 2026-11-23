@@ -4071,6 +4071,16 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Too many sign-ins under way from the client's address; `Retry-After` says when one ends",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }

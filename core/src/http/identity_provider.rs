@@ -8,9 +8,10 @@ use axum::{
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
+use super::client_address::ClientAddress;
 use super::{ApiError, AppState};
 use crate::identities::{self, Refusal};
-use crate::oidc::CallbackQuery;
+use crate::oidc::{Begin, CallbackQuery};
 
 /// The cookie that keeps a sign-in's state in the browser that set out, until it comes back.
 const STATE_COOKIE: &str = "hd_sign_in_state";
@@ -32,17 +33,24 @@ fn sign_in_error(reason: &str) -> Redirect {
     responses((status = SEE_OTHER, description = "To the identity provider, or back to the \
         sign-in page with `sign_in_error=failed` when it cannot be reached"),
         (status = NOT_FOUND, body = super::Problem, description = "No identity provider is \
-        configured")))]
+        configured"),
+        (status = TOO_MANY_REQUESTS, body = super::Problem, description = "Too many sign-ins \
+        under way from the client's address; `Retry-After` says when one ends")))]
 async fn begin(
     State(state): State<AppState>,
+    ClientAddress(address): ClientAddress,
     jar: CookieJar,
 ) -> Result<(CookieJar, Redirect), ApiError> {
     let provider = state
         .identity_provider
         .as_ref()
         .ok_or(ApiError::NotFound("identity provider"))?;
-    match provider.begin(&state.db).await {
-        Ok(redirect) => {
+    match provider.begin(&state.db, address).await {
+        Ok(Begin::TooMany { retry_after }) => {
+            tracing::warn!(%address, "too many sign-ins through the identity provider under way");
+            Err(ApiError::TooManySignInsUnderWay { retry_after })
+        }
+        Ok(Begin::Redirect(redirect)) => {
             let cookie = Cookie::build((STATE_COOKIE, redirect.state))
                 .path(BEGIN_PATH)
                 .http_only(true)
@@ -122,9 +130,13 @@ impl Refusal {
 
 #[cfg(test)]
 mod tests {
-    //! Against the development Keycloak (`dev/keycloak`, started by compose.yaml and in CI).
+    //! Mostly against the development Keycloak (`dev/keycloak`, started by compose.yaml and in
+    //! CI).
+
+    use std::net::SocketAddr;
 
     use axum::body::Body;
+    use axum::extract::ConnectInfo;
     use axum::http::{Request, StatusCode, header};
     use sqlx::PgPool;
     use tower::ServiceExt;
@@ -138,8 +150,12 @@ mod tests {
     const LENA: &str = "6f1c2a0e-8d3b-4c55-9a41-0b7e2d6f3a01";
 
     fn state(db: &PgPool) -> AppState {
+        state_with_issuer(db, ISSUER)
+    }
+
+    fn state_with_issuer(db: &PgPool, issuer: &str) -> AppState {
         let settings = crate::oidc::Settings {
-            issuer: Some(ISSUER.to_owned()),
+            issuer: Some(issuer.to_owned()),
             client_id: Some("hd-core".to_owned()),
             client_secret: Some("dev-only-client-secret".to_owned()),
             client_secret_file: None,
@@ -161,6 +177,7 @@ mod tests {
         location: String,
         cookies: Vec<String>,
         max_ages: Vec<String>,
+        retry_after: Option<String>,
     }
 
     impl Answer {
@@ -174,7 +191,13 @@ mod tests {
     }
 
     async fn get(state: &AppState, uri: &str, cookie: Option<&str>) -> Answer {
-        let mut request = Request::builder().uri(uri);
+        get_from(state, uri, cookie, "192.0.2.1").await
+    }
+
+    /// Asks the core for `uri` on a connection from the address `from`.
+    async fn get_from(state: &AppState, uri: &str, cookie: Option<&str>, from: &str) -> Answer {
+        let connection = ConnectInfo(SocketAddr::new(from.parse().unwrap(), 50000));
+        let mut request = Request::builder().uri(uri).extension(connection);
         if let Some(cookie) = cookie {
             request = request.header(header::COOKIE, cookie);
         }
@@ -189,6 +212,10 @@ mod tests {
             .map(|v| v.to_str().unwrap().to_owned())
             .collect();
         Answer {
+            retry_after: response
+                .headers()
+                .get(header::RETRY_AFTER)
+                .map(|v| v.to_str().unwrap().to_owned()),
             status: response.status(),
             location: response
                 .headers()
@@ -310,6 +337,11 @@ mod tests {
         assert!(query["scope"].split(' ').any(|s| s == "openid"));
         let cookie = begun.cookie("hd_sign_in_state").unwrap();
         assert_eq!(cookie, format!("hd_sign_in_state={}", query["state"]));
+        let from: String = sqlx::query_scalar("SELECT address FROM identity_provider_sign_ins")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(from, "192.0.2.1");
 
         let keycloak = browser();
         let back = at_keycloak(&keycloak, &begun.location, "lena").await;
@@ -532,5 +564,64 @@ mod tests {
         let answer = sign_in_as(&state, "lena").await;
         assert_eq!(answer.location, "/?sign_in_error=email_of_another_agent");
         assert!(answer.cookie("hd_session").is_none());
+    }
+
+    /// Sign-ins under way from `address`, ending in `minutes` (negative: ended).
+    async fn pending(db: &PgPool, address: &str, count: i64, minutes: i32) {
+        sqlx::query(
+            "INSERT INTO identity_provider_sign_ins
+                 (state_hash, nonce, pkce_verifier, address, expires_at)
+             SELECT sha256(gen_random_uuid()::text::bytea), 'n', 'v', $1,
+                    now() + make_interval(mins => $3)
+             FROM generate_series(1, $2)",
+        )
+        .bind(address)
+        .bind(count)
+        .bind(minutes)
+        .execute(db)
+        .await
+        .unwrap();
+    }
+
+    /// Sign-ins under way from `address`, and ended ones from anywhere.
+    async fn pending_and_ended(db: &PgPool, address: &str) -> (i64, i64) {
+        sqlx::query_as(
+            "SELECT count(*) FILTER (WHERE address = $1 AND expires_at > now()),
+                    count(*) FILTER (WHERE expires_at <= now())
+             FROM identity_provider_sign_ins",
+        )
+        .bind(address)
+        .fetch_one(db)
+        .await
+        .unwrap()
+    }
+
+    /// Setting a sign-in out costs a row and a call to the provider, for anyone: an address has
+    /// a bounded number under way, and ended ones are deleted.
+    #[sqlx::test]
+    async fn sign_ins_under_way_are_limited_per_address_and_ended_ones_deleted(db: PgPool) {
+        // A provider that does not answer: a sign-in allowed to set out comes back failed.
+        let state = state_with_issuer(&db, "http://127.0.0.1:9/realms/nowhere");
+        pending(&db, "192.0.2.7", 20, 5).await;
+        pending(&db, "198.51.100.4", 3, -1).await;
+
+        let refused = get_from(&state, "/api/session/identity-provider", None, "192.0.2.7").await;
+        assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+        let wait: u64 = refused.retry_after.clone().unwrap().parse().unwrap();
+        assert!((1..=300).contains(&wait), "{wait}");
+        assert!(refused.cookie("hd_sign_in_state").is_none());
+
+        // Another address may set out; the provider not answering, nothing stays under way.
+        let other = get_from(
+            &state,
+            "/api/session/identity-provider",
+            None,
+            "203.0.113.9",
+        )
+        .await;
+        assert_eq!(other.location, "/?sign_in_error=failed");
+        assert_eq!(pending_and_ended(&db, "203.0.113.9").await, (0, 0));
+        // The ended ones are gone, the 20 under way stay.
+        assert_eq!(pending_and_ended(&db, "192.0.2.7").await, (20, 0));
     }
 }
