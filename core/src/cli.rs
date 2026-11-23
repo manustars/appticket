@@ -400,7 +400,7 @@ Sites file (--sites); a site is recognised by its name within its customer, igno
 The customers file is taken first, so that a site can be at a customer it creates. A row that
 breaks a rule is left out with its reason, as are the sites of a customer row left out; the
 rest is imported. The rows left out are written to <kind>-left-out.csv, with the same columns
-and an error column, ready to correct and import again.";
+and an error column, ready to correct and import again; never over a file being imported.";
 
 /// Import customers and sites from CSV files: shows what it would do, and does it with --apply.
 #[derive(clap::Args)]
@@ -443,6 +443,31 @@ pub async fn import(db: &PgPool, args: ImportArgs, out: &mut impl Write) -> anyh
     }
     if paths.iter().filter(|(_, p)| p.as_os_str() == "-").count() > 1 {
         anyhow::bail!("only one file can be read from standard input");
+    }
+    // Where the rows left out of each file go, decided before anything is imported: never over
+    // a file being imported, which may hold the corrections.
+    let mut targets = Vec::new();
+    for (kind, path) in &paths {
+        let dir = match (&args.left_out, path.as_os_str() == "-") {
+            (Some(dir), _) => dir.clone(),
+            (None, false) => path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .map_or_else(|| PathBuf::from("."), PathBuf::from),
+            (None, true) => continue,
+        };
+        let target = dir.join(format!("{}-left-out.csv", kind.as_str()));
+        if paths
+            .iter()
+            .any(|(_, input)| input.as_os_str() != "-" && same_file(input, &target))
+        {
+            anyhow::bail!(
+                "the rows left out would be written over {}, a file being imported: \
+                 rename that file, or pass --left-out with another folder",
+                target.display()
+            );
+        }
+        targets.push((*kind, target));
     }
     let mode = if args.apply {
         Mode::Apply
@@ -489,20 +514,9 @@ pub async fn import(db: &PgPool, args: ImportArgs, out: &mut impl Write) -> anyh
         let Some(left_out) = &file.left_out else {
             continue;
         };
-        let path = &paths.iter().find(|(kind, _)| *kind == file.kind).unwrap().1;
-        let dir = match (&args.left_out, path.as_os_str() == "-") {
-            (Some(dir), _) => Some(dir.clone()),
-            (None, false) => Some(
-                path.parent()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from(".")),
-            ),
-            (None, true) => None,
-        };
-        match dir {
-            Some(dir) => {
-                let written = dir.join(format!("{}-left-out.csv", file.kind.as_str()));
-                std::fs::write(&written, left_out)
+        match targets.iter().find(|(kind, _)| *kind == file.kind) {
+            Some((_, written)) => {
+                std::fs::write(written, left_out)
                     .with_context(|| format!("writing {}", written.display()))?;
                 writeln!(out, "  rows left out written to {}", written.display())?;
             }
@@ -518,6 +532,25 @@ pub async fn import(db: &PgPool, args: ImportArgs, out: &mut impl Write) -> anyh
         writeln!(out, "Nothing changed: run again with --apply to import.")?;
     }
     Ok(())
+}
+
+/// Whether two paths name the same file; a file that does not exist yet is compared by its
+/// folder and name.
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    fn resolved(path: &std::path::Path) -> Option<PathBuf> {
+        if let Ok(path) = path.canonicalize() {
+            return Some(path);
+        }
+        let dir = match path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            Some(dir) => dir.canonicalize().ok()?,
+            None => std::env::current_dir().ok()?.canonicalize().ok()?,
+        };
+        Some(dir.join(path.file_name()?))
+    }
+    match (resolved(a), resolved(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => a == b,
+    }
 }
 
 #[cfg(test)]
@@ -537,6 +570,31 @@ mod tests {
                 "{column} is not described"
             );
         }
+    }
+
+    #[sqlx::test]
+    async fn the_rows_left_out_are_never_written_over_a_file_imported(db: PgPool) {
+        let dir = std::env::temp_dir().join(format!("hd-import-{}", Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let corrected = dir.join("customers-left-out.csv");
+        let content = "name,tax_country,error\nHarbor Lane,ITA,an old reason\n";
+        std::fs::write(&corrected, content).unwrap();
+        for left_out in [None, Some(dir.clone())] {
+            let args = ImportArgs {
+                customers: Some(corrected.clone()),
+                sites: None,
+                apply: true,
+                left_out,
+            };
+            let why = import(&db, args, &mut Vec::new())
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(why.contains("--left-out"), "{why}");
+        }
+        assert_eq!(std::fs::read_to_string(&corrected).unwrap(), content);
+        assert!(crate::customers::list(&db).await.unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[sqlx::test]
