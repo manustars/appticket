@@ -5,11 +5,9 @@ import {
   addRequester,
   addSite,
   bringBackCustomer,
-  createAsset,
   createCustomer,
   getCustomer,
   listAllCustomers,
-  listAssetKinds,
   listCustomerAssets,
   listCustomerServices,
   listExternalSystems,
@@ -18,22 +16,21 @@ import {
   offboardCustomer,
   removeDomain,
   removeExternalReference,
-  retireAsset,
   retireSite,
   startUsingService,
   stopUsingService,
   unmarkKeyRequester,
-  updateAsset,
   updateCustomer,
   updateSite,
   type CustomerDetail,
 } from './api/client'
+import { CustomerAssets } from './Assets'
 import { countries, countryName } from './countries'
 import { useI18n } from './i18n/context'
 import { DepartedMarker } from './DepartedMarker'
 import { Problem } from './Problem'
 import { requesterLabel } from './people'
-import { adminHref, customerHref, customersHref, defaultFilters, go, importHref, requesterHref, serviceHref, ticketsHref } from './route'
+import { customerHref, customersHref, defaultFilters, go, importHref, requesterHref, serviceHref, ticketsHref } from './route'
 import { useSession } from './session'
 import { useAction, useLoad } from './useAction'
 
@@ -508,14 +505,19 @@ function Sites({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
   }
 
   function retire(siteId: string, siteName: string) {
-    // The requesters named are those at the site now, not when the page was loaded.
+    // The requesters and assets named are those at the site now, not when the page was loaded.
     let question = ''
     void action.run(async () => {
-      const fresh = await getCustomer(c.id)
-      const there = fresh.requester_list.filter((r) => r.site_id === siteId).map((r) => requesterLabel(t, r.name, r.addresses[0]))
-      question = there.length === 0
-        ? t('sites.confirmRetire', { name: siteName })
-        : t('sites.confirmRetireWithRequesters', { name: siteName, count: there.length, requesters: there.join(', ') })
+      const [fresh, assets] = await Promise.all([getCustomer(c.id), listCustomerAssets(c.id)])
+      const requesters = fresh.requester_list.filter((r) => r.site_id === siteId).map((r) => requesterLabel(t, r.name, r.addresses[0]))
+      // Those whose own site it is: an asset with its holder elsewhere still has it to fall back on.
+      const there = assets.filter((a) => a.site?.id === siteId).map((a) => a.name)
+      question = [
+        t('sites.retireAsk', { name: siteName }),
+        requesters.length > 0 && t('sites.retireLeavesRequesters', { count: requesters.length, requesters: requesters.join(', ') }),
+        there.length > 0 && t('sites.retireLeavesAssets', { count: there.length, assets: there.join(', ') }),
+        t('sites.retireStays'),
+      ].filter(Boolean).join(' ')
     }).then((ok) => {
       if (!ok || !window.confirm(question)) return
       void action.run(() => retireSite(siteId)).then(async (done) => { if (done) await onChanged() })
@@ -704,140 +706,6 @@ function Requesters({ customer: c, readOnly, onChanged, onSignedOut }: PartProps
             <input value={name} onChange={(e) => setName(e.target.value)} />
           </label>
           <button type="submit" disabled={action.busy || !email.trim()}>{t('customer.addRequester')}</button>
-        </form>
-      )}
-      <Problem error={action.error} />
-    </section>
-  )
-}
-
-const loadKinds = () => listAssetKinds()
-
-function CustomerAssets({ customer: c, readOnly, onSignedOut }: Omit<PartProps, 'onChanged'>) {
-  const { t, rich, formatTime } = useI18n()
-  const load = useCallback(() => listCustomerAssets(c.id), [c.id])
-  const assets = useLoad(load, onSignedOut)
-  const kinds = useLoad(loadKinds, onSignedOut)
-  const action = useAction(onSignedOut)
-  // The asset being edited, with what is picked and typed for it.
-  const [editing, setEditing] = useState<{ id: string; kindId: string; name: string } | null>(null)
-  const [kind, setKind] = useState('')
-  const [name, setName] = useState('')
-  const id = useId()
-
-  function add(event: FormEvent) {
-    event.preventDefault()
-    if (!kind || !name.trim()) return
-    void action.run(() => createAsset(c.id, kind, name.trim())).then(async (ok) => {
-      if (!ok) return
-      setKind('')
-      setName('')
-      await assets.reload()
-    })
-  }
-
-  function save(event: FormEvent) {
-    event.preventDefault()
-    if (!editing || !editing.kindId || !editing.name.trim()) return
-    void action.run(() => updateAsset(editing.id, editing.kindId, editing.name.trim())).then(async (ok) => {
-      if (!ok) return
-      setEditing(null)
-      await assets.reload()
-    })
-  }
-
-  const kindOptions = kinds.data?.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)
-
-  function retire(assetId: string, assetName: string) {
-    if (!window.confirm(t('assets.confirmRetire', { name: assetName }))) return
-    void action.run(() => retireAsset(assetId)).then(async (ok) => { if (ok) await assets.reload() })
-  }
-
-  return (
-    <section className="panel" aria-labelledby={`${id}-title`}>
-      <h2 id={`${id}-title`}>{t('assets.title')}</h2>
-      <Problem error={assets.error} />
-      <Problem error={kinds.error} />
-      {assets.data?.length === 0 && <p className="empty">{t('assets.empty')}</p>}
-      {assets.data && assets.data.length > 0 && (
-        // The row being edited submits the form below by its id, so that the table sits in no form.
-        <table className="data">
-          <thead>
-            <tr>
-              <th>{t('assets.kind')}</th><th>{t('assets.name')}</th>
-              <th><span className="visually-hidden">{t('table.actions')}</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            {assets.data.map((a) => editing?.id === a.id ? (
-              // Its own key: reusing the shown row would turn the clicked Edit button into Save,
-              // and the click would then submit the form.
-              <tr key={`${a.id}-edit`}>
-                <td>
-                  <select form={`${id}-edit`} aria-label={t('assets.kind')} required value={editing.kindId}
-                    onChange={(e) => setEditing({ ...editing, kindId: e.target.value })}>
-                    {kindOptions}
-                  </select>
-                </td>
-                <td>
-                  <input form={`${id}-edit`} aria-label={t('assets.name')} required value={editing.name}
-                    onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
-                </td>
-                <td className="row-actions">
-                  <button type="submit" form={`${id}-edit`} disabled={action.busy}>{t('action.save')}</button>
-                  <button type="button" className="quiet" onClick={() => { setEditing(null); action.clear() }}>
-                    {t('action.cancel')}
-                  </button>
-                </td>
-              </tr>
-            ) : (
-              <tr key={a.id} className={a.retired_at ? 'retired' : ''}>
-                <td>{a.kind}</td>
-                <td>
-                  {a.name}
-                  {a.retired_at && (
-                    <> <span className="marker retired">{t('assets.retired', { date: formatTime(a.retired_at) })}</span></>
-                  )}
-                </td>
-                <td className="row-actions">
-                  {!readOnly && !a.retired_at && (
-                    <>
-                      <button type="button" className="link" disabled={action.busy}
-                        onClick={() => setEditing({ id: a.id, kindId: a.kind_id, name: a.name })}>
-                        {t('action.edit')}
-                      </button>
-                      <button type="button" className="link danger" disabled={action.busy}
-                        onClick={() => retire(a.id, a.name)}>
-                        {t('assets.retire')}
-                      </button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {editing && <form id={`${id}-edit`} onSubmit={save} />}
-      {!readOnly && kinds.data?.length === 0 && (
-        <p className="hint">
-          {rich('assets.noKinds', { link: (inner) => <a href={adminHref('kinds')}>{inner}</a> })}
-        </p>
-      )}
-      {!readOnly && (
-        <form className="inline-form" onSubmit={add}>
-          <label>
-            {t('assets.kind')}
-            <select required value={kind} onChange={(e) => setKind(e.target.value)}>
-              <option value="" disabled>{t('assets.chooseKind')}</option>
-              {kindOptions}
-            </select>
-          </label>
-          <label>
-            {t('assets.name')}
-            <input required value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
-          <button type="submit" disabled={action.busy || !kind || !name.trim()}>{t('assets.add')}</button>
         </form>
       )}
       <Problem error={action.error} />

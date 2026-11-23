@@ -15,6 +15,7 @@ import {
   type Moved,
   type RequesterDetail,
 } from './api/client'
+import { HeldAssets } from './Assets'
 import { useI18n } from './i18n/context'
 import { requesterLabel } from './people'
 import { Problem } from './Problem'
@@ -77,6 +78,10 @@ export function RequesterPage({ id, onChanged, onSignedOut }: PageProps) {
       <Problem error={requester.error} />
       <Details requester={r} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       <Addresses requester={r} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
+      <section className="panel" aria-labelledby={`${id}-assets`}>
+        <h2 id={`${id}-assets`}>{t('requester.heldAssets')}</h2>
+        <HeldAssets assets={r.held_assets} />
+      </section>
       {!readOnly && <Departure requester={r} onChanged={changed} onSignedOut={onSignedOut} />}
       {/* A departed requester does not remain from a merge: they come back first, or are merged into another. */}
       {!readOnly && !r.departed_at && <Merge requester={r} onChanged={changedWithTickets} onSignedOut={onSignedOut} />}
@@ -410,7 +415,11 @@ function Departure({ requester: r, onChanged, onSignedOut }: Omit<PartProps, 're
   const name = requesterLabel(t, r.name, r.addresses[0])
 
   function depart() {
-    if (!window.confirm(t('requester.confirmDepart', { name }))) return
+    const held = r.held_assets.map((a) => a.name)
+    const question = held.length === 0
+      ? t('requester.confirmDepart', { name })
+      : `${t('requester.confirmDepart', { name })} ${t('requester.departLeavesAssets', { count: held.length, assets: held.join(', ') })}`
+    if (!window.confirm(question)) return
     void action.run(() => departRequester(r.id)).then(async (ok) => { if (ok) await onChanged() })
   }
 

@@ -8,6 +8,7 @@ export type Agent = Schemas['Agent']
 export type AgentAccount = Schemas['AgentAccount']
 export type AgentEntry = Schemas['AgentEntry']
 export type Asset = Schemas['Asset']
+export type AssetFields = Schemas['AssetFields']
 export type AssetKind = Schemas['AssetKind']
 export type CustomerDetail = Schemas['CustomerDetail']
 export type CustomerEntry = Schemas['CustomerEntry']
@@ -466,14 +467,16 @@ export function listCustomerAssets(id: string): Promise<Asset[]> {
   return json('GET', `${customerPath(id)}/assets`)
 }
 
-export async function createAsset(customerId: string, kindId: string, name: string): Promise<void> {
-  const request: Schemas['AssetFields'] = { kind_id: kindId, name }
-  await call('POST', `${customerPath(customerId)}/assets`, request)
+export async function createAsset(customerId: string, fields: AssetFields): Promise<void> {
+  await call('POST', `${customerPath(customerId)}/assets`, fields)
 }
 
-export async function updateAsset(id: string, kindId: string, name: string): Promise<void> {
-  const request: Schemas['AssetFields'] = { kind_id: kindId, name }
-  await call('PUT', assetPath(id), request)
+/**
+ * Changes an asset's kind, name, serial number, site and holder; those left out are cleared. The
+ * site and holder are its customer's, the site active and the holder not departed.
+ */
+export async function updateAsset(id: string, fields: AssetFields): Promise<void> {
+  await call('PUT', assetPath(id), fields)
 }
 
 /** The asset stays on the tickets that refer to it but gets no new links. */

@@ -402,7 +402,11 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Changes an asset's kind and name. */
+        /**
+         * Changes an asset's kind, name, serial number, site and holder; those left out are cleared. The
+         *     site and the holder belong to the asset's customer; the site is not retired, the holder has not
+         *     departed, and a retired asset has no holder.
+         */
         put: operations["update_asset"];
         post?: never;
         delete?: never;
@@ -494,7 +498,7 @@ export interface paths {
         /** The customer's assets, active ones first. */
         get: operations["customer_assets"];
         put?: never;
-        /** Adds an asset the customer owns. */
+        /** Adds an asset the customer owns, with its serial number, site and holder if given. */
         post: operations["create_asset"];
         delete?: never;
         options?: never;
@@ -997,7 +1001,8 @@ export interface paths {
         /**
          * Moves a requester identified with the wrong customer to the right one, under the rule for
          *     moving tickets: all their tickets move with them, closed ones included, and linked assets and
-         *     services that do not fit the new customer are unlinked. They leave their site.
+         *     services that do not fit the new customer are unlinked. They leave their site, and the assets
+         *     they hold stay with the old customer without a holder.
          */
         post: operations["move_requester"];
         delete?: never;
@@ -1178,8 +1183,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Retires a site: it stays visible but gets no new requesters or assets. Sites are never
-         *     deleted.
+         * Retires a site: it stays visible but gets no new requesters or assets, and the requesters and
+         *     assets at it are left without a site. Sites are never deleted.
          */
         post: operations["retire_site"];
         delete?: never;
@@ -1455,6 +1460,23 @@ export interface components {
             /** @description The new agent's first password, generated; it is not shown again. */
             password: string;
         };
+        /** @description An asset as add-ons read it: without its holder, who is a person. */
+        AddonAsset: {
+            /** Format: uuid */
+            customer_id: string;
+            customer_name: string;
+            /** Format: uuid */
+            id: string;
+            /** @description The name of its asset kind: laptop, printer, application, licence… */
+            kind: string;
+            /** Format: uuid */
+            kind_id: string;
+            name: string;
+            /** Format: date-time */
+            retired_at?: string | null;
+            /** @description The add-on it came from, when an add-on supplies it. */
+            source_addon?: string | null;
+        };
         AddonCustomer: {
             /** @description Mail domains that identify the customer's requesters. */
             domains: string[];
@@ -1547,28 +1569,47 @@ export interface components {
             name: string;
         };
         Asset: {
+            at_site?: components["schemas"]["SiteRef"] | null;
             /** Format: uuid */
             customer_id: string;
             customer_name: string;
+            holder?: components["schemas"]["Holder"] | null;
             /** Format: uuid */
             id: string;
             /** @description The name of its asset kind: laptop, printer, application, licence… */
             kind: string;
             /** Format: uuid */
             kind_id: string;
+            /** @description Whether its kind moves with its holder; otherwise it stays at its own site. */
+            moves_with_holder: boolean;
             name: string;
             /** Format: date-time */
             retired_at?: string | null;
+            serial_number?: string | null;
+            site?: components["schemas"]["SiteRef"] | null;
             /** @description The add-on it came from, when an add-on supplies it. */
             source_addon?: string | null;
         };
+        /** @description What agents who manage the catalog set on an asset. */
         AssetFields: {
+            /**
+             * Format: uuid
+             * @description A requester of the asset's customer who has not departed.
+             */
+            holder_id?: string | null;
             /**
              * Format: uuid
              * @description Its asset kind, one of the list the help desk manages.
              */
             kind_id: string;
             name: string;
+            /** @description Empty or left out for none. */
+            serial_number?: string | null;
+            /**
+             * Format: uuid
+             * @description One of the asset's customer's sites that is not retired.
+             */
+            site_id?: string | null;
         };
         AssetKind: {
             /** Format: uuid */
@@ -1775,6 +1816,14 @@ export interface components {
         Health: {
             status: string;
         };
+        /** @description The requester an asset has been given to. */
+        Holder: {
+            /** @description The first of their addresses. */
+            address?: string | null;
+            /** Format: uuid */
+            id: string;
+            name?: string | null;
+        };
         ImportFile: {
             /** @description The file's text: CSV with a header of fixed column names, comma or semicolon separated. */
             content: string;
@@ -1914,6 +1963,8 @@ export interface components {
         MovePreview: {
             /** @description The assets linked to their tickets: they belong to the old customer, so they are unlinked. */
             assets: components["schemas"]["LinkedAsset"][];
+            /** @description The assets they hold: these stay with the old customer, without a holder. */
+            held_assets: components["schemas"]["LinkedAsset"][];
             /** @description The requester is a key requester of the old customer, which they would stop being. */
             key_requester: boolean;
             /** @description The services linked to their tickets that the new customer does not use: unlinked too. */
@@ -2177,6 +2228,8 @@ export interface components {
              *     gets no tickets and their messages wait in the inbox.
              */
             departed_at?: string | null;
+            /** @description The assets they hold, by kind. */
+            held_assets: components["schemas"]["Asset"][];
             /** Format: uuid */
             id: string;
             job_title?: string | null;
@@ -2480,7 +2533,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Asset"][];
+                    "application/json": components["schemas"]["AddonAsset"][];
                 };
             };
             401: {
