@@ -38,6 +38,7 @@ mod tickets;
 mod web;
 
 pub use client_address::{TrustedProxies, parse_proxies};
+pub use identity_provider::connect as connect_identity_provider;
 pub use web::with_web;
 
 #[derive(OpenApi)]
@@ -61,6 +62,8 @@ pub struct AppState {
     pub trusted_proxies: TrustedProxies,
     /// The OpenID Connect identity provider agents may sign in through, when configured.
     pub identity_provider: Option<Arc<crate::oidc::Provider>>,
+    /// What signing in through the identity provider last did, when one is configured.
+    pub identity_provider_activity: Option<crate::mail_status::Tracker>,
 }
 
 #[cfg(test)]
@@ -73,6 +76,7 @@ impl AppState {
             sign_in_limits: SignInLimits::for_tests(5, std::time::Duration::from_secs(15 * 60)),
             trusted_proxies: TrustedProxies::default(),
             identity_provider: None,
+            identity_provider_activity: None,
         }
     }
 }

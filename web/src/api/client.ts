@@ -17,6 +17,7 @@ export type CustomerSummary = Schemas['CustomerSummary']
 export type Draft = Schemas['Draft']
 export type DraftMode = Schemas['DraftMode']
 export type FailingReply = Schemas['FailingReply']
+export type IdentityProviderState = Schemas['IdentityProviderState']
 export type ImportFile = Schemas['ImportFile']
 export type ImportKind = Schemas['ImportKind']
 export type ImportReport = Schemas['ImportReport']
@@ -616,6 +617,16 @@ export async function reactivateAgent(id: string): Promise<void> {
   await call('POST', `${adminAgentPath(id)}/reactivate`)
 }
 
+/** Removes the agent's local password; the sessions opened with it end. */
+export async function removeAgentPassword(id: string): Promise<void> {
+  await call('DELETE', `${adminAgentPath(id)}/password`)
+}
+
+/** Unlinks the agent's identity; the sessions opened through the identity provider end. */
+export async function unlinkAgentIdentity(id: string): Promise<void> {
+  await call('DELETE', `${adminAgentPath(id)}/identity`)
+}
+
 /** Every role, the Administrator first. */
 export function listRoles(): Promise<Role[]> {
   return json('GET', '/api/admin/roles')
@@ -656,4 +667,9 @@ export async function setAddonEnabled(name: string, enabled: boolean): Promise<v
 /** How reading and sending mail went lately, and what waits in the outbox. */
 export function getMailState(): Promise<MailState> {
   return json('GET', '/api/admin/mail')
+}
+
+/** Whether an identity provider is configured and how signing in through it went lately. */
+export function getIdentityProviderState(): Promise<IdentityProviderState> {
+  return json('GET', '/api/admin/identity-provider')
 }

@@ -1,4 +1,5 @@
-//! Managing agents: adding them, their roles, passwords and deactivation (ADR 0007).
+//! Managing agents: adding them, their roles, passwords, how they sign in and deactivation (ADR
+//! 0007).
 
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -26,13 +27,25 @@ pub struct AgentAccount {
     /// When the agent was deactivated; empty while they work at the help desk.
     #[serde(with = "time::serde::rfc3339::option")]
     pub deactivated_at: Option<OffsetDateTime>,
+    /// Whether the agent has a local password.
+    pub has_local_password: bool,
+    /// Whether the agent has an identity of an identity provider linked to them.
+    pub has_linked_identity: bool,
+    /// When the agent last signed in, with a local password or through the identity provider;
+    /// empty if they never did.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub last_signed_in_at: Option<OffsetDateTime>,
 }
 
 /// Every agent: active ones first, then by name.
 pub async fn list(db: &PgPool) -> Result<Vec<AgentAccount>> {
     Ok(sqlx::query_as(
         "SELECT a.id, a.email, a.name, a.role_id, r.name AS role_name,
-                r.is_administrator AS administrator, a.deactivated_at
+                r.is_administrator AS administrator, a.deactivated_at,
+                a.password_hash IS NOT NULL AS has_local_password,
+                EXISTS (SELECT 1 FROM agent_identities i WHERE i.agent_id = a.id)
+                    AS has_linked_identity,
+                a.last_signed_in_at
          FROM agents a JOIN roles r ON r.id = a.role_id
          ORDER BY a.deactivated_at IS NOT NULL, lower(a.name)",
     )
@@ -379,6 +392,109 @@ pub async fn deactivate(db: &PgPool, by: &Grant, agent: Uuid) -> Result<u64> {
     Ok(unassigned)
 }
 
+/// Refuses a change of how an agent signs in made by that agent: another agent who manages
+/// agents makes it, so that nobody takes away the way they are signed in with by mistake.
+fn not_oneself(actor: Uuid, agent: Uuid) -> Result<()> {
+    if actor == agent {
+        return rule(
+            "you cannot change how you sign in yourself: another agent who manages agents can",
+        );
+    }
+    Ok(())
+}
+
+/// How the agent can sign in, read under the lock of [`lock_for_change`]: whether they have a
+/// local password, and the issuers of the identity providers whose identities are linked to them.
+async fn ways_to_sign_in(
+    tx: &mut Transaction<'_, Postgres>,
+    agent: Uuid,
+) -> Result<(bool, Vec<String>)> {
+    let has_local_password: bool =
+        sqlx::query_scalar("SELECT password_hash IS NOT NULL FROM agents WHERE id = $1")
+            .bind(agent)
+            .fetch_one(&mut **tx)
+            .await?;
+    let issuers: Vec<String> =
+        sqlx::query_scalar("SELECT issuer FROM agent_identities WHERE agent_id = $1")
+            .bind(agent)
+            .fetch_all(&mut **tx)
+            .await?;
+    Ok((has_local_password, issuers))
+}
+
+/// Unlinks the agent's identities, which ends the sessions they opened through the identity
+/// provider. `provider` is the issuer of the identity provider configured now, if any. Refused
+/// when the agent would be left without a way to sign in: they need a local password, or a
+/// configured identity provider where they link again by verified e-mail at their next sign-in.
+pub async fn unlink_identity(
+    db: &PgPool,
+    by: &Grant,
+    actor: Uuid,
+    agent: Uuid,
+    provider: Option<&str>,
+) -> Result<()> {
+    by.require(Permission::ManageAgents)?;
+    not_oneself(actor, agent)?;
+    let mut tx = db.begin().await?;
+    lock_for_change(&mut tx, by, agent, "unlink the identity of this agent").await?;
+    let (has_local_password, issuers) = ways_to_sign_in(&mut tx, agent).await?;
+    if issuers.is_empty() {
+        return rule("this agent has no identity of an identity provider linked to them");
+    }
+    if !has_local_password && provider.is_none() {
+        return rule(
+            "this agent has no local password and no identity provider is configured: unlinked, \
+             they could not sign in at all: give them a password first",
+        );
+    }
+    // The database ends the sessions opened through the identity provider (migration 0030).
+    sqlx::query("DELETE FROM agent_identities WHERE agent_id = $1")
+        .bind(agent)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Removes the agent's local password, which ends the sessions they opened with it. `provider`
+/// is the issuer of the identity provider configured now, if any. Refused unless an identity of
+/// that provider is linked to the agent: without it they could not sign in at all.
+pub async fn remove_local_password(
+    db: &PgPool,
+    by: &Grant,
+    actor: Uuid,
+    agent: Uuid,
+    provider: Option<&str>,
+) -> Result<()> {
+    by.require(Permission::ManageAgents)?;
+    not_oneself(actor, agent)?;
+    let mut tx = db.begin().await?;
+    lock_for_change(
+        &mut tx,
+        by,
+        agent,
+        "remove the local password of this agent",
+    )
+    .await?;
+    let (has_local_password, issuers) = ways_to_sign_in(&mut tx, agent).await?;
+    if !has_local_password {
+        return rule("this agent has no local password");
+    }
+    if !provider.is_some_and(|provider| issuers.iter().any(|issuer| issuer == provider)) {
+        return rule(
+            "this agent has not signed in through the identity provider configured now: without \
+             their local password they could not sign in at all",
+        );
+    }
+    // The database ends the sessions opened with the password (migration 0030).
+    sqlx::query("UPDATE agents SET password_hash = NULL WHERE id = $1")
+        .bind(agent)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Lets a deactivated agent sign in and be assigned again.
 pub async fn reactivate(db: &PgPool, by: &Grant, agent: Uuid) -> Result<()> {
     by.require(Permission::ManageAgents)?;
@@ -665,6 +781,302 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    fn identity_of(subject: &str, email: &str) -> crate::identities::Identity {
+        crate::identities::Identity {
+            issuer: ISSUER.to_owned(),
+            subject: subject.to_owned(),
+            email: Some(email.to_owned()),
+            email_verified: true,
+            name: None,
+            authorized_group: crate::identities::AuthorizedGroup::NotConfigured,
+        }
+    }
+
+    const ISSUER: &str = "https://login.example.com/realms/staff";
+
+    /// Signs the agent with `email` in through the identity provider, linking them the first
+    /// time; the session's token.
+    async fn through_provider(db: &PgPool, subject: &str, email: &str) -> String {
+        crate::identities::sign_in(db, &identity_of(subject, email), time::Duration::hours(12))
+            .await
+            .unwrap()
+            .unwrap()
+            .token
+    }
+
+    fn listed(agents: &[AgentAccount], id: Uuid) -> &AgentAccount {
+        agents.iter().find(|a| a.id == id).unwrap()
+    }
+
+    #[sqlx::test]
+    async fn the_list_shows_how_each_agent_signs_in_and_when_they_last_did(db: PgPool) {
+        let cli = Grant::command_line();
+        let ada = add(
+            &db,
+            &cli,
+            "ada@helpdesk.test",
+            "Ada",
+            None,
+            Some("ada's password"),
+        )
+        .await
+        .unwrap()
+        .id;
+        let lena = add(&db, &cli, "lena.marsh@example.com", "Lena", None, None)
+            .await
+            .unwrap()
+            .id;
+        let vera = auth::tests::agent_without_local_password(&db, "vera.lind@example.com").await;
+
+        let agents = list(&db).await.unwrap();
+        let ada_listed = listed(&agents, ada);
+        assert!(ada_listed.has_local_password && !ada_listed.has_linked_identity);
+        assert_eq!(ada_listed.last_signed_in_at, None);
+        let vera_listed = listed(&agents, vera);
+        assert!(!vera_listed.has_local_password && !vera_listed.has_linked_identity);
+
+        let token = auth::sign_in(&db, "ada@helpdesk.test", "ada's password")
+            .await
+            .unwrap()
+            .unwrap();
+        through_provider(&db, "sub-lena", "lena.marsh@example.com").await;
+        // Signing out ends the session, not the record of the sign-in.
+        auth::sign_out(&db, &token).await.unwrap();
+
+        let agents = list(&db).await.unwrap();
+        assert!(listed(&agents, ada).last_signed_in_at.is_some());
+        let lena_listed = listed(&agents, lena);
+        assert!(lena_listed.has_local_password && lena_listed.has_linked_identity);
+        assert!(lena_listed.last_signed_in_at.is_some());
+        assert_eq!(listed(&agents, vera).last_signed_in_at, None);
+    }
+
+    /// Every session opened counts as a sign-in, however it is opened: the database keeps the
+    /// time, so that no way of opening one forgets it.
+    #[sqlx::test]
+    async fn the_database_records_every_sign_in(db: PgPool) {
+        let vera = auth::tests::agent_without_local_password(&db, "vera.lind@example.com").await;
+        sqlx::query(
+            "INSERT INTO agent_sessions (token_hash, agent_id, opened_with, expires_at)
+             VALUES ('\\x01', $1, 'openid_connect', now() + interval '1 hour')",
+        )
+        .bind(vera)
+        .execute(&db)
+        .await
+        .unwrap();
+        let (last, opened): (Option<OffsetDateTime>, OffsetDateTime) = sqlx::query_as(
+            "SELECT a.last_signed_in_at, s.created_at
+             FROM agents a JOIN agent_sessions s ON s.agent_id = a.id WHERE a.id = $1",
+        )
+        .bind(vera)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(last, Some(opened));
+    }
+
+    /// Whether the session still works.
+    async fn works(db: &PgPool, token: &str) -> bool {
+        auth::agent_for(db, token).await.unwrap().is_some()
+    }
+
+    /// Ada, the first agent and an Administrator, who acts; and Lena, with a local password and
+    /// an identity of the provider, signed in both ways: her two sessions' tokens.
+    async fn lena_signed_in_both_ways(db: &PgPool) -> (Uuid, Uuid, String, String) {
+        let cli = Grant::command_line();
+        let ada = add(db, &cli, "ada@helpdesk.test", "Ada", None, None)
+            .await
+            .unwrap()
+            .id;
+        let lena = add(
+            db,
+            &cli,
+            "lena.marsh@example.com",
+            "Lena",
+            None,
+            Some("lena's password"),
+        )
+        .await
+        .unwrap()
+        .id;
+        let with_password = auth::sign_in(db, "lena.marsh@example.com", "lena's password")
+            .await
+            .unwrap()
+            .unwrap();
+        let through_provider = through_provider(db, "sub-lena", "lena.marsh@example.com").await;
+        (ada, lena, with_password, through_provider)
+    }
+
+    #[sqlx::test]
+    async fn unlinking_an_identity_ends_the_sessions_opened_through_it(db: PgPool) {
+        let (ada, lena, with_password, through) = lena_signed_in_both_ways(&db).await;
+        unlink_identity(&db, &Grant::command_line(), ada, lena, Some(ISSUER))
+            .await
+            .unwrap();
+        assert!(!works(&db, &through).await);
+        assert!(works(&db, &with_password).await);
+        assert!(!listed(&list(&db).await.unwrap(), lena).has_linked_identity);
+        assert!(matches!(
+            unlink_identity(&db, &Grant::command_line(), ada, lena, Some(ISSUER)).await,
+            Err(Error::Rule(_))
+        ));
+    }
+
+    #[sqlx::test]
+    async fn removing_a_local_password_ends_the_sessions_opened_with_it(db: PgPool) {
+        let (ada, lena, with_password, through) = lena_signed_in_both_ways(&db).await;
+        remove_local_password(&db, &Grant::command_line(), ada, lena, Some(ISSUER))
+            .await
+            .unwrap();
+        assert!(!works(&db, &with_password).await);
+        assert!(works(&db, &through).await);
+        assert!(!listed(&list(&db).await.unwrap(), lena).has_local_password);
+        assert!(
+            auth::sign_in(&db, "lena.marsh@example.com", "lena's password")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(
+            remove_local_password(&db, &Grant::command_line(), ada, lena, Some(ISSUER)).await,
+            Err(Error::Rule(_))
+        ));
+    }
+
+    /// Neither change may leave the agent without a way to sign in that works now: a local
+    /// password needs an identity linked at the identity provider configured now to be removed,
+    /// and an identity is unlinked from an agent without a local password only while an identity
+    /// provider is configured, where they link again by verified e-mail.
+    #[sqlx::test]
+    async fn an_agent_keeps_a_way_to_sign_in(db: PgPool) {
+        let cli = Grant::command_line();
+        let (ada, lena, _, _) = lena_signed_in_both_ways(&db).await;
+        let bo = add(&db, &cli, "bo@helpdesk.test", "Bo", None, None)
+            .await
+            .unwrap()
+            .id;
+        assert!(matches!(
+            remove_local_password(&db, &cli, ada, bo, Some(ISSUER)).await,
+            Err(Error::Rule(_))
+        ));
+        let elsewhere = Some("https://login.example.com/realms/other");
+        for provider in [None, elsewhere] {
+            assert!(matches!(
+                remove_local_password(&db, &cli, ada, lena, provider).await,
+                Err(Error::Rule(_))
+            ));
+        }
+        remove_local_password(&db, &cli, ada, lena, Some(ISSUER))
+            .await
+            .unwrap();
+        assert!(matches!(
+            unlink_identity(&db, &cli, ada, lena, None).await,
+            Err(Error::Rule(_))
+        ));
+        unlink_identity(&db, &cli, ada, lena, elsewhere)
+            .await
+            .unwrap();
+        // Linked again by her verified address at her next sign-in.
+        through_provider(&db, "sub-lena", "lena.marsh@example.com").await;
+        assert!(listed(&list(&db).await.unwrap(), lena).has_linked_identity);
+    }
+
+    /// The rules for acting on an agent: managing agents, every permission of their role, only
+    /// an Administrator on an Administrator; and nobody on themselves.
+    #[sqlx::test]
+    async fn sign_in_is_administered_under_the_rules_for_acting_on_an_agent(db: PgPool) {
+        let cli = Grant::command_line();
+        let (ada, lena, _, _) = lena_signed_in_both_ways(&db).await;
+        let workers = roles::create(&db, &cli, "Workers", &[Permission::WorkTickets])
+            .await
+            .unwrap();
+        let piet = add(
+            &db,
+            &cli,
+            "piet@example.com",
+            "Piet",
+            Some(workers),
+            Some("piet's password"),
+        )
+        .await
+        .unwrap()
+        .id;
+        through_provider(&db, "sub-piet", "piet@example.com").await;
+        let manager = grant(&[Permission::ManageAgents, Permission::WorkTickets]);
+        let manager_id = add(&db, &cli, "max@helpdesk.test", "Max", Some(workers), None)
+            .await
+            .unwrap()
+            .id;
+
+        // Lena's role, the default, allows replying, which the manager does not hold.
+        assert!(matches!(
+            unlink_identity(&db, &manager, manager_id, lena, Some(ISSUER)).await,
+            Err(Error::Forbidden(_))
+        ));
+        assert!(matches!(
+            remove_local_password(&db, &manager, manager_id, lena, Some(ISSUER)).await,
+            Err(Error::Forbidden(_))
+        ));
+        let worker = grant(&[Permission::WorkTickets]);
+        assert!(matches!(
+            unlink_identity(&db, &worker, manager_id, piet, Some(ISSUER)).await,
+            Err(Error::Forbidden(_))
+        ));
+        assert!(matches!(
+            remove_local_password(&db, &worker, manager_id, piet, Some(ISSUER)).await,
+            Err(Error::Forbidden(_))
+        ));
+        assert!(matches!(
+            unlink_identity(&db, &cli, ada, Uuid::new_v4(), Some(ISSUER)).await,
+            Err(Error::NotFound(_))
+        ));
+        // Not on oneself: another agent who manages agents does it.
+        assert!(matches!(
+            unlink_identity(&db, &cli, lena, lena, Some(ISSUER)).await,
+            Err(Error::Rule(_))
+        ));
+        assert!(matches!(
+            remove_local_password(&db, &cli, lena, lena, Some(ISSUER)).await,
+            Err(Error::Rule(_))
+        ));
+
+        remove_local_password(&db, &manager, manager_id, piet, Some(ISSUER))
+            .await
+            .unwrap();
+        reset_password(&db, &manager, piet, Some("piet's new password"))
+            .await
+            .unwrap();
+        unlink_identity(&db, &manager, manager_id, piet, Some(ISSUER))
+            .await
+            .unwrap();
+        assert!(matches!(
+            unlink_identity(&db, &cli, ada, lena, Some(ISSUER)).await,
+            Ok(())
+        ));
+    }
+
+    /// The database ends the sessions of a way to sign in that is taken away, however it is.
+    #[sqlx::test]
+    async fn the_database_ends_the_sessions_of_a_way_to_sign_in_taken_away(db: PgPool) {
+        let (_, lena, with_password, through) = lena_signed_in_both_ways(&db).await;
+        sqlx::query("DELETE FROM agent_identities WHERE agent_id = $1")
+            .bind(lena)
+            .execute(&db)
+            .await
+            .unwrap();
+        assert!(!works(&db, &through).await);
+        assert!(works(&db, &with_password).await);
+
+        let through = through_provider(&db, "sub-lena", "lena.marsh@example.com").await;
+        sqlx::query("UPDATE agents SET password_hash = NULL WHERE id = $1")
+            .bind(lena)
+            .execute(&db)
+            .await
+            .unwrap();
+        assert!(!works(&db, &with_password).await);
+        assert!(works(&db, &through).await);
     }
 
     #[sqlx::test]

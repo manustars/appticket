@@ -257,6 +257,11 @@ impl Provider {
         &self.config.label
     }
 
+    /// The issuer, which the identities of the provider's people are linked under.
+    pub fn issuer(&self) -> &str {
+        self.config.issuer.as_str()
+    }
+
     /// How long a session opened through the provider lasts.
     pub fn session(&self) -> time::Duration {
         self.config.session
@@ -357,13 +362,17 @@ impl Provider {
         query: &CallbackQuery,
     ) -> anyhow::Result<Identity> {
         if let Some(error) = &query.error {
-            bail!("the identity provider answered {error}");
+            return Err(BrowserError(format!("the identity provider answered {error}")).into());
         }
         let (Some(code), Some(state)) = (&query.code, &query.state) else {
-            bail!("the identity provider's answer has no code or state");
+            return Err(
+                BrowserError("the identity provider's answer has no code or state".into()).into(),
+            );
         };
         if state_cookie != Some(state.as_str()) {
-            bail!("the state is not the one this browser set out with");
+            return Err(
+                BrowserError("the state is not the one this browser set out with".into()).into(),
+            );
         }
         let pending: Option<(String, String)> = sqlx::query_as(
             "DELETE FROM identity_provider_sign_ins
@@ -374,7 +383,7 @@ impl Provider {
         .fetch_optional(db)
         .await?;
         let Some((nonce, verifier)) = pending else {
-            bail!("the sign-in is unknown, used or expired");
+            return Err(BrowserError("the sign-in is unknown, used or expired".into()).into());
         };
         let client = self.client().await?;
         let http = |request| send(self.http.clone(), request);
@@ -417,6 +426,19 @@ impl Provider {
         })
     }
 }
+
+/// A return from the provider that the browser brought and the core does not take, before the
+/// provider is asked anything: it says nothing of the provider, since anyone can bring one.
+#[derive(Debug)]
+pub struct BrowserError(String);
+
+impl std::fmt::Display for BrowserError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for BrowserError {}
 
 /// How long the browser has to come back from the provider.
 const SIGN_IN_TIME: Duration = Duration::from_secs(10 * 60);

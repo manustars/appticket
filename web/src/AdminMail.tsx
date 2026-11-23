@@ -1,19 +1,26 @@
-// How reading and sending mail goes, and what waits in the outbox. It only shows: the mail
-// settings live in the server's configuration, not here.
-import { useEffect, useId, type ReactNode } from 'react'
-import { getMailState, type Activity } from './api/client'
+// How reading and sending mail goes, what waits in the outbox, and how signing in through the
+// identity provider goes. It only shows: the settings live in the server's configuration, not here.
+import { useCallback, useEffect, useId, type ReactNode } from 'react'
+import { getIdentityProviderState, getMailState, type Activity } from './api/client'
 import { useI18n } from './i18n/context'
 import { Problem } from './Problem'
 import { ticketHref } from './route'
 import { useLoad } from './useAction'
 
 const loadMail = () => getMailState()
+const loadIdentityProvider = () => getIdentityProviderState()
 
 export function AdminMail({ onSignedOut }: { onSignedOut: () => void }) {
   const { t, formatTime, formatNumber } = useI18n()
   const mail = useLoad(loadMail, onSignedOut)
-  const { reload } = mail
+  const provider = useLoad(loadIdentityProvider, onSignedOut)
+  const { reload: reloadMail } = mail
+  const { reload: reloadProvider } = provider
   const id = useId()
+
+  const reload = useCallback(async () => {
+    await Promise.all([reloadMail(), reloadProvider()])
+  }, [reloadMail, reloadProvider])
 
   useEffect(() => {
     // Mail is read and sent every few seconds; the screen follows while it is open.
@@ -22,6 +29,7 @@ export function AdminMail({ onSignedOut }: { onSignedOut: () => void }) {
   }, [reload])
 
   const m = mail.data
+  const p = provider.data
   return (
     <>
       <div className="title-row">
@@ -87,6 +95,23 @@ export function AdminMail({ onSignedOut }: { onSignedOut: () => void }) {
           </section>
         </>
       )}
+      <Problem error={provider.error} />
+      {p && (
+        <MailActivity title={t('identityProvider.title')} activity={p.openid_connect?.activity ?? null}
+          notConfigured={t('identityProvider.off')} serverLabel={t('identityProvider.issuer')}
+          successLabel={t('identityProvider.lastSuccess')}>
+          {p.openid_connect && (
+            <div>
+              <dt>{t('identityProvider.label')}</dt>
+              <dd>{t('identityProvider.labelValue', { label: p.openid_connect.label })}</dd>
+            </div>
+          )}
+          <div>
+            <dt>{t('identityProvider.localSignIn')}</dt>
+            <dd>{p.local_sign_in ? t('identityProvider.localSignInOn') : t('identityProvider.localSignInOff')}</dd>
+          </div>
+        </MailActivity>
+      )}
     </>
   )
 }
@@ -99,11 +124,15 @@ function health(a: Activity): 'working' | 'failing' | 'idle' {
   return a.last_success_at ? 'working' : 'idle'
 }
 
-function MailActivity({ title, activity: a, notConfigured, children }: {
+function MailActivity({ title, activity: a, notConfigured, serverLabel, successLabel, children }: {
   title: string
   /** null: not configured. */
   activity: Activity | null
   notConfigured: string
+  /** What `server` is called; the mail server by default. */
+  serverLabel?: string
+  /** What the last success is called; by default, as for mail. */
+  successLabel?: string
   children?: ReactNode
 }) {
   const { t, formatTime } = useI18n()
@@ -123,9 +152,9 @@ function MailActivity({ title, activity: a, notConfigured, children }: {
         <p className="hint">{notConfigured}</p>
       ) : (
         <dl className="mail-facts">
-          <div><dt>{t('mail.server')}</dt><dd>{a.server}</dd></div>
+          <div><dt>{serverLabel ?? t('mail.server')}</dt><dd>{a.server}</dd></div>
           <div>
-            <dt>{t('mail.lastSuccess')}</dt>
+            <dt>{successLabel ?? t('mail.lastSuccess')}</dt>
             <dd className="when">{a.last_success_at ? formatTime(a.last_success_at) : t('mail.never')}</dd>
           </div>
           {children}

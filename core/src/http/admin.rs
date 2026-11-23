@@ -1,5 +1,6 @@
-//! Administration: agents, roles, add-ons and the state of the mail, each behind its permission
-//! (ADR 0007). Secrets never leave: no password hashes, add-on tokens or mail credentials.
+//! Administration: agents and how they sign in, roles, add-ons, and the state of the mail and of
+//! the identity provider, each behind its permission (ADR 0007). Secrets never leave: no password
+//! hashes, add-on tokens, mail credentials or client secrets.
 
 use axum::{
     Json,
@@ -23,7 +24,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_agents, add_agent))
         .routes(routes!(edit_agent))
         .routes(routes!(set_role))
-        .routes(routes!(reset_password))
+        .routes(routes!(reset_password, remove_password))
+        .routes(routes!(unlink_identity))
         .routes(routes!(deactivate))
         .routes(routes!(reactivate))
         .routes(routes!(list_roles, create_role))
@@ -33,6 +35,15 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_addons))
         .routes(routes!(set_addon_enabled))
         .routes(routes!(mail_state))
+        .routes(routes!(identity_provider_state))
+}
+
+/// The issuer of the identity provider configured now, if any.
+fn configured_issuer(state: &AppState) -> Option<&str> {
+    state
+        .identity_provider
+        .as_ref()
+        .map(|provider| provider.issuer())
 }
 
 /// Every agent, deactivated ones last.
@@ -150,6 +161,53 @@ async fn reset_password(
     Ok(Json(GeneratedPassword {
         password: password.unwrap_or_default(),
     }))
+}
+
+/// Removes the agent's local password and ends the sessions opened with it; refused unless they
+/// have signed in through the identity provider configured now, and for one's own.
+#[utoipa::path(delete, path = "/api/admin/agents/{id}/password", tag = "admin",
+    params(("id" = Uuid, Path, description = "The agent")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = FORBIDDEN, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn remove_password(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    agents::remove_local_password(
+        &state.db,
+        &agent.grant,
+        agent.id,
+        id,
+        configured_issuer(&state),
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Unlinks the agent's identity and ends the sessions opened through the identity provider; at
+/// their next sign-in there, they are linked again by verified e-mail. Refused when they would be
+/// left without a way to sign in, and for one's own.
+#[utoipa::path(delete, path = "/api/admin/agents/{id}/identity", tag = "admin",
+    params(("id" = Uuid, Path, description = "The agent")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = FORBIDDEN, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn unlink_identity(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    agents::unlink_identity(
+        &state.db,
+        &agent.grant,
+        agent.id,
+        id,
+        configured_issuer(&state),
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Serialize, ToSchema)]
@@ -387,5 +445,54 @@ async fn mail_state(
             oldest_waiting_at,
             failing,
         },
+    }))
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct IdentityProviderState {
+    /// The OpenID Connect identity provider; null when none is configured.
+    openid_connect: Option<ProviderState>,
+    /// Whether agents can sign in with a local password.
+    local_sign_in: bool,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct ProviderState {
+    /// What the sign-in button names.
+    label: String,
+    /// Signing in through it since the core started: the issuer as the server, the last sign-in
+    /// it confirmed as the last success, and the last failure in reaching it or in what it
+    /// answered, without the client's secret.
+    activity: Activity,
+}
+
+/// Whether an identity provider is configured and what signing in through it last did since the
+/// core started, with whether local sign-in is on. Shown with the state of the mail; the settings
+/// live in the server's configuration.
+#[utoipa::path(get, path = "/api/admin/identity-provider", tag = "admin",
+    responses((status = OK, body = IdentityProviderState), (status = FORBIDDEN, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn identity_provider_state(
+    State(state): State<AppState>,
+    agent: SignedIn,
+) -> Result<Json<IdentityProviderState>, ApiError> {
+    agent.grant.require(Permission::ViewMail)?;
+    let openid_connect = state
+        .identity_provider
+        .as_ref()
+        .map(|provider| ProviderState {
+            label: provider.label().to_owned(),
+            activity: state
+                .identity_provider_activity
+                .as_ref()
+                .map(|activity| activity.snapshot())
+                .unwrap_or_else(|| Activity {
+                    server: provider.issuer().to_owned(),
+                    ..Activity::default()
+                }),
+        });
+    Ok(Json(IdentityProviderState {
+        openid_connect,
+        local_sign_in: crate::local_sign_in::is_on(&state.db).await?,
     }))
 }

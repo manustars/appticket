@@ -46,7 +46,7 @@ pub enum Permission {
     /// Switching add-ons on and off, seeing their events.
     #[serde(rename = "addons.manage")]
     ManageAddons,
-    /// Seeing the state of reading and sending mail.
+    /// Seeing the state of reading and sending mail, and of the identity provider.
     #[serde(rename = "mail.view")]
     ViewMail,
 }

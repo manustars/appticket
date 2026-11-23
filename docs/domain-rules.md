@@ -124,7 +124,8 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   not the address's. The account is what was typed in, trimmed and in lower case, whether or not
   an agent has it; an IPv6 address counts by its /64 network.
 - Unlinking an agent's identity or removing their local password follows the rules for acting on
-  an agent above.
+  an agent above. Unlinking ends the sessions opened through the identity provider; removing the
+  local password ends the sessions opened with it.
 
 ## Tickets
 

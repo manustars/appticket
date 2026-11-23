@@ -1,6 +1,8 @@
 //! Signing in through the OpenID Connect identity provider: the browser is sent there, and comes
 //! back to the callback, which opens the product's session or says on the sign-in page why not.
 
+use std::sync::Arc;
+
 use axum::{
     extract::{Query, State},
     response::Redirect,
@@ -11,7 +13,8 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use super::client_address::ClientAddress;
 use super::{ApiError, AppState};
 use crate::identities::{self, Refusal};
-use crate::oidc::{Begin, CallbackQuery};
+use crate::mail_status::Tracker;
+use crate::oidc::{Begin, BrowserError, CallbackQuery, Config, Provider};
 
 /// The cookie that keeps a sign-in's state in the browser that set out, until it comes back.
 const STATE_COOKIE: &str = "hd_sign_in_state";
@@ -21,6 +24,26 @@ pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(begin))
         .routes(routes!(callback))
+}
+
+/// The configured identity provider, and the record of what signing in through it last did, for
+/// the agents who view its state: the issuer, and errors without the client's secret.
+pub fn connect(config: Config) -> anyhow::Result<(Arc<Provider>, Tracker)> {
+    let activity = Tracker::new(
+        config.issuer.as_str().to_owned(),
+        vec![config.client_secret.secret().clone()],
+    );
+    Ok((Provider::new(config)?, activity))
+}
+
+/// Records a failure of signing in through the identity provider: one in reaching it or in what
+/// it answered, not in what a browser brought back, which anyone can make up.
+fn record_failure(state: &AppState, error: &anyhow::Error) {
+    if let Some(activity) = &state.identity_provider_activity
+        && !error.is::<BrowserError>()
+    {
+        activity.failed(error);
+    }
 }
 
 /// The sign-in page after a sign-in that did not open a session, saying why.
@@ -65,6 +88,7 @@ async fn begin(
                 error = format!("{error:#}"),
                 "the identity provider cannot be reached"
             );
+            record_failure(&state, &error);
             Ok((jar, sign_in_error("failed")))
         }
     }
@@ -96,12 +120,19 @@ async fn callback(
         .finish(&state.db, state_cookie.as_deref(), &query)
         .await
     {
-        Ok(identity) => identity,
+        Ok(identity) => {
+            // The provider said who signed in: it works, whatever the product makes of that.
+            if let Some(activity) = &state.identity_provider_activity {
+                activity.succeeded();
+            }
+            identity
+        }
         Err(error) => {
             tracing::warn!(
                 error = format!("{error:#}"),
                 "signing in through the identity provider failed"
             );
+            record_failure(&state, &error);
             return Ok((jar, sign_in_error("failed")));
         }
     };
@@ -184,11 +215,17 @@ mod tests {
             group_claim: group_claim.to_owned(),
             ..crate::oidc::keycloak::settings(issuer, "hd-core", crate::oidc::keycloak::SECRET)
         };
+        state_from(db, settings)
+    }
+
+    fn state_from(db: &PgPool, settings: crate::oidc::Settings) -> AppState {
         let config = crate::oidc::Config::from_settings(settings, Some("http://127.0.0.1:8080"))
             .unwrap()
             .unwrap();
+        let (provider, activity) = super::connect(config).unwrap();
         AppState {
-            identity_provider: Some(crate::oidc::Provider::new(config).unwrap()),
+            identity_provider: Some(provider),
+            identity_provider_activity: Some(activity),
             ..AppState::for_tests(db)
         }
     }
@@ -826,5 +863,113 @@ mod tests {
         assert_eq!(pending_and_ended(&db, "203.0.113.9").await, (0, 0));
         // The ended ones are gone, the 20 under way stay.
         assert_eq!(pending_and_ended(&db, "192.0.2.7").await, (20, 0));
+    }
+
+    /// What signing in through the provider last did, as the agents who view its state see it.
+    async fn activity(admin: &crate::http::tests::Client) -> serde_json::Value {
+        let state = admin.get("/api/admin/identity-provider").await;
+        state["openid_connect"]["activity"].clone()
+    }
+
+    #[test]
+    fn the_provider_s_errors_are_recorded_without_the_client_s_secret() {
+        let config = crate::oidc::Config::from_settings(
+            crate::oidc::Settings {
+                issuer: Some("https://login.example.com/realms/staff".to_owned()),
+                client_id: Some("hd-core".to_owned()),
+                client_secret: Some("invented-secret".to_owned()),
+                client_secret_file: None,
+                label: None,
+                session_hours: 12,
+                authorized_group: None,
+                group_claim: "groups".to_owned(),
+            },
+            Some("https://helpdesk.example.com"),
+        )
+        .unwrap()
+        .unwrap();
+        let (_, activity) = super::connect(config).unwrap();
+        activity.failed(&anyhow::anyhow!(
+            "client hd-core with invented-secret refused"
+        ));
+        let recorded = activity.snapshot();
+        assert_eq!(recorded.server, "https://login.example.com/realms/staff");
+        assert_eq!(
+            recorded.last_error.as_deref(),
+            Some("client hd-core with *** refused")
+        );
+    }
+
+    /// A provider that cannot be reached shows as failing; what a browser brings back to the
+    /// callback, which anyone can make up, says nothing of the provider and is not recorded.
+    #[sqlx::test]
+    async fn the_provider_s_state_shows_its_failures_not_what_browsers_bring(db: PgPool) {
+        let state = state_with_issuer(&db, "http://127.0.0.1:9/realms/nowhere");
+        let admin = crate::http::tests::Client::new(&db)
+            .await
+            .in_state(state.clone());
+        let callback = crate::oidc::CALLBACK_PATH;
+        for (made_up, cookie) in [
+            ("?error=server_error&state=s", None),
+            ("?code=c", None),
+            ("?code=c&state=s", None),
+            ("?code=c&state=s", Some("hd_sign_in_state=s")),
+        ] {
+            let back = get(&state, &format!("{callback}{made_up}"), cookie).await;
+            assert_eq!(back.location, "/?sign_in_error=failed", "{made_up}");
+        }
+        let nothing = activity(&admin).await;
+        assert!(
+            nothing["last_error"].is_null() && nothing["last_success_at"].is_null(),
+            "{nothing}"
+        );
+
+        let begun = get(&state, "/api/session/identity-provider", None).await;
+        assert_eq!(begun.location, "/?sign_in_error=failed");
+        let failing = activity(&admin).await;
+        let error = failing["last_error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains("identity provider's configuration"),
+            "{failing}"
+        );
+        assert!(failing["last_error_at"].is_string(), "{failing}");
+    }
+
+    /// A client secret Keycloak does not accept fails at the code's exchange, which is shown
+    /// without the secret; a sign-in Keycloak confirms shows the provider working.
+    #[sqlx::test]
+    #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
+    async fn the_provider_s_state_follows_sign_ins_at_keycloak(db: PgPool) {
+        agent(&db, "lena.marsh@example.com", "Lena").await;
+        let wrong = state_from(
+            &db,
+            crate::oidc::Settings {
+                issuer: Some(ISSUER.to_owned()),
+                client_id: Some("hd-core".to_owned()),
+                client_secret: Some("not-the-client-secret".to_owned()),
+                client_secret_file: None,
+                label: None,
+                session_hours: 12,
+                authorized_group: None,
+                group_claim: "groups".to_owned(),
+            },
+        );
+        let admin = crate::http::tests::Client::new(&db)
+            .await
+            .in_state(wrong.clone());
+        let refused = sign_in_as(&wrong, "lena").await;
+        assert_eq!(refused.location, "/?sign_in_error=failed");
+        let failing = activity(&admin).await;
+        let error = failing["last_error"].as_str().unwrap_or_default();
+        assert!(error.contains("exchanging the code"), "{failing}");
+        assert!(failing["last_success_at"].is_null(), "{failing}");
+        assert!(!failing.to_string().contains("not-the-client-secret"));
+
+        let right = state(&db);
+        let admin = admin.in_state(right.clone());
+        assert_eq!(sign_in_as(&right, "lena").await.location, "/");
+        let working = activity(&admin).await;
+        assert!(working["last_success_at"].is_string(), "{working}");
+        assert!(working["last_error"].is_null(), "{working}");
     }
 }

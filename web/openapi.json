@@ -708,6 +708,66 @@
         }
       }
     },
+    "/api/admin/agents/{id}/identity": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Unlinks the agent's identity and ends the sessions opened through the identity provider; at\ntheir next sign-in there, they are linked again by verified e-mail. Refused when they would be\nleft without a way to sign in, and for one's own.",
+        "operationId": "unlink_identity",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The agent",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/agents/{id}/password": {
       "post": {
         "tags": [
@@ -756,6 +816,64 @@
             }
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Removes the agent's local password and ends the sessions opened with it; refused unless they\nhave signed in through the identity provider configured now, and for one's own.",
+        "operationId": "remove_password",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The agent",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
             "content": {
               "application/json": {
                 "schema": {
@@ -877,6 +995,44 @@
             }
           },
           "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/identity-provider": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Whether an identity provider is configured and what signing in through it last did since the\ncore started, with whether local sign-in is on. Shown with the state of the mail; the settings\nlive in the server's configuration.",
+        "operationId": "identity_provider_state",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityProviderState"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5524,7 +5680,7 @@
       },
       "Activity": {
         "type": "object",
-        "description": "The last outcome of reading or sending mail.",
+        "description": "The last outcome of reading or sending mail, or of signing in through the identity provider.",
         "required": [
           "server"
         ],
@@ -5549,11 +5705,11 @@
               "null"
             ],
             "format": "date-time",
-            "description": "Reading: the last read that worked. Sending: the last message sent."
+            "description": "Reading: the last read that worked. Sending: the last message sent. Identity provider:\nthe last sign-in it confirmed."
           },
           "server": {
             "type": "string",
-            "description": "The server's host and port; never the credentials."
+            "description": "The server's host and port, or the identity provider's issuer; never the credentials."
           }
         }
       },
@@ -5850,7 +6006,9 @@
           "name",
           "role_id",
           "role_name",
-          "administrator"
+          "administrator",
+          "has_local_password",
+          "has_linked_identity"
         ],
         "properties": {
           "administrator": {
@@ -5868,9 +6026,25 @@
           "email": {
             "type": "string"
           },
+          "has_linked_identity": {
+            "type": "boolean",
+            "description": "Whether the agent has an identity of an identity provider linked to them."
+          },
+          "has_local_password": {
+            "type": "boolean",
+            "description": "Whether the agent has a local password."
+          },
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "last_signed_in_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the agent last signed in, with a local password or through the identity provider;\nempty if they never did."
           },
           "name": {
             "type": "string"
@@ -6818,6 +6992,29 @@
           "label": {
             "type": "string",
             "description": "What the button names: \"Sign in with <label>\"."
+          }
+        }
+      },
+      "IdentityProviderState": {
+        "type": "object",
+        "required": [
+          "local_sign_in"
+        ],
+        "properties": {
+          "local_sign_in": {
+            "type": "boolean",
+            "description": "Whether agents can sign in with a local password."
+          },
+          "openid_connect": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProviderState",
+                "description": "The OpenID Connect identity provider; null when none is configured."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -7811,6 +8008,23 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "ProviderState": {
+        "type": "object",
+        "required": [
+          "label",
+          "activity"
+        ],
+        "properties": {
+          "activity": {
+            "$ref": "#/components/schemas/Activity",
+            "description": "Signing in through it since the core started: the issuer as the server, the last sign-in\nit confirmed as the last success, and the last failure in reaching it or in what it\nanswered, without the client's secret."
+          },
+          "label": {
+            "type": "string",
+            "description": "What the sign-in button names."
           }
         }
       },

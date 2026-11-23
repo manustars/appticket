@@ -1,5 +1,5 @@
-//! What the mail loops last did, kept in memory for the agents who view the state of the mail.
-//! It starts empty when the core starts.
+//! What the mail loops, and signing in through the identity provider, last did, kept in memory
+//! for the agents who view the state of the mail. It starts empty when the core starts.
 
 use std::sync::{Arc, Mutex};
 
@@ -7,12 +7,13 @@ use serde::Serialize;
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
-/// The last outcome of reading or sending mail.
+/// The last outcome of reading or sending mail, or of signing in through the identity provider.
 #[derive(Debug, Clone, Default, Serialize, ToSchema)]
 pub struct Activity {
-    /// The server's host and port; never the credentials.
+    /// The server's host and port, or the identity provider's issuer; never the credentials.
     pub server: String,
-    /// Reading: the last read that worked. Sending: the last message sent.
+    /// Reading: the last read that worked. Sending: the last message sent. Identity provider:
+    /// the last sign-in it confirmed.
     #[serde(with = "time::serde::rfc3339::option")]
     pub last_success_at: Option<OffsetDateTime>,
     /// The last failure since the core started, with any credentials taken out.

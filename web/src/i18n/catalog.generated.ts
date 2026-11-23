@@ -530,6 +530,20 @@ export interface Messages {
   "agents.addedPassword": { plural: false; placeholders: "email" | "name"; tags: never }
   "agents.resetDone": { plural: false; placeholders: "email" | "name"; tags: never }
   "agents.shownOnce": { plural: false; placeholders: never; tags: never }
+  "agents.signsInWith": { plural: false; placeholders: never; tags: never }
+  "agents.signIn.both": { plural: false; placeholders: never; tags: never }
+  "agents.signIn.localPassword": { plural: false; placeholders: never; tags: never }
+  "agents.signIn.identityProvider": { plural: false; placeholders: never; tags: never }
+  "agents.signIn.none": { plural: false; placeholders: never; tags: never }
+  "agents.lastSignIn": { plural: false; placeholders: never; tags: never }
+  "agents.neverSignedIn": { plural: false; placeholders: never; tags: never }
+  "agents.removePassword": { plural: false; placeholders: never; tags: never }
+  "agents.unlinkIdentity": { plural: false; placeholders: never; tags: never }
+  "agents.confirmRemovePassword": { plural: false; placeholders: "name"; tags: never }
+  "agents.confirmUnlink": { plural: false; placeholders: "name"; tags: never }
+  "agents.passwordRemoved": { plural: false; placeholders: "name"; tags: never }
+  "agents.unlinked": { plural: false; placeholders: "name"; tags: never }
+  "agents.signInHint": { plural: false; placeholders: never; tags: never }
   "agents.copy": { plural: false; placeholders: never; tags: never }
   "agents.copied": { plural: false; placeholders: never; tags: never }
   "agents.dismiss": { plural: false; placeholders: never; tags: never }
@@ -583,6 +597,15 @@ export interface Messages {
   "mail.attempts": { plural: false; placeholders: never; tags: never }
   "mail.nextAttempt": { plural: false; placeholders: never; tags: never }
   "mail.gaveUp": { plural: false; placeholders: never; tags: never }
+  "identityProvider.title": { plural: false; placeholders: never; tags: never }
+  "identityProvider.off": { plural: false; placeholders: never; tags: never }
+  "identityProvider.issuer": { plural: false; placeholders: never; tags: never }
+  "identityProvider.label": { plural: false; placeholders: never; tags: never }
+  "identityProvider.labelValue": { plural: false; placeholders: "label"; tags: never }
+  "identityProvider.lastSuccess": { plural: false; placeholders: never; tags: never }
+  "identityProvider.localSignIn": { plural: false; placeholders: never; tags: never }
+  "identityProvider.localSignInOn": { plural: false; placeholders: never; tags: never }
+  "identityProvider.localSignInOff": { plural: false; placeholders: never; tags: never }
   "mailState.working": { plural: false; placeholders: never; tags: never }
   "mailState.failing": { plural: false; placeholders: never; tags: never }
   "mailState.idle": { plural: false; placeholders: never; tags: never }
