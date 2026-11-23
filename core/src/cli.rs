@@ -415,8 +415,8 @@ import moves, merges and brings back no one, and marks no one departed:
   site                The requester's site, by name: one of the customer's that is not retired.
   notes               Internal notes, seen only by agents; they replace the ones there.
 
-Assets file (--assets), for an agent who also manages the catalog; an asset is recognised by
-its serial number within its customer, else by its name, ignoring case. A row is about one
+Assets file (--assets); an asset is recognised by its serial number within its customer, else
+by its name, ignoring case. A row is about one
 asset entered by hand and not retired: a row matching an asset an add-on is the source of, a
 retired asset, or two assets, is left out, as is a row found by name whose asset has another
 serial number. An import replaces no serial number, and never retires or brings back an asset:
@@ -454,8 +454,7 @@ pub struct ImportArgs {
     /// A requesters file; `-` reads it from standard input.
     #[arg(long)]
     requesters: Option<PathBuf>,
-    /// An assets file, for an agent who also manages the catalog; `-` reads it from standard
-    /// input.
+    /// An assets file; `-` reads it from standard input.
     #[arg(long)]
     assets: Option<PathBuf>,
     /// Import; without it nothing changes, and the command only shows what it would do.

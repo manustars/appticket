@@ -131,7 +131,9 @@ export function Import({ onSignedOut }: { onSignedOut: () => void }) {
             </label>
           ))}
         </div>
-        <p className="hint">{t(offered.length === kinds.length ? 'import.filesHint' : 'import.filesHintWithoutAssets')}</p>
+        <p className="hint">
+          {t(offered.some(({ kind }) => kind === 'assets') ? 'import.filesHint' : 'import.filesHintWithoutAssets')}
+        </p>
         <div className="import-actions">
           <button type="button" disabled={action.busy || nothingChosen} onClick={preview}>
             {t('import.preview')}
