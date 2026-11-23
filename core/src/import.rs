@@ -561,6 +561,10 @@ fn left_out(done: Result<Done>) -> Result<std::result::Result<Done, String>> {
         {
             rule("the help desk's data changed during the import: reload and try again")
         }
+        // A requester found a moment before was merged into another meanwhile, and is gone.
+        Err(Error::NotFound(_)) => {
+            rule("the help desk's data changed during the import: reload and try again")
+        }
         Err(error) => Err(error),
     }
 }
@@ -1276,7 +1280,19 @@ async fn requester_row(
     // Only a requester that changes is written, and locked; their details are read again under
     // the lock, so that a change made meanwhile is kept.
     if !changes.is_empty() {
+        // One moved to another customer meanwhile is refused by the lock itself.
         crate::requesters::lock_with_customer(tx, id).await?;
+        let departed: bool =
+            sqlx::query_scalar("SELECT departed_at IS NOT NULL FROM requesters WHERE id = $1")
+                .bind(id)
+                .fetch_one(&mut **tx)
+                .await?;
+        if departed {
+            return rule(
+                "the requester has just departed: bring them back from their page first; an \
+                 import does not",
+            );
+        }
         let before = requester_details(tx, id).await?;
         for address in new {
             crate::requesters::add_new_address_in(tx, id, address).await?;
@@ -2448,6 +2464,168 @@ mod tests {
             .collect();
         assert_eq!(outcomes, [Outcome::Unchanged, Outcome::Unchanged]);
         agent.rollback().await.unwrap();
+    }
+
+    /// A requester row that changes nothing locks neither the requester nor their customer.
+    #[sqlx::test]
+    async fn requester_rows_that_change_nothing_wait_for_no_one(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let office = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let ada = requester_with(
+            &db,
+            brightfield,
+            &["ada@brightfield.test", "ada.f@brightfield.test"],
+            crate::requesters::RequesterDetails {
+                name: Some("Ada Ferrini".into()),
+                phone_numbers: vec!["000 000 0100".into(), "000 000 0101".into()],
+                site_id: Some(office),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        // An agent is changing the customer and the requester meanwhile.
+        let mut agent = db.begin().await.unwrap();
+        crate::requesters::lock_with_customer(&mut agent, ada)
+            .await
+            .unwrap();
+
+        let file = "customer,email_addresses,name,phone_numbers,site\n\
+            Brightfield,ADA.F@brightfield.test,Ada Ferrini,000 000 0101,head office\n";
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            import(&db, vec![requesters(file)], Mode::Apply),
+        )
+        .await
+        .expect("the import waited for a row it does not change");
+        assert_eq!(outcomes(&report)[0][0].1, Outcome::Unchanged);
+        agent.rollback().await.unwrap();
+    }
+
+    /// A site an agent retires while the import puts requesters there: the import waits for the
+    /// customer, then finds the site retired and leaves the requesters out.
+    #[sqlx::test]
+    async fn a_site_retired_during_the_import_leaves_its_requesters_out(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let office = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let bo = crate::testing::requester(&db, brightfield, "bo@brightfield.test").await;
+        // Retiring locks the customer first, as every change to its sites and requesters does.
+        let mut agent = db.begin().await.unwrap();
+        crate::customers::lock_active(&mut agent, brightfield)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE sites SET retired_at = now() WHERE id = $1")
+            .bind(office)
+            .execute(&mut *agent)
+            .await
+            .unwrap();
+
+        let file = requesters(
+            "customer,email_addresses,site\n\
+             Brightfield,ada@brightfield.test,Head office\n\
+             Brightfield,bo@brightfield.test,Head office\n",
+        );
+        let importing = tokio::spawn({
+            let db = db.clone();
+            async move { run(&db, &Grant::command_line(), vec![file], Mode::Apply).await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        agent.commit().await.unwrap();
+        let report = importing.await.unwrap().unwrap();
+        let reasons = reasons(&report.files[0]);
+        assert!(
+            reasons.len() == 2 && reasons.iter().all(|(_, why)| why.contains("retired")),
+            "{reasons:?}"
+        );
+        let shown = requesters_of(&db, brightfield).await;
+        assert_eq!(shown.len(), 1);
+        assert_eq!((shown[0].id, shown[0].site.is_none()), (bo, true));
+    }
+
+    /// A requester an agent marks departed while the import changes them: the import waits for
+    /// them, then finds them departed and leaves the row out.
+    #[sqlx::test]
+    async fn a_requester_departing_during_the_import_is_left_out(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let ada = crate::testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let mut agent = db.begin().await.unwrap();
+        crate::requesters::lock_with_customer(&mut agent, ada)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE requesters SET departed_at = now() WHERE id = $1")
+            .bind(ada)
+            .execute(&mut *agent)
+            .await
+            .unwrap();
+
+        let file = requesters(
+            "customer,email_addresses,name\n\
+             Brightfield,ada@brightfield.test ada.f@brightfield.test,Ada Ferrini\n",
+        );
+        let importing = tokio::spawn({
+            let db = db.clone();
+            async move { run(&db, &Grant::command_line(), vec![file], Mode::Apply).await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        agent.commit().await.unwrap();
+        let report = importing.await.unwrap().unwrap();
+        let reasons = reasons(&report.files[0]);
+        assert!(
+            reasons.len() == 1 && reasons[0].1.contains("departed"),
+            "{reasons:?}"
+        );
+        let shown = crate::requesters::detail(&db, ada).await.unwrap();
+        assert_eq!((shown.addresses.len(), shown.name), (1, None));
+    }
+
+    /// A requester merged into another while the import changes them is gone: the import asks to
+    /// be run again on the data as it is now.
+    #[sqlx::test]
+    async fn a_requester_merged_during_the_import_asks_to_try_again(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let ada = crate::testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let other = crate::testing::requester(&db, brightfield, "ada.f@brightfield.test").await;
+        // The merge, as requesters::merge does it, left open.
+        let mut agent = db.begin().await.unwrap();
+        crate::requesters::lock_with_customer(&mut agent, ada)
+            .await
+            .unwrap();
+        for statement in [
+            "INSERT INTO requester_merges (merged_id, kept_id) VALUES ($2, $1)",
+            "UPDATE requester_addresses SET requester_id = $1 WHERE requester_id = $2",
+            "DELETE FROM requesters WHERE id = $2",
+        ] {
+            sqlx::query(statement)
+                .bind(ada)
+                .bind(other)
+                .execute(&mut *agent)
+                .await
+                .unwrap();
+        }
+
+        let file = requesters("customer,email_addresses,name\nBrightfield,ada.f@brightfield.test,Ada\n");
+        let importing = tokio::spawn({
+            let db = db.clone();
+            async move { run(&db, &Grant::command_line(), vec![file], Mode::Apply).await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        agent.commit().await.unwrap();
+        match importing.await.unwrap() {
+            Err(Error::Rule(why)) => assert!(why.contains("try again"), "{why}"),
+            other => panic!("not refused: {other:?}"),
+        }
     }
 
     /// Applying does everything again against the database as it is then: a preview is no promise.
