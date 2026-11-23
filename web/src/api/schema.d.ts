@@ -701,6 +701,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Imports the files: the rows that break no rule are created or update what exists, checked
+         *     again against the help desk's data as it is now; the rows left out come back as a CSV file,
+         *     with their reason, to correct and import again. A file with an unknown or missing column
+         *     stops the whole import.
+         */
+        post: operations["apply"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/imports/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What importing the files would create, update and leave out, with the reason of each row
+         *     left out; nothing changes.
+         */
+        post: operations["preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/inbox": {
         parameters: {
             query?: never;
@@ -1726,12 +1768,32 @@ export interface components {
             ticket_number?: number | null;
             to_address?: string | null;
         };
+        FileReport: {
+            kind: components["schemas"]["Kind"];
+            /**
+             * @description The rows left out, as a CSV file with the same columns, separator and byte order mark as
+             *     this one and their reason in an `error` column, ready to correct and import again; none
+             *     when no row is left out.
+             */
+            left_out?: string | null;
+            /** @description Every row of the file, in its order. */
+            rows: components["schemas"]["RowReport"][];
+        };
         /** @description A password made by the core, shown once to the agent who asked for it. */
         GeneratedPassword: {
             password: string;
         };
         Health: {
             status: string;
+        };
+        ImportFile: {
+            /** @description The file's text: CSV with a header of fixed column names, comma or semicolon separated. */
+            content: string;
+            kind: components["schemas"]["Kind"];
+        };
+        /** @description CSV files to import, at most one of each kind; they are taken customers first, then sites. */
+        ImportRequest: {
+            files: components["schemas"]["ImportFile"][];
         };
         InboxMessage: {
             body_text: string;
@@ -1764,6 +1826,12 @@ export interface components {
              */
             contact_address?: string | null;
         };
+        /**
+         * @description What a file of an import holds, one kind per file. Files are taken in this order, so that a
+         *     row can refer to something an earlier file creates.
+         * @enum {string}
+         */
+        Kind: "customers" | "sites";
         LinkedAsset: {
             /** Format: uuid */
             id: string;
@@ -1956,6 +2024,8 @@ export interface components {
              */
             waiting: number;
         };
+        /** @enum {string} */
+        Outcome: "create" | "update" | "unchanged" | "left_out";
         ParentChange: {
             /**
              * Format: int64
@@ -2031,6 +2101,12 @@ export interface components {
             number: number;
             state: components["schemas"]["TicketState"];
             title: string;
+        };
+        /** @description What an import does, or would do, file by file. */
+        Report: {
+            /** @description Whether the import was applied; a preview changes nothing. */
+            applied: boolean;
+            files: components["schemas"]["FileReport"][];
         };
         Requester: {
             /** @description All the requester's addresses, the first registered first. */
@@ -2185,6 +2261,20 @@ export interface components {
         RoleRequest: {
             name: string;
             permissions: components["schemas"]["Permission"][];
+        };
+        RowReport: {
+            /** @description The columns whose values a row that updates changes. */
+            changes: string[];
+            /** @description What the row is about: a customer's name, or a site's customer and name. */
+            label: string;
+            /**
+             * Format: int64
+             * @description The line of the file the row starts on; the header is line 1.
+             */
+            line: number;
+            outcome: components["schemas"]["Outcome"];
+            /** @description Why the row is left out. */
+            reason?: string | null;
         };
         Service: {
             /**
@@ -4221,6 +4311,112 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Health"];
                 };
+            };
+        };
+    };
+    apply: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Report"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Report"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

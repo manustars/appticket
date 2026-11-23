@@ -2362,6 +2362,122 @@
         }
       }
     },
+    "/api/imports": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Imports the files: the rows that break no rule are created or update what exists, checked\nagain against the help desk's data as it is now; the rows left out come back as a CSV file,\nwith their reason, to correct and import again. A file with an unknown or missing column\nstops the whole import.",
+        "operationId": "apply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {}
+        }
+      }
+    },
+    "/api/imports/preview": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "What importing the files would create, update and leave out, with the reason of each row\nleft out; nothing changes.",
+        "operationId": "preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {}
+        }
+      }
+    },
     "/api/inbox": {
       "get": {
         "tags": [
@@ -6122,6 +6238,32 @@
           }
         }
       },
+      "FileReport": {
+        "type": "object",
+        "required": [
+          "kind",
+          "rows"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/Kind"
+          },
+          "left_out": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The rows left out, as a CSV file with the same columns, separator and byte order mark as\nthis one and their reason in an `error` column, ready to correct and import again; none\nwhen no row is left out."
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RowReport"
+            },
+            "description": "Every row of the file, in its order."
+          }
+        }
+      },
       "GeneratedPassword": {
         "type": "object",
         "description": "A password made by the core, shown once to the agent who asked for it.",
@@ -6142,6 +6284,37 @@
         "properties": {
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "ImportFile": {
+        "type": "object",
+        "required": [
+          "kind",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The file's text: CSV with a header of fixed column names, comma or semicolon separated."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/Kind"
+          }
+        }
+      },
+      "ImportRequest": {
+        "type": "object",
+        "description": "CSV files to import, at most one of each kind; they are taken customers first, then sites.",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportFile"
+            }
           }
         }
       },
@@ -6233,6 +6406,14 @@
             "description": "One of the requester's addresses, where the messages for key requesters go. It can be\nleft out for a requester with one address, and for a key requester, who keeps theirs."
           }
         }
+      },
+      "Kind": {
+        "type": "string",
+        "description": "What a file of an import holds, one kind per file. Files are taken in this order, so that a\nrow can refer to something an earlier file creates.",
+        "enum": [
+          "customers",
+          "sites"
+        ]
       },
       "LinkedAsset": {
         "type": "object",
@@ -6768,6 +6949,15 @@
           }
         }
       },
+      "Outcome": {
+        "type": "string",
+        "enum": [
+          "create",
+          "update",
+          "unchanged",
+          "left_out"
+        ]
+      },
       "ParentChange": {
         "type": "object",
         "required": [
@@ -7000,6 +7190,26 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "Report": {
+        "type": "object",
+        "description": "What an import does, or would do, file by file.",
+        "required": [
+          "applied",
+          "files"
+        ],
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "description": "Whether the import was applied; a preview changes nothing."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileReport"
+            }
           }
         }
       },
@@ -7357,6 +7567,44 @@
             "items": {
               "$ref": "#/components/schemas/Permission"
             }
+          }
+        }
+      },
+      "RowReport": {
+        "type": "object",
+        "required": [
+          "line",
+          "outcome",
+          "label",
+          "changes"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The columns whose values a row that updates changes."
+          },
+          "label": {
+            "type": "string",
+            "description": "What the row is about: a customer's name, or a site's customer and name."
+          },
+          "line": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The line of the file the row starts on; the header is line 1.",
+            "minimum": 0
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/Outcome"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the row is left out."
           }
         }
       },

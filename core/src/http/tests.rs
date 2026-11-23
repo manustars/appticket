@@ -1515,3 +1515,86 @@ async fn add_ons_do_not_read_key_requesters(db: PgPool) {
         "lena@brightfield.test"
     );
 }
+
+#[sqlx::test]
+async fn an_import_is_previewed_then_applied(db: PgPool) {
+    let api = Client::new(&db).await;
+    let import = serde_json::json!({ "files": [
+        { "kind": "sites", "content": "customer;name;address\r\nBrightfield;Head office;Via dei Tigli 1\r\nNowhere;Lab;Via del Glicine 3\r\n" },
+        { "kind": "customers", "content": "\u{feff}name,tax_id,tax_country\nBrightfield,,\nHarbor Lane,000,ITA\n" },
+    ]});
+
+    let (status, preview) = api
+        .call("POST", "/api/imports/preview", Some(import.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["applied"], false);
+    assert_eq!(preview["files"][0]["kind"], "customers");
+    assert_eq!(preview["files"][0]["rows"][0]["outcome"], "create");
+    assert_eq!(preview["files"][0]["rows"][1]["outcome"], "left_out");
+    assert_eq!(preview["files"][1]["rows"][1]["line"], 3);
+    assert!(
+        preview["files"][1]["left_out"]
+            .as_str()
+            .unwrap()
+            .starts_with("customer;name;address;error\r\nNowhere;Lab;"),
+        "{preview}"
+    );
+    assert_eq!(api.get("/api/customers/all").await, serde_json::json!([]));
+
+    let (status, applied) = api.call("POST", "/api/imports", Some(import)).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["applied"], true);
+    let customers = api.get("/api/customers/all").await;
+    assert_eq!(customers[0]["name"], "Brightfield");
+    let brightfield = customers[0]["id"].as_str().unwrap();
+    let shown = api.get(&format!("/api/customers/{brightfield}")).await;
+    assert_eq!(shown["sites"][0]["name"], "Head office");
+}
+
+#[sqlx::test]
+async fn an_import_needs_managing_customers_and_files_it_can_read(db: PgPool) {
+    use crate::roles::Permission;
+    let catalog = role_with(&db, "Catalog", &[Permission::ManageCatalog]).await;
+    let other = Client::with_role(&db, "carla@northgate.test", catalog).await;
+    let import = serde_json::json!({ "files": [
+        { "kind": "customers", "content": "name\nBrightfield\n" },
+    ]});
+    for uri in ["/api/imports/preview", "/api/imports"] {
+        let (status, json) = other.call("POST", uri, Some(import.clone())).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{uri}: {json}");
+    }
+
+    let api = Client::new(&db).await;
+    let unknown = serde_json::json!({ "files": [
+        { "kind": "customers", "content": "name,adress\nBrightfield,Via dei Tigli 1\n" },
+    ]});
+    let (status, json) = api
+        .call("POST", "/api/imports/preview", Some(unknown))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert!(json["error"].as_str().unwrap().contains("adress"), "{json}");
+    let (status, json) = api
+        .call(
+            "POST",
+            "/api/imports",
+            Some(serde_json::json!({ "files": [] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+
+    // Files larger than other requests are taken, up to a limit.
+    let notes = "Long notes. ".repeat(300_000);
+    let large = serde_json::json!({ "files": [
+        { "kind": "customers", "content": format!("name,notes\nBrightfield,{notes}\n") },
+    ]});
+    let (status, json) = api.call("POST", "/api/imports/preview", Some(large)).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let too_big = serde_json::json!({ "files": [
+        { "kind": "customers", "content": "x".repeat(super::imports::BODY_LIMIT) },
+    ]});
+    let (status, _) = api
+        .call("POST", "/api/imports/preview", Some(too_big))
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+}
