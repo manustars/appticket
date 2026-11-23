@@ -26,6 +26,16 @@ pub async fn list(db: &PgPool) -> Result<Vec<AssetKind>> {
     .await?)
 }
 
+/// The asset kind with that name, ignoring case, as kinds are named.
+pub(crate) async fn named<'e>(db: impl sqlx::PgExecutor<'e>, name: &str) -> Result<Option<Uuid>> {
+    Ok(
+        sqlx::query_scalar("SELECT id FROM asset_kinds WHERE lower(name) = lower($1)")
+            .bind(name.trim())
+            .fetch_optional(db)
+            .await?,
+    )
+}
+
 /// Adds an asset kind; no two kinds have names that differ only in case.
 pub async fn create(db: &PgPool, name: &str, moves_with_holder: bool) -> Result<Uuid> {
     let name = clean(name)?;
