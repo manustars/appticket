@@ -29,7 +29,7 @@ impl Kind {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Kind::Customers => "customers",
             Kind::Sites => "sites",
@@ -96,7 +96,7 @@ pub enum Outcome {
 }
 
 /// The columns of a customers file.
-const CUSTOMER_COLUMNS: &[&str] = &[
+pub(crate) const CUSTOMER_COLUMNS: &[&str] = &[
     "name",
     "external_system",
     "external_name",
@@ -111,7 +111,7 @@ const CUSTOMER_COLUMNS: &[&str] = &[
 
 /// The columns of a sites file: the site's customer, by name or by one of its external
 /// references, and the site.
-const SITE_COLUMNS: &[&str] = &[
+pub(crate) const SITE_COLUMNS: &[&str] = &[
     "customer",
     "customer_external_system",
     "customer_external_name",

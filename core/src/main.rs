@@ -97,6 +97,9 @@ enum Command {
     /// Manage add-ons.
     #[command(subcommand)]
     Addon(cli::AddonCommand),
+    /// Import customers and sites from CSV files: shows what it would do, and does it with
+    /// --apply (--help lists the columns).
+    Import(cli::ImportArgs),
     /// Print the OpenAPI specification of the HTTP API (needs no database).
     Openapi,
 }
@@ -137,6 +140,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Agent(command) => cli::agent(&db, command).await,
         Command::Role(command) => cli::role(&db, command).await,
         Command::Addon(command) => cli::addon(&db, command).await,
+        Command::Import(args) => cli::import(&db, args, &mut std::io::stdout()).await,
         Command::Serve {
             listen,
             imap_url,
