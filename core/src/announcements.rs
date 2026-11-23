@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::error::{Error, Result, rule};
 use crate::outbound::Sender;
+use crate::tickets::TicketState;
 
 /// An announcement sent from a parent ticket, with when it was sent and to whom.
 #[derive(Debug, Serialize, ToSchema)]
@@ -81,10 +82,25 @@ pub async fn send(
     let (ticket, title) = read.ok_or(Error::NotFound("ticket"))?;
     let customers = affected_customers(&mut tx, ticket).await?;
     let keys = crate::key_requesters::locked_of_customers(&mut tx, &customers).await?;
-    sqlx::query("SELECT 1 FROM tickets WHERE id = $1 FOR UPDATE")
-        .bind(ticket)
-        .execute(&mut *tx)
-        .await?;
+    let (state, help_desk, child): (TicketState, bool, bool) = sqlx::query_as(
+        "SELECT t.state, c.is_help_desk, t.parent_id IS NOT NULL
+         FROM tickets t JOIN customers c ON c.id = t.customer_id
+         WHERE t.id = $1 FOR UPDATE OF t",
+    )
+    .bind(ticket)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !help_desk {
+        return rule(
+            "announcements are sent from a parent ticket, which belongs to the help desk's own organization",
+        );
+    }
+    if child {
+        return rule("the ticket is a child: announcements are sent from its parent");
+    }
+    if state == TicketState::Closed {
+        return rule("the ticket is closed; a closed ticket sends no announcements");
+    }
     if affected_customers(&mut tx, ticket).await? != customers {
         return rule("the ticket's children have just changed; reload and try again");
     }
@@ -340,5 +356,48 @@ mod tests {
             ],
             "one message each"
         );
+    }
+
+    /// Only a parent ticket that is not closed sends announcements: a closed one, a ticket of
+    /// another customer than the help desk's own organization and a child are refused, and nothing
+    /// is sent.
+    #[sqlx::test]
+    async fn announcements_are_sent_only_from_a_parent_that_is_not_closed(db: PgPool) {
+        let own = testing::help_desk(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        crate::key_requesters::mark(&db, ada, None).await.unwrap();
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
+        let child = testing::ticket(&db, brightfield, None, "a@brightfield.test").await;
+        attach(&db, child, outage).await.unwrap();
+        let other = testing::ticket(&db, brightfield, None, "b@brightfield.test").await;
+        let sender = testing::sender();
+        let refused = |number| send(&db, &sender, number, agent, "Still down.");
+
+        let Err(Error::Rule(why)) = refused(child).await else {
+            panic!("announced from a child");
+        };
+        assert!(why.contains("parent"), "{why}");
+        let Err(Error::Rule(why)) = refused(other).await else {
+            panic!("announced from a ticket of a customer");
+        };
+        assert!(why.contains("help desk's own organization"), "{why}");
+        tickets::set_state(&db, outage, tickets::TicketState::Closed)
+            .await
+            .unwrap();
+        let Err(Error::Rule(why)) = refused(outage).await else {
+            panic!("announced from a closed parent");
+        };
+        assert!(why.contains("closed"), "{why}");
+        for number in [outage, child, other] {
+            assert!(listed(&db, number).await.is_empty());
+        }
+        let queued: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM messages WHERE direction = 'outbound'")
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(queued, 0);
     }
 }
