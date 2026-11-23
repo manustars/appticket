@@ -1855,3 +1855,73 @@ async fn an_import_needs_managing_customers_and_files_it_can_read(db: PgPool) {
         .await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 }
+
+/// An agent who replies to requesters sends announcements from a parent ticket and sees each one
+/// on the parent, with when it was sent and to whom; an agent who cannot reply is refused, and so
+/// is an announcement from a closed parent. Add-ons read the parent without its announcements.
+#[sqlx::test]
+async fn announcements_are_sent_and_listed_through_the_api(db: PgPool) {
+    use crate::roles::Permission;
+    let replier = role_with(&db, "Replier", &[Permission::Reply]).await;
+    let replier = Client::with_role(&db, "remo@northgate.test", replier).await;
+    let worker = role_with(&db, "Worker", &[Permission::WorkTickets]).await;
+    let worker = Client::with_role(&db, "wanda@northgate.test", worker).await;
+    let own = testing::help_desk(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+    crate::key_requesters::mark(&db, ada, None).await.unwrap();
+    let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
+    let child = testing::ticket(&db, brightfield, None, "a@brightfield.test").await;
+    crate::parents::attach(&db, child, outage).await.unwrap();
+    let uri = format!("/api/tickets/{outage}/announcements");
+    let body = Some(serde_json::json!({ "body": "Mail is down; we are on it." }));
+
+    let (status, _) = worker.call("POST", &uri, body.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "announcing needs replying");
+    let (status, sent) = replier.call("POST", &uri, body.clone()).await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    assert_eq!(sent["recipients"][0]["address"], "ada@brightfield.test");
+
+    let ticket = worker.get(&format!("/api/tickets/{outage}")).await;
+    let listed: Vec<&Value> = ticket["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "announcement")
+        .collect();
+    assert_eq!(listed.len(), 1, "{ticket}");
+    assert_eq!(listed[0]["body"], "Mail is down; we are on it.");
+    assert_eq!(listed[0]["author_name"], "remo");
+    assert!(listed[0]["created_at"].is_string(), "{}", listed[0]);
+    assert_eq!(listed[0]["recipients"][0]["customer_name"], "Brightfield");
+    assert_eq!(
+        listed[0]["recipients"][0]["address"],
+        "ada@brightfield.test"
+    );
+    let child_seen = worker.get(&format!("/api/tickets/{child}")).await;
+    assert_eq!(child_seen["state"], "open");
+
+    let reader = crate::addons::register(
+        &db,
+        "reader",
+        "http://127.0.0.1:9",
+        &[],
+        &["tickets:read".into()],
+    )
+    .await
+    .unwrap();
+    let bot = Client::new_with_token(&db, &reader.token, replier.agent);
+    let seen = bot.get(&format!("/api/addon/tickets/{outage}")).await;
+    assert!(!seen.to_string().contains("ada@brightfield.test"), "{seen}");
+
+    let (status, _) = worker
+        .call(
+            "PUT",
+            &format!("/api/tickets/{outage}/state"),
+            Some(serde_json::json!({ "state": "closed" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, json) = replier.call("POST", &uri, body).await;
+    assert_eq!(status, StatusCode::CONFLICT, "from a closed parent: {json}");
+}
