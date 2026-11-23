@@ -1,6 +1,8 @@
 //! What agents do on a ticket: read it, write notes, reply to the requester, assign it and move
 //! it between states. Rules are in docs/domain-rules.md ("Tickets").
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
 use time::OffsetDateTime;
@@ -490,6 +492,32 @@ async fn ensure_ticket_may_move_to(
         return rule("a parent ticket stays with the help desk's own organization");
     }
     Ok(())
+}
+
+/// The sites each of the tickets numbered `numbers` is at, by number, each list by name.
+pub async fn sites<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    numbers: &[i64],
+) -> Result<HashMap<i64, Vec<crate::requesters::SiteRef>>> {
+    let rows: Vec<(i64, Uuid, String)> = sqlx::query_as(
+        "SELECT t.number, s.id, s.name
+         FROM tickets t
+         JOIN ticket_sites ts ON ts.ticket_id = t.id
+         JOIN sites s ON s.id = ts.site_id
+         WHERE t.number = ANY($1)
+         ORDER BY t.number, lower(s.name), s.name, s.id",
+    )
+    .bind(numbers)
+    .fetch_all(db)
+    .await?;
+    let mut sites: HashMap<i64, Vec<crate::requesters::SiteRef>> = HashMap::new();
+    for (number, id, name) in rows {
+        sites
+            .entry(number)
+            .or_default()
+            .push(crate::requesters::SiteRef { id, name });
+    }
+    Ok(sites)
 }
 
 /// "Re: <title> [#<number>]", without stacking "Re:".
@@ -1166,6 +1194,104 @@ mod tests {
         assert!(
             !send(none, "someone@elsewhere.test").await,
             "an address of nobody"
+        );
+    }
+
+    /// The names of the sites the ticket is at, in order.
+    async fn at(db: &PgPool, number: i64) -> Vec<String> {
+        sites(db, &[number])
+            .await
+            .unwrap()
+            .remove(&number)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| s.name)
+            .collect()
+    }
+
+    /// A site of the customer, by name.
+    async fn site(db: &PgPool, customer: Uuid, name: &str) -> Uuid {
+        crate::sites::create(db, customer, name, "Via dei Tigli 1")
+            .await
+            .unwrap()
+    }
+
+    /// Puts the requester at `site`, or at none.
+    async fn put_at(db: &PgPool, requester: Uuid, site: Option<Uuid>) {
+        let details = crate::requesters::RequesterDetails {
+            site_id: site,
+            ..Default::default()
+        };
+        crate::requesters::update(db, requester, &details)
+            .await
+            .unwrap();
+    }
+
+    /// A ticket that links assets is at the sites where they are: a laptop at its holder's site,
+    /// a printer at its own, whatever its holder; its requester's site does not count.
+    #[sqlx::test]
+    async fn a_ticket_is_at_the_sites_of_its_assets(db: PgPool) {
+        let c = testing::customer(&db, "Brightfield").await;
+        let head = site(&db, c, "Head office").await;
+        let lab = site(&db, c, "Lab").await;
+        let warehouse = site(&db, c, "Warehouse").await;
+        let depot = site(&db, c, "Depot").await;
+        let ada = testing::requester(&db, c, "ada@brightfield.test").await;
+        put_at(&db, ada, Some(lab)).await;
+        let lena = testing::requester(&db, c, "lena@brightfield.test").await;
+        put_at(&db, lena, Some(head)).await;
+        let laptop = crate::asset_kinds::create(&db, "Laptop", true)
+            .await
+            .unwrap();
+        let printer = crate::asset_kinds::create(&db, "Printer", false)
+            .await
+            .unwrap();
+        let pc = crate::catalog::create_asset(
+            &db,
+            c,
+            &testing::asset_details(laptop, "PC-0042", None, Some(depot), Some(ada)),
+        )
+        .await
+        .unwrap();
+        let printer_2f = crate::catalog::create_asset(
+            &db,
+            c,
+            &testing::asset_details(printer, "Printer 2F", None, Some(warehouse), Some(ada)),
+        )
+        .await
+        .unwrap();
+        let n = testing::ticket(&db, c, Some(lena), "a1@brightfield.test").await;
+        for asset in [printer_2f, pc] {
+            crate::catalog::link_asset(&db, n, asset, true)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(at(&db, n).await, ["Lab", "Warehouse"]);
+    }
+
+    /// A ticket that links no asset is at its requester's site; without a requester it is at none,
+    /// and so is one whose assets are at no site, whatever its requester.
+    #[sqlx::test]
+    async fn a_ticket_without_assets_is_at_its_requester_s_site(db: PgPool) {
+        let c = testing::customer(&db, "Brightfield").await;
+        let head = site(&db, c, "Head office").await;
+        let lena = testing::requester(&db, c, "lena@brightfield.test").await;
+        put_at(&db, lena, Some(head)).await;
+        let hers = testing::ticket(&db, c, Some(lena), "a1@brightfield.test").await;
+        let nobody_s = testing::ticket(&db, c, None, "a2@brightfield.test").await;
+        let with_asset = testing::ticket(&db, c, Some(lena), "a3@brightfield.test").await;
+        let pc = testing::asset(&db, c, "Laptop", "PC-0042").await;
+        crate::catalog::link_asset(&db, with_asset, pc, true)
+            .await
+            .unwrap();
+
+        assert_eq!(at(&db, hers).await, ["Head office"]);
+        assert_eq!(at(&db, nobody_s).await, Vec::<String>::new());
+        assert_eq!(
+            at(&db, with_asset).await,
+            Vec::<String>::new(),
+            "its asset is at no site"
         );
     }
 
