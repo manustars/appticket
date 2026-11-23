@@ -388,6 +388,31 @@ mod tests {
         assert!(signed_in.cookie("hd_session").is_some());
     }
 
+    /// With local sign-in off, agents still sign in through Keycloak, and sessions opened there
+    /// outlive the switch.
+    #[sqlx::test]
+    #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
+    async fn agents_sign_in_through_keycloak_with_local_sign_in_off(db: PgPool) {
+        let state = state(&db);
+        let lena = agent(&db, "lena.marsh@example.com", "Lena").await;
+        let before = sign_in_as(&state, "lena").await;
+        let before = before.cookie("hd_session").expect("a session");
+        let configured = crate::local_sign_in::tests::identity_provider();
+        crate::local_sign_in::switch_off(&db, Some(&configured))
+            .await
+            .unwrap();
+
+        let token = before.trim_start_matches("hd_session=");
+        let still = crate::auth::agent_for(&db, token).await.unwrap().unwrap();
+        assert_eq!(still.id, lena);
+        let after = sign_in_as(&state, "lena").await;
+        assert_eq!(after.location, "/");
+        let session = after.cookie("hd_session").expect("a session");
+        let token = session.trim_start_matches("hd_session=");
+        let agent = crate::auth::agent_for(&db, token).await.unwrap().unwrap();
+        assert_eq!(agent.id, lena);
+    }
+
     #[sqlx::test]
     #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
     async fn the_return_needs_the_browser_that_set_out_a_fresh_state_and_the_nonce(db: PgPool) {
