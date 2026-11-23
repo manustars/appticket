@@ -51,6 +51,21 @@ core:
     # Import the mail already in the mailbox on the very first read (normally left alone).
     importExisting: false
 
+  # Limits on failed sign-ins, per account and per client address (docs/deploy.md, "Failed
+  # sign-ins"). After `failures` failures within `windowSeconds`, the next four attempts wait 1, 2,
+  # 4 and 8 seconds, and attempts after those are refused until `windowSeconds` have passed since
+  # the last failure: at most failures + 4 passwords are checked per account within a window.
+  signIn:
+    # HD_SIGN_IN_FAILURES (1 to 100)
+    failures: 5
+    # HD_SIGN_IN_WINDOW_SECONDS (1 to 86400)
+    windowSeconds: 900
+    # HD_TRUSTED_PROXIES: the reverse proxies whose X-Forwarded-For gives the client's address,
+    # as addresses or networks. With the Ingress, list the addresses the ingress controller's pods
+    # connect from, such as the cluster's pod network (10.0.0.0/8); empty, every client is
+    # counted under the controller's address.
+    trustedProxies: []
+
   # HD_LOG: a tracing filter.
   log: "info,sqlx=warn"
 

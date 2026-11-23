@@ -85,6 +85,14 @@ spec:
             - name: HD_MAIL_CA_FILE
               value: {{ printf "/etc/hd/mail-ca/%s" $core.mail.ca.secretKey | quote }}
             {{- end }}
+            - name: HD_SIGN_IN_FAILURES
+              value: {{ $core.signIn.failures | quote }}
+            - name: HD_SIGN_IN_WINDOW_SECONDS
+              value: {{ $core.signIn.windowSeconds | quote }}
+            {{- with $core.signIn.trustedProxies }}
+            - name: HD_TRUSTED_PROXIES
+              value: {{ join "," . | quote }}
+            {{- end }}
             - name: HD_LOG
               value: {{ $core.log | quote }}
             {{- with $core.extraEnv }}
