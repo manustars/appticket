@@ -215,10 +215,18 @@ Outside the chart the same settings are environment variables: `HD_OIDC_ISSUER`,
 `HD_OIDC_CLIENT_ID`, `HD_OIDC_CLIENT_SECRET` or `HD_OIDC_CLIENT_SECRET_FILE` (a file holding
 the secret, such as a mounted Secret), `HD_PUBLIC_URL`, `HD_OIDC_LABEL` (default `OpenID
 Connect`) and `HD_OIDC_SESSION_HOURS` (default 12, at most 24). The issuer and the public URL
-must be `https://` addresses. Without an issuer, client id and secret nothing changes; with only
-some of them the core does not start, and says which are missing. The core reads the provider's
+must be `https://` addresses; `http://` is accepted only for a server on the core's own machine
+(`localhost` or a loopback address), as for the mail servers. Without an issuer, client id and
+secret nothing changes; with only some of them the core does not start, and says which are
+missing (the chart already refuses an issuer without a public URL). The core reads the provider's
 configuration and keys when an agent signs in, not at startup, so a provider that is down does
 not keep the core or local passwords from working.
+
+Anyone can open the sign-in through the provider, so at most 20 sign-ins may be under way from
+one address at a time (the address is taken as for [failed sign-ins](#failed-sign-ins), so set
+`core.signIn.trustedProxies` behind a proxy); beyond that the core answers 429 with
+`Retry-After` until one ends. A sign-in ends when the agent comes back from the provider, or
+after 10 minutes.
 
 How the provider's sign-in finds the agent:
 
@@ -227,12 +235,13 @@ How the provider's sign-in finds the agent:
   scopes). The identity is then linked to that agent. A provider that does not send
   `email_verified: true` in the ID token links nobody: check that yours does.
 - From then on, by the provider's stable identifier (`sub`), even after the address changed
-  there. The agent's name and verified e-mail follow the provider at every sign-in, and cannot be
-  edited in the help desk.
+  there. The agent's name follows the provider at every sign-in; so does the e-mail, but only
+  when the provider says it is verified: an unverified one is ignored and the agent keeps the
+  address they have. A linked agent's name and e-mail cannot be edited in the help desk.
 - Refused, with the reason on the sign-in page: an unverified e-mail with no link yet, someone who
-  is not an agent, a deactivated agent (signing in never reactivates one), and an e-mail that
-  belongs to another agent, including an agent already linked to another identity of the
-  provider.
+  is not an agent, a deactivated agent (signing in never reactivates one), and a verified e-mail
+  that belongs to another agent, including the first time an agent already linked to another
+  identity of the provider.
 
 A session opened through the provider lasts `sessionHours`, so that an account disabled there
 loses access within hours; one opened with a local password lasts 14 days. Signing out ends the
