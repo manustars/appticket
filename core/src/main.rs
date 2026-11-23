@@ -29,6 +29,7 @@ mod parents;
 mod proposals;
 mod requesters;
 mod roles;
+mod sign_in_limits;
 mod sites;
 #[cfg(test)]
 mod testing;
