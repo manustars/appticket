@@ -62,7 +62,7 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
   const { t } = useI18n()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [failed, setFailed] = useState<'wrong' | 'unreachable' | null>(null)
+  const [failed, setFailed] = useState<'wrong' | 'later' | 'unreachable' | null>(null)
   const [busy, setBusy] = useState(false)
 
   async function submit(event: FormEvent) {
@@ -70,11 +70,12 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
     setBusy(true)
     setFailed(null)
     try {
-      if (await signIn(email, password)) {
+      const outcome = await signIn(email, password)
+      if (outcome === 'signedIn') {
         const agent = await currentAgent()
         if (agent) onSignedIn(agent)
       } else {
-        setFailed('wrong')
+        setFailed(outcome)
       }
     } catch {
       setFailed('unreachable')
@@ -99,7 +100,9 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
         </label>
         {failed && (
           <p className="error" role="alert">
-            {failed === 'wrong' ? t('signIn.wrong') : t('error.unreachable')}
+            {failed === 'wrong' ? t('signIn.wrong')
+              : failed === 'later' ? t('signIn.later')
+                : t('error.unreachable')}
           </p>
         )}
         <button type="submit" disabled={busy}>{t('signIn.submit')}</button>
