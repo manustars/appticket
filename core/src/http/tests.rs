@@ -278,6 +278,66 @@ async fn behind_a_trusted_proxy_clients_are_counted_under_their_forwarded_addres
     assert_eq!(other.status, StatusCode::NO_CONTENT);
 }
 
+/// With local sign-in off, the sign-in page learns that it offers the identity provider only,
+/// sessions opened with a password have ended, and a password is refused before it is checked:
+/// the same answer for every account, known or not, right password or wrong, and no failure
+/// counted.
+#[sqlx::test]
+async fn with_local_sign_in_off_a_password_is_refused_the_same_way_for_every_account(db: PgPool) {
+    let api = Client::new(&db).await;
+    let provider = crate::local_sign_in::tests::identity_provider();
+    let state = AppState {
+        identity_provider: Some(crate::oidc::Provider::new(provider.clone()).unwrap()),
+        ..api.state.clone()
+    };
+    let anonymous = Client::anonymous(state.clone());
+    let (_, options) = anonymous.call("GET", "/api/session/options", None).await;
+    assert_eq!(options["local_sign_in"], true);
+
+    crate::local_sign_in::switch_off(&db, Some(&provider))
+        .await
+        .unwrap();
+    let (status, _) = api.call("GET", "/api/session", None).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "the password session ended"
+    );
+    let (status, options) = anonymous.call("GET", "/api/session/options", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        options,
+        serde_json::json!({"identity_provider": {"label": "Northgate"}, "local_sign_in": false})
+    );
+
+    for (email, password) in [
+        ("marco@northgate.test", "pw"),
+        ("marco@northgate.test", "guess"),
+        ("ghost@northgate.test", "guess"),
+    ] {
+        for _ in 0..10 {
+            let answer = sign_in_from(&state, "203.0.113.7", &[], email, password).await;
+            assert_eq!(
+                answer.status,
+                StatusCode::FORBIDDEN,
+                "{email}: {}",
+                answer.body
+            );
+            assert_eq!(
+                answer.body,
+                serde_json::json!({
+                    "error": "Local sign-in is off: sign in through the identity provider."
+                })
+            );
+        }
+    }
+    let counted: i64 = sqlx::query_scalar("SELECT count(*) FROM sign_in_failures")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(counted, 0);
+}
+
 fn numbers(list: &Value) -> Vec<i64> {
     let mut n: Vec<i64> = list
         .as_array()
@@ -2220,7 +2280,10 @@ async fn the_sign_in_page_offers_the_identity_provider_only_when_configured(db: 
     let without = Client::anonymous(AppState::for_tests(&db));
     let (status, options) = without.call("GET", "/api/session/options", None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(options, serde_json::json!({"identity_provider": null}));
+    assert_eq!(
+        options,
+        serde_json::json!({"identity_provider": null, "local_sign_in": true})
+    );
     let (status, _) = without
         .call("GET", "/api/session/identity-provider", None)
         .await;
@@ -2253,6 +2316,6 @@ async fn the_sign_in_page_offers_the_identity_provider_only_when_configured(db: 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         options,
-        serde_json::json!({"identity_provider": {"label": "Northgate"}})
+        serde_json::json!({"identity_provider": {"label": "Northgate"}, "local_sign_in": true})
     );
 }
