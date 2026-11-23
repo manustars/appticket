@@ -1,10 +1,11 @@
-// Importing customers, sites and requesters from CSV files: a preview first, then the import
-// itself, and the rows left out to download, correct and import again.
+// Importing customers, sites, requesters and assets from CSV files: a preview first, then the
+// import itself, and the rows left out to download, correct and import again.
 import { useId, useState } from 'react'
-import { applyImport, previewImport, Refused, type ImportFile, type ImportKind, type ImportReport, type ImportRow } from './api/client'
+import { applyImport, previewImport, Refused, type ImportFile, type ImportKind, type ImportReport, type ImportRow, type Permission } from './api/client'
 import { useI18n } from './i18n/context'
 import { Problem } from './Problem'
 import { customersHref } from './route'
+import { useSession } from './session'
 import { useAction } from './useAction'
 
 /** The kinds this screen imports, in the order an import takes them, with their columns. */
@@ -20,7 +21,15 @@ const kinds: { kind: ImportKind; columns: string[] }[] = [
     columns: ['customer', 'customer_external_system', 'customer_external_name', 'email_addresses', 'name',
       'phone_numbers', 'job_title', 'site', 'notes'],
   },
+  {
+    kind: 'assets',
+    columns: ['customer', 'customer_external_system', 'customer_external_name', 'name', 'serial_number', 'kind',
+      'site', 'holder'],
+  },
 ]
+
+/** The permission an agent needs beyond managing customers to import a kind, if any. */
+const alsoNeeds: Partial<Record<ImportKind, Permission>> = { assets: 'catalog.manage' }
 
 /** A file the browser could not read as UTF-8. */
 class NotUtf8 extends Error {}
@@ -48,6 +57,12 @@ function download(name: string, text: string) {
 export function Import({ onSignedOut }: { onSignedOut: () => void }) {
   const { t } = useI18n()
   const id = useId()
+  const { can } = useSession()
+  // The kinds this agent can import: assets only for an agent who manages the catalog too.
+  const offered = kinds.filter(({ kind }) => {
+    const needed = alsoNeeds[kind]
+    return !needed || can(needed)
+  })
   const action = useAction(onSignedOut)
   const [chosen, setChosen] = useState<Partial<Record<ImportKind, File>>>({})
   // The files as previewed: applying sends exactly these, so that what was seen is what is imported.
@@ -68,7 +83,7 @@ export function Import({ onSignedOut }: { onSignedOut: () => void }) {
     setReport(null)
     void action.run(async () => {
       const files: ImportFile[] = []
-      for (const { kind } of kinds) {
+      for (const { kind } of offered) {
         const file = chosen[kind]
         if (!file) continue
         try {
@@ -94,7 +109,7 @@ export function Import({ onSignedOut }: { onSignedOut: () => void }) {
     })
   }
 
-  const nothingChosen = !kinds.some(({ kind }) => chosen[kind])
+  const nothingChosen = !offered.some(({ kind }) => chosen[kind])
   // A request over the core's limit is refused before the core reads it, without its own words.
   const tooLarge = action.error instanceof Refused && action.error.status === 413
   return (
@@ -105,7 +120,7 @@ export function Import({ onSignedOut }: { onSignedOut: () => void }) {
       <section className="panel" aria-labelledby={`${id}-files`}>
         <h2 id={`${id}-files`}>{t('import.files')}</h2>
         <div className="stacked">
-          {kinds.map(({ kind, columns }) => (
+          {offered.map(({ kind, columns }) => (
             <label key={kind}>
               {t(`import.file.${kind}`)}
               <input type="file" accept=".csv,text/csv" aria-describedby={`${id}-${kind}`}
@@ -116,7 +131,7 @@ export function Import({ onSignedOut }: { onSignedOut: () => void }) {
             </label>
           ))}
         </div>
-        <p className="hint">{t('import.filesHint')}</p>
+        <p className="hint">{t(offered.length === kinds.length ? 'import.filesHint' : 'import.filesHintWithoutAssets')}</p>
         <div className="import-actions">
           <button type="button" disabled={action.busy || nothingChosen} onClick={preview}>
             {t('import.preview')}
