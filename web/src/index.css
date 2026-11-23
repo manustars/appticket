@@ -316,9 +316,10 @@ button.new-ticket { background: var(--accent); border-color: var(--accent); colo
 .stacked > label > input, .stacked > label > textarea { margin-top: 0; color: var(--text); }
 .stacked > label > input[type='email'] { max-width: 28rem; }
 
-/* A requester's page: their details, the phone numbers edited one per row. */
-.requester-facts .wide { flex-basis: 100%; }
-.requester-facts .notes { white-space: pre-wrap; }
+/* A requester's and a customer's details: notes and addresses keep their lines, a whole row each.
+   A requester's phone numbers are edited one per row. */
+.requester-facts .wide, .customer-facts .wide { flex-basis: 100%; }
+.requester-facts .notes, .customer-facts .lines { white-space: pre-wrap; }
 ul.plain { list-style: none; margin: 0; padding: 0; }
 .stacked fieldset { display: grid; gap: 0.4rem; margin: 0; padding: 0; border: 0; }
 .stacked legend { margin-bottom: 0.2rem; color: var(--muted); font-size: 0.85rem; }
@@ -326,6 +327,12 @@ ul.plain { list-style: none; margin: 0; padding: 0; }
 .stacked .row input { max-width: 20rem; margin: 0; }
 .stacked > label > select { margin-top: 0; max-width: 28rem; }
 .panel > button.link, .stacked fieldset > button.link { justify-self: start; }
+
+/* A customer's details: long values wrap; the tax identifier sits beside its country. */
+.customer-facts dd { overflow-wrap: anywhere; }
+.stacked > .row { flex-wrap: wrap; align-items: flex-end; gap: 0.5rem 0.75rem; }
+.stacked > .row > label { display: grid; gap: 0.2rem; color: var(--muted); font-size: 0.85rem; }
+.stacked > .row > label > input, .stacked > .row > label > select { margin-top: 0; color: var(--text); }
 
 /* Screens about customers and services, and the parts of a ticket that refer to them. */
 .page { max-width: 56rem; margin: 0 auto; display: grid; gap: 0.9rem; }
@@ -373,8 +380,6 @@ tr.offboarded td, tr.retired td { color: var(--muted); }
 .inline-form label { display: grid; gap: 0.2rem; color: var(--muted); font-size: 0.85rem; }
 .inline-form input { width: 14rem; max-width: 100%; margin-top: 0; }
 .inline-form label.wide input { width: 22rem; }
-.inline-form.rename { align-items: center; }
-.inline-form.rename input { width: 22rem; }
 
 .data td.wrap { white-space: normal; }
 .data input { margin-top: 0; }

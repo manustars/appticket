@@ -607,6 +607,57 @@ mod tests {
     }
 
     #[sqlx::test]
+    async fn a_customer_that_comes_back_gets_its_mail_again(db: PgPool) {
+        let brightfield = customer(&db, "Brightfield", Some("brightfield.test")).await;
+        let Routed::NewTicket { ticket_id } = route_one(
+            &db,
+            &mail("ada@brightfield.test", "a1@brightfield.test", None),
+        )
+        .await
+        else {
+            panic!("expected a new ticket");
+        };
+        crate::customers::offboard(&db, brightfield).await.unwrap();
+        assert_eq!(
+            route_one(
+                &db,
+                &mail("ada@brightfield.test", "a2@brightfield.test", None)
+            )
+            .await,
+            Routed::Inbox
+        );
+
+        crate::customers::bring_back(&db, brightfield)
+            .await
+            .unwrap();
+        let reply = mail(
+            "ada@brightfield.test",
+            "a3@brightfield.test",
+            Some("a1@brightfield.test"),
+        );
+        assert_eq!(route_one(&db, &reply).await, Routed::Reply { ticket_id });
+        assert!(matches!(
+            route_one(
+                &db,
+                &mail("ada@brightfield.test", "a4@brightfield.test", None)
+            )
+            .await,
+            Routed::NewTicket { ticket_id: other } if other != ticket_id
+        ));
+        assert!(
+            matches!(
+                route_one(
+                    &db,
+                    &mail("bruno@brightfield.test", "b1@brightfield.test", None)
+                )
+                .await,
+                Routed::NewTicket { .. }
+            ),
+            "its domains identify new requesters again"
+        );
+    }
+
+    #[sqlx::test]
     async fn any_address_of_a_requester_identifies_them(db: PgPool) {
         let brightfield = customer(&db, "Brightfield", None).await;
         let ada = crate::testing::requester(&db, brightfield, "ada@brightfield.test").await;

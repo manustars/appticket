@@ -955,3 +955,84 @@ async fn a_requester_s_page_through_the_api(db: PgPool) {
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+/// A customer's details corrected and cleared on its page, and an offboarded customer that comes
+/// back and is offered again for new tickets.
+#[sqlx::test]
+async fn a_customer_s_page_through_the_api(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let page = format!("/api/customers/{brightfield}");
+
+    let (status, json) = api
+        .call(
+            "PUT",
+            &page,
+            Some(serde_json::json!({
+                "name": "Brightfield",
+                "legal_name": "Brightfield Labs S.r.l.",
+                "tax_id": "00000000000",
+                "tax_country": "it",
+                "address": "Via dei Tigli 1\nValfiorita",
+                "phone": "000 000 0100",
+                "website": "https://brightfield.test",
+                "notes": "Billing goes through Lena.",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    let shown = api.get(&page).await;
+    assert_eq!(shown["legal_name"], "Brightfield Labs S.r.l.");
+    assert_eq!(shown["tax_country"], "IT");
+    assert_eq!(shown["website"], "https://brightfield.test");
+    assert_eq!(shown["notes"], "Billing goes through Lena.");
+
+    // A detail left out is cleared; a tax identifier alone is refused.
+    let (status, json) = api
+        .call(
+            "PUT",
+            &page,
+            Some(serde_json::json!({ "name": "Brightfield", "tax_id": "00000000000" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    let (status, _) = api
+        .call(
+            "PUT",
+            &page,
+            Some(serde_json::json!({ "name": "Brightfield" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let shown = api.get(&page).await;
+    assert!(
+        shown["legal_name"].is_null() && shown["tax_id"].is_null(),
+        "{shown}"
+    );
+    assert_eq!(shown["notes"], "");
+
+    let offered = |list: &Value| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["id"] == brightfield.to_string())
+    };
+    let (status, _) = api.call("POST", &format!("{page}/offboard"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!offered(&api.get("/api/customers").await));
+    let (status, json) = api
+        .call("PUT", &page, Some(serde_json::json!({ "name": "X" })))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "an offboarded customer does not change: {json}"
+    );
+
+    let (status, json) = api.call("POST", &format!("{page}/bring-back"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    assert!(offered(&api.get("/api/customers").await));
+    assert!(api.get(&page).await["offboarded_at"].is_null());
+    let (status, _) = api.call("POST", &format!("{page}/bring-back"), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "it is no longer offboarded");
+}

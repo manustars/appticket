@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use super::{ApiError, AppState, Problem};
 use crate::auth::SignedIn;
-use crate::customers::{self, CustomerDetail, CustomerSummary};
+use crate::customers::{self, CustomerDetail, CustomerDetails, CustomerSummary};
 use crate::requesters;
 use crate::roles::Permission;
 use crate::sites;
@@ -21,7 +21,7 @@ use crate::sites;
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_all, create))
-        .routes(routes!(get_customer, rename))
+        .routes(routes!(get_customer, update_customer))
         .routes(routes!(add_domain))
         .routes(routes!(remove_domain))
         .routes(routes!(add_requester))
@@ -32,6 +32,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(update_site))
         .routes(routes!(retire_site))
         .routes(routes!(offboard))
+        .routes(routes!(bring_back))
 }
 
 /// Every customer, offboarded ones included (last), with counts.
@@ -84,24 +85,20 @@ async fn get_customer(
     Ok(Json(customers::detail(&state.db, id).await?))
 }
 
-#[derive(Deserialize, ToSchema)]
-pub struct Rename {
-    name: String,
-}
-
-/// Renames a customer.
+/// Corrects a customer's name and details: a legal name, a tax identifier with its country, an
+/// address, a phone number, a website and internal notes. A detail left out or blank is cleared.
 #[utoipa::path(put, path = "/api/customers/{id}", tag = "customers",
-    params(("id" = Uuid, Path, description = "The customer")), request_body = Rename,
+    params(("id" = Uuid, Path, description = "The customer")), request_body = CustomerDetails,
     responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
-async fn rename(
+async fn update_customer(
     State(state): State<AppState>,
     agent: SignedIn,
     Path(id): Path<Uuid>,
-    Json(rename): Json<Rename>,
+    Json(details): Json<CustomerDetails>,
 ) -> Result<StatusCode, ApiError> {
     agent.grant.require(Permission::ManageCustomers)?;
-    customers::rename(&state.db, id, &rename.name).await?;
+    customers::update(&state.db, id, &details).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -313,5 +310,21 @@ async fn offboard(
 ) -> Result<StatusCode, ApiError> {
     agent.grant.require(Permission::ManageCustomers)?;
     customers::offboard(&state.db, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Brings an offboarded customer back, with its history, requesters and assets: its mail opens
+/// tickets again. Messages that waited in the inbox meanwhile stay there to be sorted.
+#[utoipa::path(post, path = "/api/customers/{id}/bring-back", tag = "customers",
+    params(("id" = Uuid, Path, description = "The customer")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn bring_back(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
+    customers::bring_back(&state.db, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

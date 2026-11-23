@@ -1618,8 +1618,8 @@
         "tags": [
           "customers"
         ],
-        "summary": "Renames a customer.",
-        "operationId": "rename",
+        "summary": "Corrects a customer's name and details: a legal name, a tax identifier with its country, an\naddress, a phone number, a website and internal notes. A detail left out or blank is cleared.",
+        "operationId": "update_customer",
         "parameters": [
           {
             "name": "id",
@@ -1636,7 +1636,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Rename"
+                "$ref": "#/components/schemas/CustomerDetails"
               }
             }
           },
@@ -1755,6 +1755,57 @@
               }
             }
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customers/{id}/bring-back": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Brings an offboarded customer back, with its history, requesters and assets: its mail opens\ntickets again. Messages that waited in the inbox meanwhile stay there to be sorted.",
+        "operationId": "bring_back",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
           "401": {
             "content": {
               "application/json": {
@@ -5143,10 +5194,34 @@
           {
             "type": "object",
             "required": [
+              "notes",
               "requester_list",
               "sites"
             ],
             "properties": {
+              "address": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The customer's postal address; it can span several lines."
+              },
+              "legal_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "notes": {
+                "type": "string",
+                "description": "Internal notes, seen only by agents."
+              },
+              "phone": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "requester_list": {
                 "type": "array",
                 "items": {
@@ -5159,10 +5234,87 @@
                   "$ref": "#/components/schemas/Site"
                 },
                 "description": "The customer's sites, active ones first."
+              },
+              "tax_country": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The country that issued the tax identifier, an ISO 3166-1 alpha-2 code such as `IT`."
+              },
+              "tax_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The tax identifier, such as a VAT number; it always comes with its country."
+              },
+              "website": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "An `http` or `https` address."
               }
             }
           }
         ]
+      },
+      "CustomerDetails": {
+        "type": "object",
+        "description": "What agents who manage customers correct on a customer: its name, and the details beside it,\neach optional. A blank detail is no detail.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's postal address; it can span several lines."
+          },
+          "legal_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Internal notes, seen only by agents."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tax_country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country that issued the tax identifier, an ISO 3166-1 alpha-2 code such as `IT`."
+          },
+          "tax_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The tax identifier, such as a VAT number; it always comes with its country."
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An `http` or `https` address; one without a scheme gets `https://`."
+          }
+        }
       },
       "CustomerEntry": {
         "type": "object",
@@ -6107,17 +6259,6 @@
             "$ref": "#/components/schemas/TicketState"
           },
           "title": {
-            "type": "string"
-          }
-        }
-      },
-      "Rename": {
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "properties": {
-          "name": {
             "type": "string"
           }
         }

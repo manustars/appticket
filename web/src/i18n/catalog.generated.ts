@@ -196,8 +196,21 @@ export interface Messages {
   "customers.newDomainsHint": { plural: false; placeholders: never; tags: never }
   "customers.addSubmit": { plural: false; placeholders: never; tags: never }
   "customer.back": { plural: false; placeholders: never; tags: never }
-  "customer.rename": { plural: false; placeholders: never; tags: never }
-  "customer.newName": { plural: false; placeholders: never; tags: never }
+  "customer.details": { plural: false; placeholders: never; tags: never }
+  "customer.name": { plural: false; placeholders: never; tags: never }
+  "customer.legalName": { plural: false; placeholders: never; tags: never }
+  "customer.taxId": { plural: false; placeholders: never; tags: never }
+  "customer.taxCountry": { plural: false; placeholders: never; tags: never }
+  "customer.taxIdWithCountry": { plural: false; placeholders: "country" | "id"; tags: never }
+  "customer.noCountry": { plural: false; placeholders: never; tags: never }
+  "customer.taxIdHint": { plural: false; placeholders: never; tags: never }
+  "customer.address": { plural: false; placeholders: never; tags: never }
+  "customer.phone": { plural: false; placeholders: never; tags: never }
+  "customer.website": { plural: false; placeholders: never; tags: never }
+  "customer.websitePlaceholder": { plural: false; placeholders: never; tags: never }
+  "customer.notes": { plural: false; placeholders: never; tags: never }
+  "customer.notesHint": { plural: false; placeholders: never; tags: never }
+  "customer.edit": { plural: false; placeholders: never; tags: never }
   "customer.offboardedNotice": { plural: false; placeholders: "date"; tags: never }
   "customer.activeTickets": { plural: false; placeholders: never; tags: never }
   "customer.requesters": { plural: false; placeholders: never; tags: never }
@@ -219,6 +232,9 @@ export interface Messages {
   "customer.offboardHint": { plural: false; placeholders: never; tags: never }
   "customer.offboard": { plural: false; placeholders: never; tags: never }
   "customer.confirmOffboard": { plural: false; placeholders: "name"; tags: never }
+  "customer.bringBackHint": { plural: false; placeholders: never; tags: never }
+  "customer.bringBack": { plural: false; placeholders: never; tags: never }
+  "customer.confirmBringBack": { plural: false; placeholders: "name"; tags: never }
   "requester.back": { plural: false; placeholders: "customer"; tags: never }
   "requester.details": { plural: false; placeholders: never; tags: never }
   "requester.name": { plural: false; placeholders: never; tags: never }

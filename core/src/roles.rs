@@ -30,7 +30,8 @@ pub enum Permission {
     /// Opening a ticket from an inbox message, attaching it to a ticket or discarding it.
     #[serde(rename = "inbox.triage")]
     SortInbox,
-    /// Adding, renaming and offboarding customers, their domains, sites and requesters.
+    /// Adding customers, correcting their details, offboarding them and bringing them back; their
+    /// domains, sites and requesters.
     #[serde(rename = "customers.manage")]
     ManageCustomers,
     /// Adding, changing and retiring assets and services.

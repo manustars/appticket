@@ -466,8 +466,11 @@ export interface paths {
         };
         /** A customer with its domains and requesters. */
         get: operations["get_customer"];
-        /** Renames a customer. */
-        put: operations["rename"];
+        /**
+         * Corrects a customer's name and details: a legal name, a tax identifier with its country, an
+         *     address, a phone number, a website and internal notes. A detail left out or blank is cleared.
+         */
+        put: operations["update_customer"];
         post?: never;
         delete?: never;
         options?: never;
@@ -487,6 +490,26 @@ export interface paths {
         put?: never;
         /** Adds an asset the customer owns. */
         post: operations["create_asset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customers/{id}/bring-back": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Brings an offboarded customer back, with its history, requesters and assets: its mail opens
+         *     tickets again. Messages that waited in the inbox meanwhile stay there to be sorted.
+         */
+        post: operations["bring_back"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1383,9 +1406,40 @@ export interface components {
             requester: components["schemas"]["RequesterMove"];
         };
         CustomerDetail: components["schemas"]["CustomerSummary"] & {
+            /** @description The customer's postal address; it can span several lines. */
+            address?: string | null;
+            legal_name?: string | null;
+            /** @description Internal notes, seen only by agents. */
+            notes: string;
+            phone?: string | null;
             requester_list: components["schemas"]["RequesterEntry"][];
             /** @description The customer's sites, active ones first. */
             sites: components["schemas"]["Site"][];
+            /** @description The country that issued the tax identifier, an ISO 3166-1 alpha-2 code such as `IT`. */
+            tax_country?: string | null;
+            /** @description The tax identifier, such as a VAT number; it always comes with its country. */
+            tax_id?: string | null;
+            /** @description An `http` or `https` address. */
+            website?: string | null;
+        };
+        /**
+         * @description What agents who manage customers correct on a customer: its name, and the details beside it,
+         *     each optional. A blank detail is no detail.
+         */
+        CustomerDetails: {
+            /** @description The customer's postal address; it can span several lines. */
+            address?: string | null;
+            legal_name?: string | null;
+            name: string;
+            /** @description Internal notes, seen only by agents. */
+            notes?: string;
+            phone?: string | null;
+            /** @description The country that issued the tax identifier, an ISO 3166-1 alpha-2 code such as `IT`. */
+            tax_country?: string | null;
+            /** @description The tax identifier, such as a VAT number; it always comes with its country. */
+            tax_id?: string | null;
+            /** @description An `http` or `https` address; one without a scheme gets `https://`. */
+            website?: string | null;
         };
         CustomerEntry: {
             /** Format: uuid */
@@ -1708,9 +1762,6 @@ export interface components {
             number: number;
             state: components["schemas"]["TicketState"];
             title: string;
-        };
-        Rename: {
-            name: string;
         };
         Requester: {
             /** @description All the requester's addresses, the first registered first. */
@@ -3287,7 +3338,7 @@ export interface operations {
             };
         };
     };
-    rename: {
+    update_customer: {
         parameters: {
             query?: never;
             header?: never;
@@ -3299,7 +3350,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Rename"];
+                "application/json": components["schemas"]["CustomerDetails"];
             };
         };
         responses: {
@@ -3388,6 +3439,50 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Created"];
                 };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    bring_back: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             401: {
                 headers: {

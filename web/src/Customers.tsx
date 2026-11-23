@@ -1,8 +1,9 @@
-import { useCallback, useId, useState, type FormEvent } from 'react'
+import { useCallback, useId, useMemo, useState, type FormEvent } from 'react'
 import {
   addDomain,
   addRequester,
   addSite,
+  bringBackCustomer,
   createAsset,
   createCustomer,
   getCustomer,
@@ -13,15 +14,16 @@ import {
   listServices,
   offboardCustomer,
   removeDomain,
-  renameCustomer,
   retireAsset,
   retireSite,
   startUsingService,
   stopUsingService,
   updateAsset,
+  updateCustomer,
   updateSite,
   type CustomerDetail,
 } from './api/client'
+import { countries, countryName } from './countries'
 import { useI18n } from './i18n/context'
 import { Problem } from './Problem'
 import { adminHref, customerHref, customersHref, defaultFilters, go, requesterHref, serviceHref, ticketsHref } from './route'
@@ -137,19 +139,26 @@ export function CustomerPage({ id, onChanged, onSignedOut }: PageProps) {
       </div>
     )
   }
-  // An offboarded customer's history stays as it was: nothing on this page changes it. Otherwise
-  // the customer itself is changed by those who manage customers, its assets and the services it
-  // uses by those who manage the catalog.
+  // An offboarded customer's history stays as it was: nothing on this page changes it, until those
+  // who manage customers bring it back. Otherwise the customer itself is changed by those who
+  // manage customers, its assets and the services it uses by those who manage the catalog.
   const offboarded = Boolean(c.offboarded_at)
   const readOnly = offboarded || !can('customers.manage')
   const catalogReadOnly = offboarded || !can('catalog.manage')
   return (
     <div className="page">
       <a className="back" href={customersHref}>{t('customer.back')}</a>
-      <CustomerName customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
+      <div className="title-row">
+        <h1>{c.name}</h1>
+        {c.is_help_desk && <span className="marker">{t('marker.helpDesk')}</span>}
+        {c.offboarded_at && <span className="marker offboarded">{t('marker.offboarded')}</span>}
+      </div>
       <Problem error={customer.error} />
       {c.offboarded_at && (
         <p className="notice">{t('customer.offboardedNotice', { date: formatTime(c.offboarded_at) })}</p>
+      )}
+      {offboarded && can('customers.manage') && (
+        <BringBack customer={c} onChanged={changed} onSignedOut={onSignedOut} />
       )}
       <dl className="facts">
         <div>
@@ -158,6 +167,7 @@ export function CustomerPage({ id, onChanged, onSignedOut }: PageProps) {
         </div>
         <div><dt>{t('customer.requesters')}</dt><dd>{formatNumber(c.requesters)}</dd></div>
       </dl>
+      <CustomerDetails customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       <Domains customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       <Sites customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       <Requesters customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
@@ -175,45 +185,149 @@ interface PartProps {
   onSignedOut: () => void
 }
 
-function CustomerName({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
-  const { t } = useI18n()
-  const action = useAction(onSignedOut)
-  const [name, setName] = useState<string | null>(null)
-  const id = useId()
+/** What is typed while the details are edited. */
+interface DetailsDraft {
+  name: string
+  legalName: string
+  taxId: string
+  taxCountry: string
+  address: string
+  phone: string
+  website: string
+  notes: string
+}
 
-  function submit(event: FormEvent) {
-    event.preventDefault()
-    if (name === null || !name.trim()) return
-    void action.run(() => renameCustomer(c.id, name.trim())).then(async (ok) => {
-      if (!ok) return
-      await onChanged()
-      setName(null)
+const none = <span className="muted">—</span>
+
+function CustomerDetails({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
+  const { t, locale } = useI18n()
+  const action = useAction(onSignedOut)
+  const [draft, setDraft] = useState<DetailsDraft | null>(null)
+  const id = useId()
+  const countryOptions = useMemo(() => countries(locale), [locale])
+
+  function edit() {
+    action.clear()
+    setDraft({
+      name: c.name,
+      legalName: c.legal_name ?? '',
+      taxId: c.tax_id ?? '',
+      taxCountry: c.tax_country ?? '',
+      address: c.address ?? '',
+      phone: c.phone ?? '',
+      website: c.website ?? '',
+      notes: c.notes,
     })
   }
 
+  function save(event: FormEvent) {
+    event.preventDefault()
+    if (!draft || !draft.name.trim()) return
+    const details = {
+      name: draft.name.trim(),
+      legal_name: draft.legalName.trim() || null,
+      tax_id: draft.taxId.trim() || null,
+      tax_country: draft.taxCountry || null,
+      address: draft.address.trim() || null,
+      phone: draft.phone.trim() || null,
+      website: draft.website.trim() || null,
+      notes: draft.notes.trim(),
+    }
+    void action.run(() => updateCustomer(c.id, details)).then(async (ok) => {
+      if (!ok) return
+      setDraft(null)
+      await onChanged()
+    })
+  }
+
+  // A tax identifier always comes with its country: either one filled asks for the other.
+  const taxStarted = Boolean(draft && (draft.taxId.trim() || draft.taxCountry))
+  // A country no longer in the list still shows as it is stored.
+  const shownCountries = draft?.taxCountry && !countryOptions.some((o) => o.code === draft.taxCountry)
+    ? [{ code: draft.taxCountry, name: draft.taxCountry }, ...countryOptions]
+    : countryOptions
+
   return (
-    <>
-      {name === null ? (
-        <div className="title-row">
-          <h1>{c.name}</h1>
-          {c.is_help_desk && <span className="marker">{t('marker.helpDesk')}</span>}
-          {c.offboarded_at && <span className="marker offboarded">{t('marker.offboarded')}</span>}
+    <section className="panel" aria-labelledby={`${id}-title`}>
+      <h2 id={`${id}-title`}>{t('customer.details')}</h2>
+      {draft === null ? (
+        <>
+          <dl className="facts customer-facts">
+            <div><dt>{t('customer.legalName')}</dt><dd>{c.legal_name ?? none}</dd></div>
+            <div>
+              <dt>{t('customer.taxId')}</dt>
+              <dd>
+                {c.tax_id && c.tax_country
+                  ? t('customer.taxIdWithCountry', { id: c.tax_id, country: countryName(locale, c.tax_country) })
+                  : none}
+              </dd>
+            </div>
+            <div><dt>{t('customer.phone')}</dt><dd>{c.phone ?? none}</dd></div>
+            <div>
+              <dt>{t('customer.website')}</dt>
+              <dd>{c.website ? <a href={c.website} target="_blank" rel="noopener noreferrer">{c.website}</a> : none}</dd>
+            </div>
+            <div className="wide"><dt>{t('customer.address')}</dt><dd className="lines">{c.address ?? none}</dd></div>
+            <div className="wide"><dt>{t('customer.notes')}</dt><dd className="lines">{c.notes || none}</dd></div>
+          </dl>
           {!readOnly && (
-            <button type="button" className="link" onClick={() => setName(c.name)}>{t('customer.rename')}</button>
+            <button type="button" className="link" onClick={edit}>{t('customer.edit')}</button>
           )}
-        </div>
+        </>
       ) : (
-        <form className="inline-form rename" onSubmit={submit}>
-          <label htmlFor={`${id}-name`}>{t('customer.newName')}</label>
-          <input id={`${id}-name`} required value={name} autoFocus onChange={(e) => setName(e.target.value)} />
-          <button type="submit" disabled={action.busy || !name.trim()}>{t('action.save')}</button>
-          <button type="button" className="quiet" onClick={() => { setName(null); action.clear() }}>
-            {t('action.cancel')}
-          </button>
+        <form className="stacked" onSubmit={save}>
+          <label>
+            {t('customer.name')}
+            <input required value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+          </label>
+          <label>
+            {t('customer.legalName')}
+            <input value={draft.legalName} onChange={(e) => setDraft({ ...draft, legalName: e.target.value })} />
+          </label>
+          <div className="row">
+            <label>
+              {t('customer.taxId')}
+              <input value={draft.taxId} required={taxStarted}
+                onChange={(e) => setDraft({ ...draft, taxId: e.target.value })} />
+            </label>
+            <label>
+              {t('customer.taxCountry')}
+              <select value={draft.taxCountry} required={taxStarted}
+                onChange={(e) => setDraft({ ...draft, taxCountry: e.target.value })}>
+                <option value="">{t('customer.noCountry')}</option>
+                {shownCountries.map((o) => <option key={o.code} value={o.code}>{o.name}</option>)}
+              </select>
+            </label>
+          </div>
+          <p className="hint">{t('customer.taxIdHint')}</p>
+          <label>
+            {t('customer.address')}
+            <textarea rows={3} value={draft.address} onChange={(e) => setDraft({ ...draft, address: e.target.value })} />
+          </label>
+          <label>
+            {t('customer.phone')}
+            <input type="tel" value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} />
+          </label>
+          <label>
+            {t('customer.website')}
+            <input value={draft.website} placeholder={t('customer.websitePlaceholder')}
+              onChange={(e) => setDraft({ ...draft, website: e.target.value })} />
+          </label>
+          <label>
+            {t('customer.notes')}
+            <textarea rows={4} value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} />
+          </label>
+          <p className="hint">{t('customer.notesHint')}</p>
+          <div className="row">
+            <button type="submit" disabled={action.busy || !draft.name.trim()}>{t('action.save')}</button>
+            <button type="button" className="quiet" onClick={() => { setDraft(null); action.clear() }}>
+              {t('action.cancel')}
+            </button>
+          </div>
         </form>
       )}
       <Problem error={action.error} />
-    </>
+    </section>
   )
 }
 
@@ -686,6 +800,26 @@ function Offboard({ customer: c, onChanged, onSignedOut }: Omit<PartProps, 'read
         <button type="button" className="danger" disabled={action.busy} onClick={offboard}>
           {t('customer.offboard')}
         </button>
+      </div>
+      <Problem error={action.error} />
+    </section>
+  )
+}
+
+function BringBack({ customer: c, onChanged, onSignedOut }: Omit<PartProps, 'readOnly'>) {
+  const { t } = useI18n()
+  const action = useAction(onSignedOut)
+
+  function bringBack() {
+    if (!window.confirm(t('customer.confirmBringBack', { name: c.name }))) return
+    void action.run(() => bringBackCustomer(c.id)).then(async (ok) => { if (ok) await onChanged() })
+  }
+
+  return (
+    <section className="panel">
+      <div className="danger-row">
+        <p className="hint">{t('customer.bringBackHint')}</p>
+        <button type="button" disabled={action.busy} onClick={bringBack}>{t('customer.bringBack')}</button>
       </div>
       <Problem error={action.error} />
     </section>

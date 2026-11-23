@@ -288,9 +288,9 @@ export function getCustomer(id: string): Promise<CustomerDetail> {
   return json('GET', customerPath(id))
 }
 
-export async function renameCustomer(id: string, name: string): Promise<void> {
-  const request: Schemas['Rename'] = { name }
-  await call('PUT', customerPath(id), request)
+/** Corrects the customer's name and details; a detail left empty is cleared. */
+export async function updateCustomer(id: string, details: Schemas['CustomerDetails']): Promise<void> {
+  await call('PUT', customerPath(id), details)
 }
 
 /** Mail from the domain then opens tickets for this customer. */
@@ -354,6 +354,11 @@ export async function removeRequesterAddress(id: string, address: string): Promi
 /** No new tickets from then on; the customer's history stays. Refused for the help desk. */
 export async function offboardCustomer(id: string): Promise<void> {
   await call('POST', `${customerPath(id)}/offboard`)
+}
+
+/** Brings an offboarded customer back: its mail opens tickets again. */
+export async function bringBackCustomer(id: string): Promise<void> {
+  await call('POST', `${customerPath(id)}/bring-back`)
 }
 
 /** Every asset kind the help desk manages, by name. */
