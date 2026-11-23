@@ -15,8 +15,45 @@ use crate::roles::Grant;
 
 /// Name of the cookie that carries an agent's session token.
 pub const SESSION_COOKIE: &str = "hd_session";
-/// How long a session lasts.
+/// How long a session opened with a local password lasts.
 pub const SESSION_DAYS: i32 = 14;
+
+/// How a session was opened (docs/domain-rules.md, "Signing in").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenedWith {
+    Password,
+    OpenIdConnect,
+}
+
+impl OpenedWith {
+    fn as_str(self) -> &'static str {
+        match self {
+            OpenedWith::Password => "password",
+            OpenedWith::OpenIdConnect => "openid_connect",
+        }
+    }
+}
+
+/// Opens a session for the agent, lasting `lifetime`. Returns its token.
+pub async fn open_session(
+    db: impl sqlx::PgExecutor<'_>,
+    agent: Uuid,
+    opened_with: OpenedWith,
+    lifetime: time::Duration,
+) -> anyhow::Result<String> {
+    let token = crate::agents::generate_password();
+    sqlx::query(
+        "INSERT INTO agent_sessions (token_hash, agent_id, opened_with, expires_at)
+         VALUES ($1, $2, $3, now() + make_interval(secs => $4))",
+    )
+    .bind(token_hash(&token))
+    .bind(agent)
+    .bind(opened_with.as_str())
+    .bind(lifetime.as_seconds_f64())
+    .execute(db)
+    .await?;
+    Ok(token)
+}
 
 pub fn hash_password(password: &str) -> anyhow::Result<String> {
     Argon2::default()
@@ -55,16 +92,8 @@ pub async fn sign_in(db: &PgPool, email: &str, password: &str) -> anyhow::Result
     if !verify_password(password, &hash) {
         return Ok(None);
     }
-    let token = crate::agents::generate_password();
-    sqlx::query(
-        "INSERT INTO agent_sessions (token_hash, agent_id, expires_at)
-         VALUES ($1, $2, now() + make_interval(days => $3))",
-    )
-    .bind(token_hash(&token))
-    .bind(agent_id)
-    .bind(SESSION_DAYS)
-    .execute(db)
-    .await?;
+    let lifetime = time::Duration::days(SESSION_DAYS.into());
+    let token = open_session(db, agent_id, OpenedWith::Password, lifetime).await?;
     Ok(Some(token))
 }
 
@@ -131,5 +160,40 @@ mod tests {
     #[test]
     fn the_dummy_hash_parses() {
         assert!(PasswordHash::new(&DUMMY_HASH).is_ok());
+    }
+
+    /// How a session was opened and how long it lasts, as stored.
+    pub async fn stored_session(db: &PgPool, token: &str) -> (String, f64) {
+        sqlx::query_as(
+            "SELECT opened_with,
+                    extract(epoch FROM expires_at - created_at)::float8 / 3600
+             FROM agent_sessions WHERE token_hash = $1",
+        )
+        .bind(token_hash(token))
+        .fetch_one(db)
+        .await
+        .unwrap()
+    }
+
+    #[sqlx::test]
+    async fn a_local_password_opens_a_session_of_14_days(db: PgPool) {
+        crate::agents::add(
+            &db,
+            &Grant::command_line(),
+            "ada@helpdesk.test",
+            "Ada",
+            None,
+            Some("ada's password"),
+        )
+        .await
+        .unwrap();
+        let token = sign_in(&db, "ada@helpdesk.test", "ada's password")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored_session(&db, &token).await,
+            ("password".to_owned(), 14.0 * 24.0)
+        );
     }
 }
