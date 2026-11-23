@@ -4065,6 +4065,38 @@ mod tests {
         assert_eq!(names(&db).await, ["Brightfield"]);
     }
 
+    /// An assets file has the columns a new asset needs, its customer's, and no others; it takes
+    /// as many rows as any other file.
+    #[sqlx::test]
+    async fn an_assets_file_is_checked_like_the_others(db: PgPool) {
+        for (file, expected) in [
+            ("name,kind\nPC-0042,Laptop\n", "\"customer\""),
+            ("customer,kind\nBrightfield,Laptop\n", "\"name\""),
+            ("customer,name\nBrightfield,PC-0042\n", "\"kind\""),
+            (
+                "customer,name,kind,owner\nBrightfield,PC-0042,Laptop,Ada\n",
+                "unknown column \"owner\"",
+            ),
+            (
+                "customer_external_system,name,kind\nWatchtower,PC-0042,Laptop\n",
+                "\"customer_external_name\"",
+            ),
+        ] {
+            let why = refused(&db, vec![customers("name\nBrightfield\n"), assets(file)]).await;
+            assert!(
+                why.contains("the assets file") && why.contains(expected),
+                "{why}"
+            );
+        }
+        let mut many = String::from("customer,name,kind\n");
+        for n in 0..=MAX_ROWS {
+            many.push_str(&format!("Brightfield,PC-{n},Laptop\n"));
+        }
+        let why = refused(&db, vec![assets(&many)]).await;
+        assert!(why.contains("assets file has more than 5000 rows"), "{why}");
+        assert!(names(&db).await.is_empty(), "nothing is imported");
+    }
+
     #[sqlx::test]
     async fn a_file_that_cannot_be_read_is_refused_before_anything_is_imported(db: PgPool) {
         // Excel's plain "CSV" is often Windows-1252, not UTF-8.
