@@ -343,8 +343,9 @@ pub async fn move_to_customer(
 
     let moved = match (requester_id, requester) {
         (Some(requester_id), RequesterMove::Move) => {
-            // The foreign key cascades the new customer to every ticket of the requester.
-            sqlx::query("UPDATE requesters SET customer_id = $2 WHERE id = $1")
+            // The foreign key cascades the new customer to every ticket of the requester. Their
+            // site is one of the old customer's, so they leave it.
+            sqlx::query("UPDATE requesters SET customer_id = $2, site_id = NULL WHERE id = $1")
                 .bind(requester_id)
                 .bind(customer)
                 .execute(&mut *tx)

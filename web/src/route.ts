@@ -25,6 +25,7 @@ export type Route =
   | { view: 'ticket'; number: number }
   | { view: 'customers' }
   | { view: 'customer'; id: string }
+  | { view: 'requester'; id: string }
   | { view: 'services' }
   | { view: 'service'; id: string }
   /** `tab` null: the first tab the agent may see. */
@@ -38,6 +39,7 @@ export const ticketHref = (number: number) => `#/tickets/${number}`
 export const inboxHref = '#/inbox'
 export const customersHref = '#/customers'
 export const customerHref = (id: string) => `#/customers/${encodeURIComponent(id)}`
+export const requesterHref = (id: string) => `#/requesters/${encodeURIComponent(id)}`
 export const servicesHref = '#/services'
 export const serviceHref = (id: string) => `#/services/${encodeURIComponent(id)}`
 export const adminHref = (tab?: AdminTab) => (tab ? `#/admin/${tab}` : '#/admin')
@@ -98,6 +100,8 @@ export function parseRoute(hash: string): Route {
   if (ticket) return { view: 'ticket', number: Number(ticket[1]) }
   const customer = /^#\/customers\/([^/?#]+)$/.exec(hash)
   if (customer) return { view: 'customer', id: decodeURIComponent(customer[1]) }
+  const requester = /^#\/requesters\/([^/?#]+)$/.exec(hash)
+  if (requester) return { view: 'requester', id: decodeURIComponent(requester[1]) }
   const service = /^#\/services\/([^/?#]+)$/.exec(hash)
   if (service) return { view: 'service', id: decodeURIComponent(service[1]) }
   const tickets = /^#\/tickets\?(.*)$/.exec(hash)

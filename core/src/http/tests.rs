@@ -873,3 +873,85 @@ async fn sites_are_managed_through_the_api(db: PgPool) {
         "sites are never deleted"
     );
 }
+
+/// A requester's page: details read and corrected, their site, and their tickets.
+#[sqlx::test]
+async fn a_requester_s_page_through_the_api(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+    let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+    let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+        .await
+        .unwrap();
+    let mine = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
+    testing::ticket(&db, brightfield, Some(lena), "l@brightfield.test").await;
+
+    let (status, json) = api
+        .call(
+            "PUT",
+            &format!("/api/requesters/{ada}"),
+            Some(serde_json::json!({
+                "name": "Ada Ferrini",
+                "phone_numbers": ["000 000 0101"],
+                "job_title": "Office manager",
+                "notes": "Prefers phone calls.",
+                "site_id": head,
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    let page = api.get(&format!("/api/requesters/{ada}")).await;
+    assert_eq!(page["name"], "Ada Ferrini");
+    assert_eq!(page["phone_numbers"], serde_json::json!(["000 000 0101"]));
+    assert_eq!(page["site"]["name"], "Head office");
+    assert_eq!(page["customer"]["name"], "Brightfield");
+    assert_eq!(
+        page["addresses"],
+        serde_json::json!(["ada@brightfield.test"])
+    );
+
+    let tickets = api.get(&format!("/api/tickets?requester={ada}")).await;
+    assert_eq!(numbers(&tickets), [mine]);
+    let customer = api.get(&format!("/api/customers/{brightfield}")).await;
+    let entry = customer["requester_list"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == ada.to_string())
+        .unwrap()
+        .clone();
+    assert_eq!(entry["site_id"], head.to_string());
+
+    // Internal notes and the other details stay with the agents: add-ons never see them.
+    let reader = crate::addons::register(
+        &db,
+        "reader",
+        "http://127.0.0.1:9",
+        &[],
+        &["tickets:read".into(), "directory:read".into()],
+    )
+    .await
+    .unwrap();
+    let bot = Client::new_with_token(&db, &reader.token, api.agent);
+    let seen = bot
+        .get(&format!("/api/addon/tickets/{mine}"))
+        .await
+        .to_string();
+    for private in [
+        "Prefers phone calls",
+        "000 000 0101",
+        "Office manager",
+        "Head office",
+    ] {
+        assert!(
+            !seen.contains(private),
+            "an add-on sees {private:?}: {seen}"
+        );
+    }
+
+    let (status, _) = api
+        .call("GET", &format!("/api/requesters/{}", Uuid::new_v4()), None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

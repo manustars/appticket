@@ -58,6 +58,8 @@ pub struct TicketFilter {
     assignee: Option<String>,
     /// A customer's id.
     customer: Option<String>,
+    /// A requester's id.
+    requester: Option<String>,
     /// Text found in the title, any of the requester's addresses or the customer's name; `#12` or
     /// `12` also finds ticket 12.
     q: Option<String>,
@@ -103,6 +105,13 @@ async fn list_tickets(
                 .map_err(|_| ApiError::BadRequest("customer must be a customer's id".into()))?,
         ),
     };
+    let requester = match filter.requester.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(id) => Some(
+            Uuid::parse_str(id)
+                .map_err(|_| ApiError::BadRequest("requester must be a requester's id".into()))?,
+        ),
+    };
     let q = filter.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
     let number: Option<i64> = q.and_then(|q| q.trim_start_matches('#').parse().ok());
     let pattern = q.map(|q| {
@@ -125,6 +134,7 @@ async fn list_tickets(
            AND (NOT $2 OR t.assignee_id IS NULL)
            AND ($3::uuid IS NULL OR t.assignee_id = $3)
            AND ($4::uuid IS NULL OR t.customer_id = $4)
+           AND ($7::uuid IS NULL OR t.requester_id = $7)
            AND ($5::text IS NULL OR t.number = $6
                 OR t.title ILIKE $5 OR c.name ILIKE $5
                 OR EXISTS (SELECT 1 FROM requester_addresses ra
@@ -138,6 +148,7 @@ async fn list_tickets(
     .bind(customer)
     .bind(pattern)
     .bind(number)
+    .bind(requester)
     .fetch_all(&state.db)
     .await?;
     Ok(Json(tickets))

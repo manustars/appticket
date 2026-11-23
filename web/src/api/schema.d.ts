@@ -717,6 +717,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/requesters/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A requester's page: their customer, addresses and details. Their tickets are in the ticket
+         *     list, by `requester`.
+         */
+        get: operations["get_requester"];
+        /** Corrects a requester's name, phone numbers, job title, internal notes and site. */
+        put: operations["update_requester"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/requesters/{id}/addresses": {
         parameters: {
             query?: never;
@@ -1719,12 +1740,53 @@ export interface components {
              */
             ticket_count: number;
         };
+        /** @description A requester's customer, as their page shows it. */
+        RequesterCustomer: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description An offboarded customer's requesters do not change. */
+            offboarded: boolean;
+        };
+        /** @description Everything a requester's page shows but their tickets. */
+        RequesterDetail: {
+            /** @description The requester's addresses, the first registered first. */
+            addresses: string[];
+            customer: components["schemas"]["RequesterCustomer"];
+            /** Format: uuid */
+            id: string;
+            job_title?: string | null;
+            name?: string | null;
+            /** @description Internal notes, seen only by agents. */
+            notes: string;
+            phone_numbers: string[];
+            site?: components["schemas"]["SiteRef"] | null;
+        };
+        /** @description What agents who manage customers correct on a requester. */
+        RequesterDetails: {
+            job_title?: string | null;
+            /** @description Empty for a requester whose name is not known. */
+            name?: string | null;
+            /** @description Internal notes, seen only by agents. */
+            notes?: string;
+            phone_numbers?: string[];
+            /**
+             * Format: uuid
+             * @description One of the customer's sites that is not retired.
+             */
+            site_id?: string | null;
+        };
         RequesterEntry: {
             /** @description The requester's e-mail addresses, the first registered first; there is at least one. */
             addresses: string[];
             /** Format: uuid */
             id: string;
             name?: string | null;
+            /**
+             * Format: uuid
+             * @description The site the requester is at, one of the customer's sites.
+             */
+            site_id?: string | null;
             /** Format: int64 */
             tickets: number;
         };
@@ -1811,6 +1873,12 @@ export interface components {
         SiteFields: {
             /** @description The site's postal address. */
             address: string;
+            name: string;
+        };
+        /** @description The site a requester is at. */
+        SiteRef: {
+            /** Format: uuid */
+            id: string;
             name: string;
         };
         StateChange: {
@@ -3893,6 +3961,92 @@ export interface operations {
             };
         };
     };
+    get_requester: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The requester */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequesterDetail"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    update_requester: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The requester */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequesterDetails"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     add_address: {
         parameters: {
             query?: never;
@@ -4570,6 +4724,8 @@ export interface operations {
                 assignee?: string;
                 /** @description A customer's id. */
                 customer?: string;
+                /** @description A requester's id. */
+                requester?: string;
                 /**
                  * @description Text found in the title, any of the requester's addresses or the customer's name; `#12` or
                  *     `12` also finds ticket 12.

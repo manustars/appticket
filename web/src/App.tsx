@@ -33,6 +33,7 @@ import {
 import { ServicePage, Services } from './Services'
 import { adminPermissions, SessionContext, type Session } from './session'
 import { Tickets } from './Tickets'
+import { RequesterPage } from './Requester'
 import { TicketView } from './TicketView'
 
 function App() {
@@ -185,7 +186,7 @@ function Desk({ agent, onAgent, onSignedOut }: {
   }
 
   const section = route.view === 'ticket' ? 'tickets'
-    : route.view === 'customer' ? 'customers'
+    : route.view === 'customer' || route.view === 'requester' ? 'customers'
     : route.view === 'service' ? 'services'
     : route.view
   const current = (s: typeof section) => (section === s ? 'current' : '')
@@ -229,6 +230,8 @@ function Desk({ agent, onAgent, onSignedOut }: {
             <Customers onSignedOut={onSignedOut} />
           ) : route.view === 'customer' ? (
             <CustomerPage key={route.id} id={route.id} onChanged={refresh} onSignedOut={onSignedOut} />
+          ) : route.view === 'requester' ? (
+            <RequesterPage key={route.id} id={route.id} onChanged={refresh} onSignedOut={onSignedOut} />
           ) : route.view === 'services' ? (
             <Services onSignedOut={onSignedOut} />
           ) : route.view === 'service' ? (

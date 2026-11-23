@@ -2,7 +2,6 @@ import { useCallback, useId, useState, type FormEvent } from 'react'
 import {
   addDomain,
   addRequester,
-  addRequesterAddress,
   addSite,
   createAsset,
   createCustomer,
@@ -14,7 +13,6 @@ import {
   listServices,
   offboardCustomer,
   removeDomain,
-  removeRequesterAddress,
   renameCustomer,
   retireAsset,
   retireSite,
@@ -26,7 +24,7 @@ import {
 } from './api/client'
 import { useI18n } from './i18n/context'
 import { Problem } from './Problem'
-import { adminHref, customerHref, customersHref, defaultFilters, go, serviceHref, ticketsHref } from './route'
+import { adminHref, customerHref, customersHref, defaultFilters, go, requesterHref, serviceHref, ticketsHref } from './route'
 import { useSession } from './session'
 import { useAction, useLoad } from './useAction'
 
@@ -305,8 +303,18 @@ function Sites({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
   }
 
   function retire(siteId: string, siteName: string) {
-    if (!window.confirm(t('sites.confirmRetire', { name: siteName }))) return
-    void action.run(() => retireSite(siteId)).then(async (ok) => { if (ok) await onChanged() })
+    // The requesters named are those at the site now, not when the page was loaded.
+    let question = ''
+    void action.run(async () => {
+      const fresh = await getCustomer(c.id)
+      const there = fresh.requester_list.filter((r) => r.site_id === siteId).map((r) => r.name ?? r.addresses[0])
+      question = there.length === 0
+        ? t('sites.confirmRetire', { name: siteName })
+        : t('sites.confirmRetireWithRequesters', { name: siteName, count: there.length, requesters: there.join(', ') })
+    }).then((ok) => {
+      if (!ok || !window.confirm(question)) return
+      void action.run(() => retireSite(siteId)).then(async (done) => { if (done) await onChanged() })
+    })
   }
 
   return (
@@ -401,9 +409,8 @@ function Requesters({ customer: c, readOnly, onChanged, onSignedOut }: PartProps
   const action = useAction(onSignedOut)
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
-  // The requester getting one more address, with what is typed for it.
-  const [adding, setAdding] = useState<{ id: string; address: string } | null>(null)
   const id = useId()
+  const siteName = (siteId: string | null | undefined) => c.sites.find((s) => s.id === siteId)?.name
 
   function add(event: FormEvent) {
     event.preventDefault()
@@ -416,72 +423,29 @@ function Requesters({ customer: c, readOnly, onChanged, onSignedOut }: PartProps
     })
   }
 
-  function addAddress(event: FormEvent) {
-    event.preventDefault()
-    if (!adding || !adding.address.trim()) return
-    const { id: requester, address } = adding
-    void action.run(() => addRequesterAddress(requester, address.trim())).then(async (ok) => {
-      if (!ok) return
-      setAdding(null)
-      await onChanged()
-    })
-  }
-
-  function removeAddress(requester: string, address: string) {
-    void action.run(() => removeRequesterAddress(requester, address)).then(async (ok) => { if (ok) await onChanged() })
-  }
-
   return (
     <section className="panel" aria-labelledby={`${id}-title`}>
       <h2 id={`${id}-title`}>{t('customer.requesters')}</h2>
       {c.requester_list.length === 0 ? (
         <p className="empty">{t('customer.noRequesters')}</p>
       ) : (
+        // Each requester's page has their addresses and details, and changes them.
         <table className="data">
           <thead>
             <tr>
-              <th>{t('customer.requesterAddresses')}</th><th>{t('customer.requesterName')}</th>
+              <th>{t('customer.requesterName')}</th><th>{t('customer.requesterAddresses')}</th>
+              <th>{t('customer.requesterSite')}</th>
               <th className="figure">{t('customer.requesterTickets')}</th>
             </tr>
           </thead>
           <tbody>
             {c.requester_list.map((r) => (
               <tr key={r.id}>
+                <td><a href={requesterHref(r.id)}>{r.name ?? r.addresses[0]}</a></td>
                 <td>
-                  <ul className="chips">
-                    {r.addresses.map((a) => (
-                      <li key={a}>
-                        {a}
-                        {/* A requester keeps at least one address. */}
-                        {!readOnly && r.addresses.length > 1 && (
-                          <button type="button" className="link danger" disabled={action.busy}
-                            aria-label={t('customer.removeAddress', { address: a })}
-                            onClick={() => removeAddress(r.id, a)}>
-                            {t('action.remove')}
-                          </button>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                  {!readOnly && (adding?.id === r.id ? (
-                    <form className="inline-form" onSubmit={addAddress}>
-                      <label>
-                        {t('customer.newAddress')}
-                        <input type="email" required autoFocus value={adding.address}
-                          onChange={(e) => setAdding({ id: r.id, address: e.target.value })} />
-                      </label>
-                      <button type="submit" disabled={action.busy || !adding.address.trim()}>{t('action.add')}</button>
-                      <button type="button" className="quiet" onClick={() => { setAdding(null); action.clear() }}>
-                        {t('action.cancel')}
-                      </button>
-                    </form>
-                  ) : (
-                    <button type="button" className="link" onClick={() => { setAdding({ id: r.id, address: '' }); action.clear() }}>
-                      {t('customer.addAddress')}
-                    </button>
-                  ))}
+                  <ul className="plain">{r.addresses.map((a) => <li key={a}>{a}</li>)}</ul>
                 </td>
-                <td>{r.name ?? <span className="muted">—</span>}</td>
+                <td>{siteName(r.site_id) ?? <span className="muted">—</span>}</td>
                 <td className="figure">{formatNumber(r.tickets)}</td>
               </tr>
             ))}

@@ -25,6 +25,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(add_domain))
         .routes(routes!(remove_domain))
         .routes(routes!(add_requester))
+        .routes(routes!(get_requester, update_requester))
         .routes(routes!(add_address))
         .routes(routes!(remove_address))
         .routes(routes!(add_site))
@@ -170,6 +171,36 @@ async fn add_requester(
         StatusCode::CREATED,
         Json(CreatedRequester { id: requester }),
     ))
+}
+
+/// A requester's page: their customer, addresses and details. Their tickets are in the ticket
+/// list, by `requester`.
+#[utoipa::path(get, path = "/api/requesters/{id}", tag = "customers",
+    params(("id" = Uuid, Path, description = "The requester")),
+    responses((status = OK, body = requesters::RequesterDetail),
+        (status = NOT_FOUND, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn get_requester(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<Json<requesters::RequesterDetail>, ApiError> {
+    Ok(Json(requesters::detail(&state.db, id).await?))
+}
+
+/// Corrects a requester's name, phone numbers, job title, internal notes and site.
+#[utoipa::path(put, path = "/api/requesters/{id}", tag = "customers",
+    params(("id" = Uuid, Path, description = "The requester")), request_body = requesters::RequesterDetails,
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn update_requester(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+    Json(details): Json<requesters::RequesterDetails>,
+) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
+    requesters::update(&state.db, id, &details).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize, ToSchema)]

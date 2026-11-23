@@ -21,6 +21,7 @@ export type Moved = Schemas['Moved']
 export type Permission = Schemas['Permission']
 export type Priority = Schemas['Priority']
 export type Proposal = Schemas['ProposalView']
+export type RequesterDetail = Schemas['RequesterDetail']
 export type ResolvedChildren = Schemas['ResolvedChildren']
 export type Role = Schemas['Role']
 export type Service = Schemas['Service']
@@ -110,6 +111,8 @@ export interface TicketQuery {
   /** `me`, `none` or an agent's id. */
   assignee?: string
   customer?: string
+  /** A requester's id. */
+  requester?: string
   q?: string
 }
 
@@ -326,6 +329,16 @@ export async function retireSite(id: string): Promise<void> {
 }
 
 const requesterPath = (id: string) => `/api/requesters/${encodeURIComponent(id)}`
+
+/** A requester's page: their customer, addresses and details. */
+export function getRequester(id: string): Promise<RequesterDetail> {
+  return json('GET', requesterPath(id))
+}
+
+/** Corrects a requester's details; their site is one of their customer's active sites. */
+export async function updateRequester(id: string, details: Schemas['RequesterDetails']): Promise<void> {
+  await call('PUT', requesterPath(id), details)
+}
 
 /** Gives the requester one more address; refused when it belongs to a requester already. */
 export async function addRequesterAddress(id: string, address: string): Promise<void> {

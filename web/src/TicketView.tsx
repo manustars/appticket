@@ -25,6 +25,7 @@ import { useI18n } from './i18n/context'
 import { addonName } from './addon'
 import { useDraftKeeper, type SaveState } from './drafts'
 import { TicketProposals } from './Proposals'
+import { requesterHref } from './route'
 import { useSession } from './session'
 import { TicketAssets, TicketFamily, TicketServices } from './TicketLinks'
 import { useLoad } from './useAction'
@@ -209,7 +210,11 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
           <dt>{t('ticket.requester')}</dt>
           <dd>
             {requester
-              ? requester.name ? <>{requester.name} <span className="muted">&lt;{requester.email}&gt;</span></> : requester.email
+              ? (
+                <a href={requesterHref(requester.id)}>
+                  {requester.name ? <>{requester.name} <span className="muted">&lt;{requester.email}&gt;</span></> : requester.email}
+                </a>
+              )
               : <span className="muted">{t('ticket.noRequester')}</span>}
           </dd>
         </div>

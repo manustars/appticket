@@ -54,13 +54,18 @@ async fn lock(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<(Uuid, boo
     Ok((customer, retired))
 }
 
-/// Retires a site: it stays visible but gets no new requesters or assets.
+/// Retires a site: it stays visible but gets no new requesters or assets, and the requesters at
+/// it are left without a site.
 pub async fn retire(db: &PgPool, id: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
     let (_, retired) = lock(&mut tx, id).await?;
     if retired {
         return rule("the site is already retired");
     }
+    sqlx::query("UPDATE requesters SET site_id = NULL WHERE site_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("UPDATE sites SET retired_at = now() WHERE id = $1")
         .bind(id)
         .execute(&mut *tx)

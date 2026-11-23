@@ -39,6 +39,8 @@ pub struct RequesterEntry {
     pub addresses: Vec<String>,
     pub name: Option<String>,
     pub tickets: i64,
+    /// The site the requester is at, one of the customer's sites.
+    pub site_id: Option<Uuid>,
 }
 
 /// Customer summaries: all of them (offboarded ones last), or only `$1` when it is not null.
@@ -67,7 +69,7 @@ pub async fn detail(db: &PgPool, id: Uuid) -> Result<CustomerDetail> {
         .await?
         .ok_or(Error::NotFound("customer"))?;
     let requester_list = sqlx::query_as(
-        "SELECT r.id, r.name,
+        "SELECT r.id, r.name, r.site_id,
                 coalesce((SELECT array_agg(a.address ORDER BY a.created_at, a.address)
                  FROM requester_addresses a WHERE a.requester_id = r.id), '{}') AS addresses,
                 (SELECT count(*) FROM tickets t WHERE t.requester_id = r.id) AS tickets

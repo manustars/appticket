@@ -316,6 +316,17 @@ button.new-ticket { background: var(--accent); border-color: var(--accent); colo
 .stacked > label > input, .stacked > label > textarea { margin-top: 0; color: var(--text); }
 .stacked > label > input[type='email'] { max-width: 28rem; }
 
+/* A requester's page: their details, the phone numbers edited one per row. */
+.requester-facts .wide { flex-basis: 100%; }
+.requester-facts .notes { white-space: pre-wrap; }
+ul.plain { list-style: none; margin: 0; padding: 0; }
+.stacked fieldset { display: grid; gap: 0.4rem; margin: 0; padding: 0; border: 0; }
+.stacked legend { margin-bottom: 0.2rem; color: var(--muted); font-size: 0.85rem; }
+.stacked .row { display: flex; gap: 0.5rem; align-items: center; }
+.stacked .row input { max-width: 20rem; margin: 0; }
+.stacked > label > select { margin-top: 0; max-width: 28rem; }
+.panel > button.link, .stacked fieldset > button.link { justify-self: start; }
+
 /* Screens about customers and services, and the parts of a ticket that refer to them. */
 .page { max-width: 56rem; margin: 0 auto; display: grid; gap: 0.9rem; }
 .page h1 { margin: 0; }

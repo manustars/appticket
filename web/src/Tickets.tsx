@@ -67,7 +67,8 @@ export function Tickets({ filters, tickets, error, onSignedOut }: Props) {
   )
 }
 
-function TicketTable({ tickets }: { tickets: TicketSummary[] }) {
+/** Tickets as rows, each a link to its ticket. */
+export function TicketTable({ tickets }: { tickets: TicketSummary[] }) {
   const { t, formatTime } = useI18n()
   return (
     <table className="tickets">

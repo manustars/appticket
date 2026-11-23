@@ -2,7 +2,9 @@
 //! exactly one requester, and a reply goes to the address the requester last wrote from on the
 //! ticket. Rules are in docs/domain-rules.md ("People").
 
+use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{Error, Result, rule};
@@ -56,7 +58,7 @@ pub async fn create(
     sqlx::query("INSERT INTO requesters (id, customer_id, name) VALUES ($1, $2, $3)")
         .bind(id)
         .bind(customer)
-        .bind(name)
+        .bind(filled(name))
         .execute(&mut **tx)
         .await?;
     let inserted =
@@ -86,7 +88,7 @@ pub async fn find_or_create(
         Some(owner) if owner.customer_id == customer => {
             sqlx::query("UPDATE requesters SET name = $2 WHERE id = $1 AND name IS NULL")
                 .bind(owner.requester_id)
-                .bind(name)
+                .bind(filled(name))
                 .execute(&mut **tx)
                 .await?;
             Ok(owner.requester_id)
@@ -110,28 +112,11 @@ pub async fn addresses<'e>(db: impl sqlx::PgExecutor<'e>, requester: Uuid) -> Re
     .await?)
 }
 
-/// Locks the requester for a change of addresses; their customer must not be offboarded.
-async fn lock(tx: &mut Transaction<'_, Postgres>, requester: Uuid) -> Result<()> {
-    let offboarded: Option<bool> = sqlx::query_scalar(
-        "SELECT c.offboarded_at IS NOT NULL FROM requesters r
-         JOIN customers c ON c.id = r.customer_id
-         WHERE r.id = $1 FOR UPDATE OF r",
-    )
-    .bind(requester)
-    .fetch_optional(&mut **tx)
-    .await?;
-    match offboarded {
-        None => Err(Error::NotFound("requester")),
-        Some(true) => rule("the customer is offboarded"),
-        Some(false) => Ok(()),
-    }
-}
-
 /// Gives the requester one more address; an address already belonging to a requester is refused.
 pub async fn add_address(db: &PgPool, requester: Uuid, address: &str) -> Result<()> {
     let address = clean_address(address)?;
     let mut tx = db.begin().await?;
-    lock(&mut tx, requester).await?;
+    lock_with_customer(&mut tx, requester).await?;
     match owner_of(&mut tx, &address).await? {
         Some(owner) if owner.requester_id == requester => {
             return rule(format!(
@@ -169,7 +154,7 @@ pub async fn add_address(db: &PgPool, requester: Uuid, address: &str) -> Result<
 pub async fn remove_address(db: &PgPool, requester: Uuid, address: &str) -> Result<()> {
     let address = address.trim().to_lowercase();
     let mut tx = db.begin().await?;
-    lock(&mut tx, requester).await?;
+    lock_with_customer(&mut tx, requester).await?;
     let addresses = addresses(&mut *tx, requester).await?;
     if !addresses.contains(&address) {
         return Err(Error::NotFound("address"));
@@ -183,6 +168,170 @@ pub async fn remove_address(db: &PgPool, requester: Uuid, address: &str) -> Resu
         .await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// What agents who manage customers correct on a requester.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+pub struct RequesterDetails {
+    /// Empty for a requester whose name is not known.
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub phone_numbers: Vec<String>,
+    #[serde(default)]
+    pub job_title: Option<String>,
+    /// Internal notes, seen only by agents.
+    #[serde(default)]
+    pub notes: String,
+    /// One of the customer's sites that is not retired.
+    #[serde(default)]
+    pub site_id: Option<Uuid>,
+}
+
+/// The site a requester is at.
+#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
+pub struct SiteRef {
+    pub id: Uuid,
+    pub name: String,
+}
+
+/// A requester's customer, as their page shows it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RequesterCustomer {
+    pub id: Uuid,
+    pub name: String,
+    /// An offboarded customer's requesters do not change.
+    pub offboarded: bool,
+}
+
+/// Everything a requester's page shows but their tickets.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RequesterDetail {
+    pub id: Uuid,
+    pub customer: RequesterCustomer,
+    /// The requester's addresses, the first registered first.
+    pub addresses: Vec<String>,
+    pub name: Option<String>,
+    pub phone_numbers: Vec<String>,
+    pub job_title: Option<String>,
+    /// Internal notes, seen only by agents.
+    pub notes: String,
+    pub site: Option<SiteRef>,
+}
+
+/// A requester with their customer, details and site.
+pub async fn detail(db: &PgPool, id: Uuid) -> Result<RequesterDetail> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        customer_id: Uuid,
+        customer_name: String,
+        offboarded: bool,
+        name: Option<String>,
+        phone_numbers: Vec<String>,
+        job_title: Option<String>,
+        notes: String,
+        site_id: Option<Uuid>,
+        site_name: Option<String>,
+    }
+    let row: Row = sqlx::query_as(
+        "SELECT r.customer_id, c.name AS customer_name, c.offboarded_at IS NOT NULL AS offboarded,
+                r.name, r.phone_numbers, r.job_title, r.notes,
+                r.site_id, s.name AS site_name
+         FROM requesters r
+         JOIN customers c ON c.id = r.customer_id
+         LEFT JOIN sites s ON s.id = r.site_id
+         WHERE r.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?
+    .ok_or(Error::NotFound("requester"))?;
+    Ok(RequesterDetail {
+        id,
+        customer: RequesterCustomer {
+            id: row.customer_id,
+            name: row.customer_name,
+            offboarded: row.offboarded,
+        },
+        addresses: addresses(db, id).await?,
+        name: row.name,
+        phone_numbers: row.phone_numbers,
+        job_title: row.job_title,
+        notes: row.notes,
+        site: row
+            .site_id
+            .zip(row.site_name)
+            .map(|(id, name)| SiteRef { id, name }),
+    })
+}
+
+/// Trimmed, or `None` when blank.
+fn filled(text: Option<&str>) -> Option<&str> {
+    text.map(str::trim).filter(|t| !t.is_empty())
+}
+
+/// Corrects a requester's details. Their site must be one of their customer's that is not
+/// retired.
+pub async fn update(db: &PgPool, id: Uuid, details: &RequesterDetails) -> Result<()> {
+    let mut phone_numbers = Vec::new();
+    for number in &details.phone_numbers {
+        match filled(Some(number)) {
+            Some(number) => phone_numbers.push(number),
+            None => return rule("a phone number cannot be blank"),
+        }
+    }
+    let mut tx = db.begin().await?;
+    let customer = lock_with_customer(&mut tx, id).await?;
+    if let Some(site) = details.site_id {
+        let retired: Option<bool> = sqlx::query_scalar(
+            "SELECT retired_at IS NOT NULL FROM sites WHERE id = $1 AND customer_id = $2",
+        )
+        .bind(site)
+        .bind(customer)
+        .fetch_optional(&mut *tx)
+        .await?;
+        match retired {
+            None => return rule("the site is not one of the requester's customer"),
+            Some(true) => return rule("the site is retired"),
+            Some(false) => {}
+        }
+    }
+    sqlx::query(
+        "UPDATE requesters SET name = $2, phone_numbers = $3, job_title = $4, notes = $5,
+                site_id = $6
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(filled(details.name.as_deref()))
+    .bind(&phone_numbers)
+    .bind(filled(details.job_title.as_deref()))
+    .bind(details.notes.trim())
+    .bind(details.site_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Locks the requester's customer, which must not be offboarded, then the requester, for any
+/// change to the requester; retiring a site locks the customer first too. Returns the customer.
+async fn lock_with_customer(tx: &mut Transaction<'_, Postgres>, requester: Uuid) -> Result<Uuid> {
+    let customer: Uuid = sqlx::query_scalar("SELECT customer_id FROM requesters WHERE id = $1")
+        .bind(requester)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(Error::NotFound("requester"))?;
+    crate::customers::lock_active(tx, customer).await?;
+    // A requester can be moved to another customer in between: check under the lock.
+    let now: Uuid =
+        sqlx::query_scalar("SELECT customer_id FROM requesters WHERE id = $1 FOR UPDATE")
+            .bind(requester)
+            .fetch_one(&mut **tx)
+            .await?;
+    if now != customer {
+        return rule("the requester has just moved to another customer; reload and try again");
+    }
+    Ok(customer)
 }
 
 /// Where a reply on a ticket can go.
@@ -416,6 +565,241 @@ mod tests {
             .await,
             Err(Error::Rule(_))
         ));
+    }
+
+    #[sqlx::test]
+    async fn a_requester_s_details_are_corrected(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+
+        let details = RequesterDetails {
+            name: Some(" Ada Ferrini ".into()),
+            phone_numbers: vec![" 000 000 0101 ".into(), "000 000 0102".into()],
+            job_title: Some("Office manager".into()),
+            notes: "Prefers phone calls in the morning.".into(),
+            site_id: None,
+        };
+        update(&db, ada, &details).await.unwrap();
+        let seen = detail(&db, ada).await.unwrap();
+        assert_eq!(seen.name.as_deref(), Some("Ada Ferrini"));
+        assert_eq!(seen.phone_numbers, ["000 000 0101", "000 000 0102"]);
+        assert_eq!(seen.job_title.as_deref(), Some("Office manager"));
+        assert_eq!(seen.notes, "Prefers phone calls in the morning.");
+        assert_eq!(seen.addresses, ["ada@brightfield.test"]);
+        assert_eq!(seen.customer.name, "Brightfield");
+        assert!(seen.site.is_none());
+
+        // Emptied details are forgotten; a blank phone number is refused.
+        update(
+            &db,
+            ada,
+            &RequesterDetails {
+                name: Some("  ".into()),
+                job_title: Some("".into()),
+                ..RequesterDetails::default()
+            },
+        )
+        .await
+        .unwrap();
+        let seen = detail(&db, ada).await.unwrap();
+        assert_eq!((seen.name, seen.job_title), (None, None));
+        assert!(seen.phone_numbers.is_empty());
+        assert!(matches!(
+            update(
+                &db,
+                ada,
+                &RequesterDetails {
+                    phone_numbers: vec!["  ".into()],
+                    ..RequesterDetails::default()
+                }
+            )
+            .await,
+            Err(Error::Rule(_))
+        ));
+        assert!(matches!(
+            detail(&db, Uuid::new_v4()).await,
+            Err(Error::NotFound(_))
+        ));
+    }
+
+    #[sqlx::test]
+    async fn a_requester_is_at_an_active_site_of_their_customer(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let harbor = crate::customers::create(&db, "Harbor Lane", &[])
+            .await
+            .unwrap();
+        let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let old = crate::sites::create(&db, brightfield, "Old office", "Via del Glicine 3")
+            .await
+            .unwrap();
+        let quay = crate::sites::create(&db, harbor, "Quay office", "Molo delle Reti 2")
+            .await
+            .unwrap();
+        crate::sites::retire(&db, old).await.unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let at = |site| RequesterDetails {
+            site_id: Some(site),
+            ..RequesterDetails::default()
+        };
+
+        update(&db, ada, &at(head)).await.unwrap();
+        let site = detail(&db, ada).await.unwrap().site.unwrap();
+        assert_eq!((site.id, site.name.as_str()), (head, "Head office"));
+        assert!(
+            matches!(update(&db, ada, &at(quay)).await, Err(Error::Rule(_))),
+            "another customer's"
+        );
+        assert!(
+            matches!(update(&db, ada, &at(old)).await, Err(Error::Rule(_))),
+            "retired"
+        );
+        update(&db, ada, &RequesterDetails::default())
+            .await
+            .unwrap();
+        assert!(detail(&db, ada).await.unwrap().site.is_none());
+
+        crate::customers::offboard(&db, brightfield).await.unwrap();
+        assert!(
+            matches!(update(&db, ada, &at(head)).await, Err(Error::Rule(_))),
+            "offboarded"
+        );
+    }
+
+    #[sqlx::test]
+    async fn retiring_a_site_leaves_its_requesters_without_one(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        update(
+            &db,
+            ada,
+            &RequesterDetails {
+                site_id: Some(head),
+                ..RequesterDetails::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        crate::sites::retire(&db, head).await.unwrap();
+        assert!(detail(&db, ada).await.unwrap().site.is_none());
+    }
+
+    #[sqlx::test]
+    async fn moving_a_requester_leaves_their_site(db: PgPool) {
+        use crate::tickets::{self, RequesterMove};
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        update(
+            &db,
+            ada,
+            &RequesterDetails {
+                site_id: Some(head),
+                ..RequesterDetails::default()
+            },
+        )
+        .await
+        .unwrap();
+        let n = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
+
+        tickets::move_to_customer(&db, n, harbor, RequesterMove::Move)
+            .await
+            .unwrap();
+        let seen = detail(&db, ada).await.unwrap();
+        assert_eq!(seen.customer.id, harbor);
+        assert!(seen.site.is_none(), "a site of the old customer");
+    }
+
+    /// The database keeps the details' rules even when the code above is bypassed.
+    #[sqlx::test]
+    async fn the_database_keeps_the_details_rules(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let quay = crate::sites::create(&db, harbor, "Quay office", "Molo delle Reti 2")
+            .await
+            .unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let set = |column: &'static str, value: &'static str| {
+            let db = db.clone();
+            async move {
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "UPDATE requesters SET {column} = {value} WHERE id = $1"
+                )))
+                .bind(ada)
+                .execute(&db)
+                .await
+            }
+        };
+        assert!(set("phone_numbers", "ARRAY['000 000 0101']").await.is_ok());
+        assert!(
+            set("phone_numbers", "ARRAY['000 000', ' ']").await.is_err(),
+            "a blank phone"
+        );
+        assert!(
+            set("phone_numbers", "ARRAY[E'000 000\n']").await.is_err(),
+            "an untrimmed phone"
+        );
+        assert!(
+            set("job_title", "' Manager'").await.is_err(),
+            "an untrimmed job title"
+        );
+        assert!(set("name", "' Ada'").await.is_err(), "an untrimmed name");
+        assert!(
+            set("name", "''").await.is_err(),
+            "a blank name rather than none"
+        );
+
+        // A name taken from a message is kept trimmed.
+        let mut tx = db.begin().await.unwrap();
+        let lena = create(
+            &mut tx,
+            brightfield,
+            "lena@brightfield.test",
+            Some(" Lena Moro "),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(
+            detail(&db, lena).await.unwrap().name.as_deref(),
+            Some("Lena Moro")
+        );
+        let at = |site: Uuid| {
+            let db = db.clone();
+            async move {
+                sqlx::query("UPDATE requesters SET site_id = $2 WHERE id = $1")
+                    .bind(ada)
+                    .bind(site)
+                    .execute(&db)
+                    .await
+            }
+        };
+        assert!(at(quay).await.is_err(), "another customer's site");
+        assert!(at(head).await.is_ok());
+        let retire = sqlx::query("UPDATE sites SET retired_at = now() WHERE id = $1")
+            .bind(head)
+            .execute(&db)
+            .await;
+        assert!(retire.is_err(), "a site retired with a requester at it");
+
+        let old = crate::sites::create(&db, brightfield, "Old office", "Via del Glicine 3")
+            .await
+            .unwrap();
+        crate::sites::retire(&db, old).await.unwrap();
+        assert!(at(old).await.is_err(), "a retired site");
     }
 
     /// The database keeps the rules even when the code above is bypassed.

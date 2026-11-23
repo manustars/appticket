@@ -2482,6 +2482,115 @@
         }
       }
     },
+    "/api/requesters/{id}": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "A requester's page: their customer, addresses and details. Their tickets are in the ticket\nlist, by `requester`.",
+        "operationId": "get_requester",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The requester",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequesterDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Corrects a requester's name, phone numbers, job title, internal notes and site.",
+        "operationId": "update_requester",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The requester",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequesterDetails"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/requesters/{id}/addresses": {
       "post": {
         "tags": [
@@ -3322,6 +3431,15 @@
             "name": "customer",
             "in": "query",
             "description": "A customer's id.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "requester",
+            "in": "query",
+            "description": "A requester's id.",
             "required": false,
             "schema": {
               "type": "string"
@@ -6055,6 +6173,124 @@
           }
         }
       },
+      "RequesterCustomer": {
+        "type": "object",
+        "description": "A requester's customer, as their page shows it.",
+        "required": [
+          "id",
+          "name",
+          "offboarded"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "offboarded": {
+            "type": "boolean",
+            "description": "An offboarded customer's requesters do not change."
+          }
+        }
+      },
+      "RequesterDetail": {
+        "type": "object",
+        "description": "Everything a requester's page shows but their tickets.",
+        "required": [
+          "id",
+          "customer",
+          "addresses",
+          "phone_numbers",
+          "notes"
+        ],
+        "properties": {
+          "addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The requester's addresses, the first registered first."
+          },
+          "customer": {
+            "$ref": "#/components/schemas/RequesterCustomer"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "job_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": "string",
+            "description": "Internal notes, seen only by agents."
+          },
+          "phone_numbers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "site": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SiteRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "RequesterDetails": {
+        "type": "object",
+        "description": "What agents who manage customers correct on a requester.",
+        "properties": {
+          "job_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Empty for a requester whose name is not known."
+          },
+          "notes": {
+            "type": "string",
+            "description": "Internal notes, seen only by agents."
+          },
+          "phone_numbers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "site_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "One of the customer's sites that is not retired."
+          }
+        }
+      },
       "RequesterEntry": {
         "type": "object",
         "required": [
@@ -6079,6 +6315,14 @@
               "string",
               "null"
             ]
+          },
+          "site_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The site the requester is at, one of the customer's sites."
           },
           "tickets": {
             "type": "integer",
@@ -6312,6 +6556,23 @@
           "address": {
             "type": "string",
             "description": "The site's postal address."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "SiteRef": {
+        "type": "object",
+        "description": "The site a requester is at.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
           },
           "name": {
             "type": "string"

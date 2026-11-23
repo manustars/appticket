@@ -214,13 +214,31 @@ export interface Messages {
   "customer.requesterName": { plural: false; placeholders: never; tags: never }
   "customer.requesterNameOptional": { plural: false; placeholders: never; tags: never }
   "customer.requesterTickets": { plural: false; placeholders: never; tags: never }
+  "customer.requesterSite": { plural: false; placeholders: never; tags: never }
   "customer.addRequester": { plural: false; placeholders: never; tags: never }
-  "customer.addAddress": { plural: false; placeholders: never; tags: never }
-  "customer.newAddress": { plural: false; placeholders: never; tags: never }
-  "customer.removeAddress": { plural: false; placeholders: "address"; tags: never }
   "customer.offboardHint": { plural: false; placeholders: never; tags: never }
   "customer.offboard": { plural: false; placeholders: never; tags: never }
   "customer.confirmOffboard": { plural: false; placeholders: "name"; tags: never }
+  "requester.back": { plural: false; placeholders: "customer"; tags: never }
+  "requester.details": { plural: false; placeholders: never; tags: never }
+  "requester.name": { plural: false; placeholders: never; tags: never }
+  "requester.phones": { plural: false; placeholders: never; tags: never }
+  "requester.phoneNumber": { plural: false; placeholders: "position"; tags: never }
+  "requester.addPhoneNumber": { plural: false; placeholders: never; tags: never }
+  "requester.removePhoneNumber": { plural: false; placeholders: "position"; tags: never }
+  "requester.jobTitle": { plural: false; placeholders: never; tags: never }
+  "requester.site": { plural: false; placeholders: never; tags: never }
+  "requester.noSite": { plural: false; placeholders: never; tags: never }
+  "requester.notes": { plural: false; placeholders: never; tags: never }
+  "requester.notesHint": { plural: false; placeholders: never; tags: never }
+  "requester.edit": { plural: false; placeholders: never; tags: never }
+  "requester.addresses": { plural: false; placeholders: never; tags: never }
+  "requester.addressesHint": { plural: false; placeholders: never; tags: never }
+  "requester.addAddress": { plural: false; placeholders: never; tags: never }
+  "requester.newAddress": { plural: false; placeholders: never; tags: never }
+  "requester.removeAddress": { plural: false; placeholders: "address"; tags: never }
+  "requester.tickets": { plural: false; placeholders: never; tags: never }
+  "requester.noTickets": { plural: false; placeholders: never; tags: never }
   "sites.title": { plural: false; placeholders: never; tags: never }
   "sites.hint": { plural: false; placeholders: never; tags: never }
   "sites.empty": { plural: false; placeholders: never; tags: never }
@@ -233,6 +251,7 @@ export interface Messages {
   "sites.retireNamed": { plural: false; placeholders: "name"; tags: never }
   "sites.retired": { plural: false; placeholders: "date"; tags: never }
   "sites.confirmRetire": { plural: false; placeholders: "name"; tags: never }
+  "sites.confirmRetireWithRequesters": { plural: true; placeholders: "count" | "name" | "requesters"; tags: never }
   "assets.title": { plural: false; placeholders: never; tags: never }
   "assets.empty": { plural: false; placeholders: never; tags: never }
   "assets.kind": { plural: false; placeholders: never; tags: never }
