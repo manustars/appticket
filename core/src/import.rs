@@ -348,8 +348,13 @@ fn line_at(content: &[u8], byte: usize) -> u64 {
 
 /// Previews or applies an import of CSV files.
 pub async fn run(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -> Result<Report> {
+    // Importing needs managing customers, whatever the files; some kinds need more.
+    grant.require(Permission::ManageCustomers)?;
     for file in &files {
         grant.require(file.kind.permission())?;
+    }
+    if files.is_empty() {
+        return rule("an import needs at least one file");
     }
     files.sort_by_key(|f| f.kind);
 

@@ -27,6 +27,7 @@ mod admin;
 mod catalog;
 mod customers;
 mod directory;
+mod imports;
 mod inbox;
 mod tickets;
 mod web;
@@ -120,6 +121,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(inbox::routes())
         .merge(directory::routes())
         .merge(customers::routes())
+        .merge(imports::routes())
         .merge(catalog::routes())
         .merge(addon::routes())
         .merge(admin::routes())
