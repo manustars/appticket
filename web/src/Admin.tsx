@@ -237,16 +237,16 @@ function Agents({ onSignedOut }: { onSignedOut: () => void }) {
                           <button type="button" className="link" disabled={action.busy} onClick={() => reset(a)}>
                             {t('agents.resetPassword')}
                           </button>
-                          {/* A local password is removed only from an agent who has another way in. */}
+                          {/* Either way in is taken away only from an agent who keeps the other. */}
                           {a.has_local_password && a.has_linked_identity && (
-                            <button type="button" className="link" disabled={action.busy} onClick={() => removePassword(a)}>
-                              {t('agents.removePassword')}
-                            </button>
-                          )}
-                          {a.has_linked_identity && (
-                            <button type="button" className="link" disabled={action.busy} onClick={() => unlink(a)}>
-                              {t('agents.unlinkIdentity')}
-                            </button>
+                            <>
+                              <button type="button" className="link" disabled={action.busy} onClick={() => removePassword(a)}>
+                                {t('agents.removePassword')}
+                              </button>
+                              <button type="button" className="link" disabled={action.busy} onClick={() => unlink(a)}>
+                                {t('agents.unlinkIdentity')}
+                              </button>
+                            </>
                           )}
                           <button type="button" className="link danger" disabled={action.busy} onClick={() => deactivate(a)}>
                             {t('agents.deactivate')}

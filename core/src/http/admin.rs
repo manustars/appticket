@@ -187,8 +187,8 @@ async fn remove_password(
 }
 
 /// Unlinks the agent's identity and ends the sessions opened through the identity provider; at
-/// their next sign-in there, they are linked again by verified e-mail. Refused when they would be
-/// left without a way to sign in, and for one's own.
+/// their next sign-in there, they are linked again by verified e-mail. Refused for an agent
+/// without a local password, and for one's own.
 #[utoipa::path(delete, path = "/api/admin/agents/{id}/identity", tag = "admin",
     params(("id" = Uuid, Path, description = "The agent")),
     responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
@@ -199,14 +199,7 @@ async fn unlink_identity(
     agent: SignedIn,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    agents::unlink_identity(
-        &state.db,
-        &agent.grant,
-        agent.id,
-        id,
-        configured_issuer(&state),
-    )
-    .await?;
+    agents::unlink_identity(&state.db, &agent.grant, agent.id, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

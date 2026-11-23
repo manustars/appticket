@@ -713,7 +713,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Unlinks the agent's identity and ends the sessions opened through the identity provider; at\ntheir next sign-in there, they are linked again by verified e-mail. Refused when they would be\nleft without a way to sign in, and for one's own.",
+        "summary": "Unlinks the agent's identity and ends the sessions opened through the identity provider; at\ntheir next sign-in there, they are linked again by verified e-mail. Refused for an agent\nwithout a local password, and for one's own.",
         "operationId": "unlink_identity",
         "parameters": [
           {

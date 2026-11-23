@@ -37,10 +37,12 @@ pub fn connect(config: Config) -> anyhow::Result<(Arc<Provider>, Tracker)> {
 }
 
 /// Records a failure of signing in through the identity provider: one in reaching it or in what
-/// it answered, not in what a browser brought back, which anyone can make up.
+/// it answered, not in what a browser brought back, which anyone can make up, nor in the help
+/// desk's own database.
 fn record_failure(state: &AppState, error: &anyhow::Error) {
     if let Some(activity) = &state.identity_provider_activity
         && !error.is::<BrowserError>()
+        && !error.is::<sqlx::Error>()
     {
         activity.failed(error);
     }
@@ -874,16 +876,11 @@ mod tests {
     #[test]
     fn the_provider_s_errors_are_recorded_without_the_client_s_secret() {
         let config = crate::oidc::Config::from_settings(
-            crate::oidc::Settings {
-                issuer: Some("https://login.example.com/realms/staff".to_owned()),
-                client_id: Some("hd-core".to_owned()),
-                client_secret: Some("invented-secret".to_owned()),
-                client_secret_file: None,
-                label: None,
-                session_hours: 12,
-                authorized_group: None,
-                group_claim: "groups".to_owned(),
-            },
+            crate::oidc::keycloak::settings(
+                "https://login.example.com/realms/staff",
+                "hd-core",
+                "invented-secret",
+            ),
             Some("https://helpdesk.example.com"),
         )
         .unwrap()
@@ -918,6 +915,23 @@ mod tests {
             let back = get(&state, &format!("{callback}{made_up}"), cookie).await;
             assert_eq!(back.location, "/?sign_in_error=failed", "{made_up}");
         }
+        // Nor is a failure of the help desk's own database, which says nothing of the provider
+        // either.
+        let unreachable = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_secs(1))
+            .connect_lazy("postgres://hd:hd@127.0.0.1:9/hd")
+            .unwrap();
+        let broken = AppState {
+            db: unreachable,
+            ..state.clone()
+        };
+        let back = get(
+            &broken,
+            &format!("{callback}?code=c&state=s"),
+            Some("hd_sign_in_state=s"),
+        )
+        .await;
+        assert_eq!(back.location, "/?sign_in_error=failed");
         let nothing = activity(&admin).await;
         assert!(
             nothing["last_error"].is_null() && nothing["last_success_at"].is_null(),
@@ -943,16 +957,7 @@ mod tests {
         agent(&db, "lena.marsh@example.com", "Lena").await;
         let wrong = state_from(
             &db,
-            crate::oidc::Settings {
-                issuer: Some(ISSUER.to_owned()),
-                client_id: Some("hd-core".to_owned()),
-                client_secret: Some("not-the-client-secret".to_owned()),
-                client_secret_file: None,
-                label: None,
-                session_hours: 12,
-                authorized_group: None,
-                group_claim: "groups".to_owned(),
-            },
+            crate::oidc::keycloak::settings(ISSUER, "hd-core", "not-the-client-secret"),
         );
         let admin = crate::http::tests::Client::new(&db)
             .await
