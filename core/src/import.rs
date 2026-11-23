@@ -505,6 +505,7 @@ async fn import(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) ->
             let mut savepoint = tx.begin().await?;
             let mut candidates = Vec::new();
             let mut site_customer = None;
+            let mut requesters = Vec::new();
             let done = match kind {
                 // The database's text cannot hold it.
                 _ if row.cells.iter().any(|cell| cell.contains('\0')) => {
@@ -516,7 +517,9 @@ async fn import(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) ->
                 Kind::Sites => {
                     site_row(&mut savepoint, table, row, &mut so_far, &mut site_customer).await
                 }
-                Kind::Requesters => requester_row(&mut savepoint, table, row, &mut so_far).await,
+                Kind::Requesters => {
+                    requester_row(&mut savepoint, table, row, &mut so_far, &mut requesters).await
+                }
                 Kind::Assets => asset_row(&mut savepoint, table, row, &mut so_far).await,
             };
             let (outcome, changes, reason) = match left_out(done)? {
@@ -544,6 +547,16 @@ async fn import(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) ->
                             customer: site_customer,
                             keys: Keys::of_its_customer(table, row),
                             name: table.cell(row, "name").map(str::to_lowercase),
+                        });
+                    }
+                    if *kind == Kind::Requesters {
+                        so_far.requesters_left_out.push(RequesterLeftOut {
+                            line: row.line,
+                            requesters,
+                            addresses: addresses_in(table.cell(row, "email_addresses"))
+                                .into_iter()
+                                .map(str::to_lowercase)
+                                .collect(),
                         });
                     }
                     (Outcome::LeftOut, Vec::new(), Some(why))
@@ -650,6 +663,17 @@ struct SoFar {
     customers_imported: Vec<Keys>,
     /// The site rows left out, for the requester rows that name their sites.
     sites_left_out: Vec<SiteLeftOut>,
+    /// The requester rows left out, for the asset rows that name their holders.
+    requesters_left_out: Vec<RequesterLeftOut>,
+}
+
+/// A requester row left out.
+struct RequesterLeftOut {
+    line: u64,
+    /// The existing requesters its addresses were found to belong to, when it got that far.
+    requesters: Vec<Uuid>,
+    /// Its addresses as written, lowercased.
+    addresses: Vec<String>,
 }
 
 /// A site row left out.
@@ -736,6 +760,21 @@ impl SoFar {
         self.customers_left_out
             .iter()
             .find(|left_out| left_out.customers.contains(&customer))
+            .map(|left_out| left_out.line)
+    }
+
+    /// The line of a requester row left out that was about the holder an asset row names: by the
+    /// holder's address, or the requester it belongs to, unless another row imported them.
+    fn holder_left_out(&self, address: &str, requester: Option<Uuid>) -> Option<u64> {
+        if requester.is_some_and(|id| self.requesters.contains_key(&id)) {
+            return None;
+        }
+        self.requesters_left_out
+            .iter()
+            .find(|left_out| {
+                left_out.addresses.iter().any(|a| a == address)
+                    || requester.is_some_and(|id| left_out.requesters.contains(&id))
+            })
             .map(|left_out| left_out.line)
     }
 
@@ -1266,22 +1305,27 @@ struct RequesterFound {
     site: Option<Uuid>,
 }
 
+/// A requester row; `owners` gets the existing requesters its addresses belong to, once they are
+/// known.
 async fn requester_row(
     tx: &mut Transaction<'_, Postgres>,
     table: &Table,
     row: &Row,
     so_far: &mut SoFar,
+    owners: &mut Vec<Uuid>,
 ) -> Result<Done> {
-    let found = recognise_requester(tx, table, row, so_far).await?;
+    let found = recognise_requester(tx, table, row, so_far, owners).await?;
     write_requester(tx, table, row, so_far, found).await
 }
 
-/// What a requester row is about, read without locking anything.
+/// What a requester row is about, read without locking anything; `found` gets the existing
+/// requesters its addresses belong to.
 async fn recognise_requester(
     tx: &mut Transaction<'_, Postgres>,
     table: &Table,
     row: &Row,
     so_far: &SoFar,
+    found: &mut Vec<Uuid>,
 ) -> Result<RequesterFound> {
     if let Some(line) = so_far.new_customer_left_out(table, row) {
         return waits_for_customer(line);
@@ -1301,6 +1345,7 @@ async fn recognise_requester(
         return rule("a requester needs an e-mail address");
     }
     let owners = crate::requesters::owners(&mut **tx, &addresses).await?;
+    found.extend(owners.iter().map(|o| o.requester_id));
     let requester = recognised(customer, &owners, so_far)?;
     let site = named_site(tx, table, row, customer, so_far).await?;
     let to_add = addresses
@@ -1477,12 +1522,14 @@ async fn named_kind(
 }
 
 /// The holder an asset row names, by one of their e-mail addresses: a requester of `customer`
-/// who has not departed; none when the cell is empty.
+/// who has not departed, and whose row, if the requesters file has one, is not left out; none
+/// when the cell is empty.
 async fn named_holder(
     tx: &mut Transaction<'_, Postgres>,
     table: &Table,
     row: &Row,
     customer: Uuid,
+    so_far: &SoFar,
 ) -> Result<Option<Uuid>> {
     let Some(written) = table.cell(row, "holder") else {
         return Ok(None);
@@ -1492,6 +1539,11 @@ async fn named_holder(
         .await?
         .into_iter()
         .next();
+    if let Some(line) = so_far.holder_left_out(&address, owner.as_ref().map(|o| o.requester_id)) {
+        return rule(format!(
+            "the row of its holder, line {line} of the requesters file, is left out"
+        ));
+    }
     match owner {
         None => rule(format!("no requester has the address {address}")),
         Some(owner) if owner.customer_id != customer => rule(format!(
@@ -1598,7 +1650,7 @@ async fn recognise_asset(
     }
     let kind = named_kind(tx, table, row).await?;
     let site = named_site(tx, table, row, customer, so_far).await?;
-    let holder = named_holder(tx, table, row, customer).await?;
+    let holder = named_holder(tx, table, row, customer, so_far).await?;
     if asset.is_none() {
         if name.is_none() {
             return rule("a new asset needs a name");
@@ -2041,6 +2093,122 @@ mod tests {
                 asset("Spare", None, false),
                 asset("spare", None, false),
             ]
+        );
+    }
+
+    /// Assets are taken last: a row can name a customer, site or holder an earlier file creates,
+    /// in a preview too, and is held back when the row of its customer, site or holder is left
+    /// out, unless another row imported it.
+    #[sqlx::test]
+    async fn assets_follow_the_customers_sites_and_requesters_of_the_same_import(db: PgPool) {
+        crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let amberline = crate::customers::create(&db, "Amberline", &[])
+            .await
+            .unwrap();
+        let ivo = crate::testing::requester(&db, amberline, "ivo@amberline.test").await;
+        crate::requesters::add_address(&db, ivo, "ivo.r@amberline.test")
+            .await
+            .unwrap();
+        crate::testing::requester(&db, amberline, "una@amberline.test").await;
+        crate::testing::asset_kind(&db, "Laptop").await;
+        let customers_file = "name,tax_country\n\
+            Harbor Lane,\n\
+            Copperleaf,ITA\n\
+            Brightfield,ITA\n";
+        let sites_file = "customer,name,address\n\
+            Harbor Lane,Head office,Molo delle Reti 2\n\
+            Harbor Lane,Lab,\n";
+        let requesters_file = "customer,email_addresses,name,site\n\
+            Harbor Lane,cleo@harbor.test,,head office\n\
+            Harbor Lane,dan@harbor.test,,lab\n\
+            Amberline,ivo@amberline.test,,Nowhere\n\
+            Amberline,una@amberline.test,Una,\n\
+            Amberline,una@amberline.test,Una R.,\n";
+        let assets_file = "customer,name,kind,site,holder\n\
+            Harbor Lane,PC-0001,laptop,head office,cleo@harbor.test\n\
+            Copperleaf,PC-0002,laptop,,\n\
+            Harbor Lane,PC-0003,laptop,lab,\n\
+            Harbor Lane,PC-0004,laptop,,dan@harbor.test\n\
+            Brightfield,PC-0005,laptop,,\n\
+            Amberline,PC-0006,laptop,,ivo.r@amberline.test\n\
+            Amberline,PC-0007,laptop,,una@amberline.test\n";
+        let files = || {
+            vec![
+                assets(assets_file),
+                requesters(requesters_file),
+                sites(sites_file),
+                customers(customers_file),
+            ]
+        };
+
+        let preview = import(&db, files(), Mode::Preview).await;
+        assert_eq!(
+            preview.files.iter().map(|f| f.kind).collect::<Vec<_>>(),
+            [Kind::Customers, Kind::Sites, Kind::Requesters, Kind::Assets],
+            "assets last, whatever order the files come in"
+        );
+        let expected = [
+            (2, Outcome::Create, "Harbor Lane / PC-0001"),
+            (3, Outcome::LeftOut, "Copperleaf / PC-0002"),
+            (4, Outcome::LeftOut, "Harbor Lane / PC-0003"),
+            (5, Outcome::LeftOut, "Harbor Lane / PC-0004"),
+            (6, Outcome::LeftOut, "Brightfield / PC-0005"),
+            (7, Outcome::LeftOut, "Amberline / PC-0006"),
+            (8, Outcome::Create, "Amberline / PC-0007"),
+        ];
+        assert_eq!(outcomes(&preview)[3], expected);
+        assert_reasons(
+            &preview.files[3],
+            &[
+                (
+                    3,
+                    "the row of its customer, line 3 of the customers file, is left out",
+                ),
+                (
+                    4,
+                    "the row of its site, line 3 of the sites file, is left out",
+                ),
+                (
+                    5,
+                    "the row of its holder, line 3 of the requesters file, is left out",
+                ),
+                (
+                    6,
+                    "the row of its customer, line 4 of the customers file, is left out",
+                ),
+                (
+                    7,
+                    "the row of its holder, line 4 of the requesters file, is left out",
+                ),
+            ],
+        );
+        assert!(assets_of(&db, amberline).await.is_empty());
+
+        let applied = import(&db, files(), Mode::Apply).await;
+        assert_eq!(outcomes(&applied)[3], expected);
+        let harbor = id_of(&db, "Harbor Lane").await;
+        assert_eq!(
+            assets_of(&db, harbor).await,
+            [shown(
+                "PC-0001",
+                None,
+                "Laptop",
+                Some("Head office"),
+                Some("cleo@harbor.test")
+            )],
+            "at a site and with a holder the earlier files create"
+        );
+        assert_eq!(
+            assets_of(&db, amberline).await,
+            [shown(
+                "PC-0007",
+                None,
+                "Laptop",
+                None,
+                Some("una@amberline.test")
+            )]
         );
     }
 
@@ -3330,7 +3498,7 @@ mod tests {
         let table = read(Kind::Requesters, file.as_bytes()).unwrap();
         let mut tx = db.begin().await.unwrap();
         let so_far = SoFar::default();
-        let found = recognise_requester(&mut tx, &table, &table.rows[0], &so_far)
+        let found = recognise_requester(&mut tx, &table, &table.rows[0], &so_far, &mut Vec::new())
             .await
             .unwrap();
         (tx, table, so_far, found)
