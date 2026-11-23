@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::error::{Error, Result, rule};
 use crate::requesters::SiteRef;
 
-#[derive(Serialize, ToSchema)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct Asset {
     pub id: Uuid,
     pub customer_id: Uuid,
@@ -36,7 +36,7 @@ pub struct Asset {
 }
 
 /// The requester an asset has been given to.
-#[derive(Serialize, ToSchema)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct Holder {
     pub id: Uuid,
     pub name: Option<String>,
@@ -181,6 +181,33 @@ pub async fn assets_of(db: &PgPool, customer: Uuid) -> Result<Vec<Asset>> {
     .fetch_all(db)
     .await?;
     Ok(rows.into_iter().map(Asset::from).collect())
+}
+
+/// The assets the requester holds, by kind.
+pub async fn held_by(db: &PgPool, requester: Uuid) -> Result<Vec<Asset>> {
+    let rows: Vec<AssetRow> = sqlx::query_as(assets_where!(
+        "WHERE a.holder_id = $1 ORDER BY lower(k.name), a.name"
+    ))
+    .bind(requester)
+    .fetch_all(db)
+    .await?;
+    Ok(rows.into_iter().map(Asset::from).collect())
+}
+
+/// Passes the assets `requester` holds to `to`, or leaves them without a holder when `to` is
+/// `None`: when the requester departs, is moved to another customer or is merged into another.
+/// The caller has locked the requester's customer and the requester.
+pub(crate) async fn pass_held(
+    tx: &mut Transaction<'_, Postgres>,
+    requester: Uuid,
+    to: Option<Uuid>,
+) -> Result<()> {
+    sqlx::query("UPDATE assets SET holder_id = $2 WHERE holder_id = $1")
+        .bind(requester)
+        .bind(to)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
 }
 
 /// Adds an asset the customer owns, with its details (see [`update_asset`]).

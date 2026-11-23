@@ -296,7 +296,8 @@ async fn preview_requester_move(
 
 /// Moves a requester identified with the wrong customer to the right one, under the rule for
 /// moving tickets: all their tickets move with them, closed ones included, and linked assets and
-/// services that do not fit the new customer are unlinked. They leave their site.
+/// services that do not fit the new customer are unlinked. They leave their site, and the assets
+/// they hold stay with the old customer without a holder.
 #[utoipa::path(post, path = "/api/requesters/{id}/move", tag = "customers",
     params(("id" = Uuid, Path, description = "The requester")), request_body = RequesterMoveTarget,
     responses((status = OK, body = Moved), (status = NOT_FOUND, body = Problem),

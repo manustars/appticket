@@ -360,9 +360,11 @@ pub struct RequesterDetail {
     /// gets no tickets and their messages wait in the inbox.
     #[serde(with = "time::serde::rfc3339::option")]
     pub departed_at: Option<OffsetDateTime>,
+    /// The assets they hold, by kind.
+    pub held_assets: Vec<crate::catalog::Asset>,
 }
 
-/// A requester with their customer, details and site.
+/// A requester with their customer, details, site and the assets they hold.
 pub async fn detail(db: &PgPool, id: Uuid) -> Result<RequesterDetail> {
     #[derive(sqlx::FromRow)]
     struct Row {
@@ -407,15 +409,17 @@ pub async fn detail(db: &PgPool, id: Uuid) -> Result<RequesterDetail> {
             .zip(row.site_name)
             .map(|(id, name)| SiteRef { id, name }),
         departed_at: row.departed_at,
+        held_assets: crate::catalog::held_by(db, id).await?,
     })
 }
 
-/// Marks a requester departed: they left their customer. Their history stays, and they stop being
-/// a key requester.
+/// Marks a requester departed: they left their customer. Their history stays, they stop being a
+/// key requester, and the assets they hold lose their holder.
 pub async fn depart(db: &PgPool, id: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
     lock_with_customer(&mut tx, id).await?;
     crate::key_requesters::unmark_in(&mut tx, id).await?;
+    crate::catalog::pass_held(&mut tx, id, None).await?;
     let left = sqlx::query(
         "UPDATE requesters SET departed_at = now() WHERE id = $1 AND departed_at IS NULL",
     )
@@ -456,7 +460,7 @@ pub async fn bring_back(db: &PgPool, id: Uuid) -> Result<()> {
 }
 
 /// Merges `merged` into `kept`: two requesters of the same customer who are one person. The
-/// addresses and tickets of `merged` pass to `kept`, which remains, and `merged` is removed; the
+/// addresses, tickets and held assets of `merged` pass to `kept`, which remains, and `merged` is removed; the
 /// details `kept` lacks are taken from `merged`, so that nothing about the person is lost, and
 /// `kept` is a key requester when either was, written to where `merged` was if not already. A merge
 /// cannot be undone. Requesters of different customers are never merged, nor those of an
@@ -550,6 +554,7 @@ pub async fn merge(db: &PgPool, kept: Uuid, merged: Uuid) -> Result<()> {
         .execute(&mut *tx)
         .await?;
     }
+    crate::catalog::pass_held(&mut tx, merged, Some(kept)).await?;
     sqlx::query("UPDATE tickets SET requester_id = $1, updated_at = now() WHERE requester_id = $2")
         .bind(kept)
         .bind(merged)
@@ -565,8 +570,8 @@ pub async fn merge(db: &PgPool, kept: Uuid, merged: Uuid) -> Result<()> {
 
 /// Moves a requester identified with the wrong customer to `customer`, from their own page: under
 /// the rule for moving tickets, all their tickets move with them, closed ones included, and the
-/// links that do not fit the new customer are removed. They leave their site. An offboarded
-/// customer's requesters do not move.
+/// links that do not fit the new customer are removed. They leave their site, and the assets they
+/// hold lose their holder. An offboarded customer's requesters do not move.
 pub async fn move_to_customer(
     db: &PgPool,
     id: Uuid,
@@ -580,9 +585,10 @@ pub async fn move_to_customer(
 }
 
 /// Locks what moving `requester` to `customer` changes, in the order every change to requesters
-/// and tickets follows (customers, then requesters, then key requesters, then tickets): both
-/// customers, by id, which must exist and not be offboarded, then the requester, then their row as
-/// a key requester, if any. Returns the requester's customer.
+/// and tickets follows (customers, then requesters, then key requesters, then assets, then
+/// tickets): both customers, by id, which must exist and not be offboarded, then the requester,
+/// then their row as a key requester, if any, then the assets they hold. Returns the requester's
+/// customer.
 pub(crate) async fn lock_for_move(
     tx: &mut Transaction<'_, Postgres>,
     requester: Uuid,
@@ -612,14 +618,19 @@ pub(crate) async fn lock_for_move(
         .bind(requester)
         .execute(&mut **tx)
         .await?;
+    // The assets they hold lose their holder; they are taken now too, before any ticket.
+    sqlx::query("SELECT 1 FROM assets WHERE holder_id = $1 FOR UPDATE")
+        .bind(requester)
+        .execute(&mut **tx)
+        .await?;
     Ok(current)
 }
 
 /// Moves a requester identified with the wrong customer to `customer`, with all of their tickets,
 /// closed ones included; links that do not fit the new customer are removed. Their site is one of
-/// the old customer's, so they leave it, and they stop being a key requester. Called with
-/// [`lock_for_move`] held. A parent ticket stays
-/// with the help desk's own organization, so a requester of one does not move.
+/// the old customer's, so they leave it, they stop being a key requester, and the assets they hold
+/// stay with the old customer without a holder. Called with [`lock_for_move`] held. A parent
+/// ticket stays with the help desk's own organization, so a requester of one does not move.
 pub(crate) async fn move_requester(
     tx: &mut Transaction<'_, Postgres>,
     requester: Uuid,
@@ -639,6 +650,7 @@ pub(crate) async fn move_requester(
     }
     let unlinked = crate::catalog::unlink_for_move(tx, &tickets, customer).await?;
     crate::key_requesters::unmark_in(tx, requester).await?;
+    crate::catalog::pass_held(tx, requester, None).await?;
     // The foreign key cascades the new customer to every ticket of the requester.
     sqlx::query("UPDATE requesters SET customer_id = $2, site_id = NULL WHERE id = $1")
         .bind(requester)
@@ -668,6 +680,8 @@ pub struct MovePreview {
     pub assets: Vec<crate::catalog::LinkedAsset>,
     /// The services linked to their tickets that the new customer does not use: unlinked too.
     pub services: Vec<crate::catalog::LinkedService>,
+    /// The assets they hold: these stay with the old customer, without a holder.
+    pub held_assets: Vec<crate::catalog::LinkedAsset>,
 }
 
 /// What [`move_to_customer`] would move, leave and unlink, across all the requester's tickets.
@@ -699,12 +713,20 @@ pub async fn move_preview(db: &PgPool, id: Uuid, customer: Uuid) -> Result<MoveP
             .bind(id)
             .fetch_one(&mut *conn)
             .await?;
+    let held_assets = sqlx::query_as(
+        "SELECT a.id, k.name AS kind, a.name FROM assets a JOIN asset_kinds k ON k.id = a.kind_id
+         WHERE a.holder_id = $1 ORDER BY lower(k.name), a.name",
+    )
+    .bind(id)
+    .fetch_all(&mut *conn)
+    .await?;
     Ok(MovePreview {
         tickets: tickets.len() as i64,
         site,
         key_requester,
         assets,
         services,
+        held_assets,
     })
 }
 
@@ -1134,6 +1156,91 @@ mod tests {
             matches!(update(&db, ada, &at(head)).await, Err(Error::Rule(_))),
             "offboarded"
         );
+    }
+
+    /// The names of the assets the requester's page lists as theirs.
+    async fn held(db: &PgPool, requester: Uuid) -> Vec<String> {
+        detail(db, requester)
+            .await
+            .unwrap()
+            .held_assets
+            .into_iter()
+            .map(|a| a.name)
+            .collect()
+    }
+
+    #[sqlx::test]
+    async fn a_requester_s_page_lists_the_assets_they_hold(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        testing::held_asset(&db, brightfield, "Phone", "Phone 12", ada).await;
+        testing::held_asset(&db, brightfield, "Laptop", "PC-0042", ada).await;
+        testing::held_asset(&db, brightfield, "Laptop", "PC-0043", lena).await;
+        testing::asset(&db, brightfield, "Laptop", "PC-0044").await;
+
+        assert_eq!(held(&db, ada).await, ["PC-0042", "Phone 12"], "by kind");
+        assert_eq!(held(&db, lena).await, ["PC-0043"]);
+    }
+
+    #[sqlx::test]
+    async fn a_departed_requester_s_assets_lose_their_holder(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        testing::held_asset(&db, brightfield, "Laptop", "PC-0042", ada).await;
+        testing::held_asset(&db, brightfield, "Laptop", "PC-0043", lena).await;
+
+        depart(&db, ada).await.unwrap();
+        assert!(held(&db, ada).await.is_empty());
+        let assets = crate::catalog::assets_of(&db, brightfield).await.unwrap();
+        assert_eq!(assets.len(), 2, "the assets stay with the customer");
+        assert_eq!(held(&db, lena).await, ["PC-0043"], "others keep theirs");
+        bring_back(&db, ada).await.unwrap();
+        assert!(held(&db, ada).await.is_empty(), "coming back gives none back");
+    }
+
+    #[sqlx::test]
+    async fn merging_keeps_the_held_assets_with_the_one_who_remains(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let twin = testing::requester(&db, brightfield, "a.ferrini@home.test").await;
+        testing::held_asset(&db, brightfield, "Laptop", "PC-0042", ada).await;
+        testing::held_asset(&db, brightfield, "Phone", "Phone 12", twin).await;
+        testing::held_asset(&db, brightfield, "Laptop", "PC-0043", twin).await;
+
+        merge(&db, ada, twin).await.unwrap();
+        assert_eq!(held(&db, ada).await, ["PC-0042", "PC-0043", "Phone 12"]);
+    }
+
+    /// The assets a moved requester holds stay with their customer and lose their holder, whether
+    /// the requester is moved from their page or with one of their tickets; the agent is told so
+    /// first.
+    #[sqlx::test]
+    async fn a_moved_requester_s_assets_stay_without_a_holder(db: PgPool) {
+        use crate::tickets::{self, RequesterMove};
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        testing::held_asset(&db, brightfield, "Phone", "Phone 12", ada).await;
+        testing::held_asset(&db, brightfield, "Laptop", "PC-0042", ada).await;
+        testing::held_asset(&db, brightfield, "Laptop", "PC-0043", lena).await;
+        let n = testing::ticket(&db, brightfield, Some(lena), "l1@brightfield.test").await;
+
+        let preview = move_preview(&db, ada, harbor).await.unwrap();
+        let names: Vec<String> = preview.held_assets.into_iter().map(|a| a.name).collect();
+        assert_eq!(names, ["PC-0042", "Phone 12"]);
+        move_to_customer(&db, ada, harbor).await.unwrap();
+        assert!(held(&db, ada).await.is_empty());
+
+        tickets::move_to_customer(&db, n, harbor, RequesterMove::Move)
+            .await
+            .unwrap();
+        assert!(held(&db, lena).await.is_empty());
+        let assets = crate::catalog::assets_of(&db, brightfield).await.unwrap();
+        assert_eq!(assets.len(), 3, "the assets stay with their customer");
+        assert!(assets.iter().all(|a| a.holder.is_none()));
     }
 
     #[sqlx::test]
