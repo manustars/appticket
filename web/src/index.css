@@ -383,6 +383,10 @@ tr.offboarded td, tr.retired td { color: var(--muted); }
 
 .data td.wrap { white-space: normal; }
 .data input { margin-top: 0; }
+/* The asset being edited keeps to the panel: its fields share the row's width. */
+.data.assets td { padding-left: 0.4rem; padding-right: 0.4rem; }
+.data.assets select { width: 100%; min-width: 6.5rem; }
+.data.assets input { min-width: 5rem; }
 .figure { text-align: right; font-variant-numeric: tabular-nums; }
 .row-actions { text-align: right; }
 .row-actions > * + * { margin-left: 0.7rem; }
