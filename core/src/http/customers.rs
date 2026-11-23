@@ -3,11 +3,11 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
@@ -18,6 +18,7 @@ use crate::external_references;
 use crate::requesters;
 use crate::roles::Permission;
 use crate::sites;
+use crate::tickets::Moved;
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -29,6 +30,9 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(get_requester, update_requester))
         .routes(routes!(depart))
         .routes(routes!(bring_back_requester))
+        .routes(routes!(merge_requester))
+        .routes(routes!(preview_requester_move))
+        .routes(routes!(move_requester))
         .routes(routes!(add_address))
         .routes(routes!(remove_address))
         .routes(routes!(add_site))
@@ -236,6 +240,75 @@ async fn bring_back_requester(
     agent.grant.require(Permission::ManageCustomers)?;
     requesters::bring_back(&state.db, id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct MergedRequester {
+    /// The requester merged into this one: their addresses and tickets pass to this one, and they
+    /// are removed.
+    requester_id: Uuid,
+}
+
+/// Merges another requester of the same customer, who is the same person, into this one, which
+/// remains. A merge cannot be undone; requesters of different customers are never merged, nor
+/// departed ones.
+#[utoipa::path(post, path = "/api/requesters/{id}/merge", tag = "customers",
+    params(("id" = Uuid, Path, description = "The requester that remains")),
+    request_body = MergedRequester,
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn merge_requester(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+    Json(merged): Json<MergedRequester>,
+) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
+    requesters::merge(&state.db, id, merged.requester_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct RequesterMoveTarget {
+    /// The customer the requester is moved to.
+    customer_id: Uuid,
+}
+
+/// What moving the requester to another customer would do: how many tickets move with them, and
+/// the links of those tickets that do not fit the new customer and would be removed.
+#[utoipa::path(get, path = "/api/requesters/{id}/move-preview", tag = "customers",
+    params(("id" = Uuid, Path, description = "The requester"), RequesterMoveTarget),
+    responses((status = OK, body = requesters::MovePreview), (status = NOT_FOUND, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn preview_requester_move(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(id): Path<Uuid>,
+    Query(target): Query<RequesterMoveTarget>,
+) -> Result<Json<requesters::MovePreview>, ApiError> {
+    Ok(Json(
+        requesters::move_preview(&state.db, id, target.customer_id).await?,
+    ))
+}
+
+/// Moves a requester identified with the wrong customer to the right one, under the rule for
+/// moving tickets: all their tickets move with them, closed ones included, and linked assets and
+/// services that do not fit the new customer are unlinked. They leave their site.
+#[utoipa::path(post, path = "/api/requesters/{id}/move", tag = "customers",
+    params(("id" = Uuid, Path, description = "The requester")), request_body = RequesterMoveTarget,
+    responses((status = OK, body = Moved), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn move_requester(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+    Json(target): Json<RequesterMoveTarget>,
+) -> Result<Json<Moved>, ApiError> {
+    agent.grant.require(Permission::MoveTickets)?;
+    Ok(Json(
+        requesters::move_to_customer(&state.db, id, target.customer_id).await?,
+    ))
 }
 
 #[derive(Deserialize, ToSchema)]

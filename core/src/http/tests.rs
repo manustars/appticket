@@ -1274,3 +1274,110 @@ async fn an_addon_reads_the_external_references_of_the_customers_it_sees(db: PgP
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "directory:read is needed");
 }
+
+/// Two requesters of one customer are merged from the page of the one that remains, by agents who
+/// manage customers; requesters of different customers are refused.
+#[sqlx::test]
+async fn requesters_are_merged_through_the_api(db: PgPool) {
+    use crate::roles::Permission;
+    let api = Client::new(&db).await;
+    let mover = role_with(&db, "Mover", &[Permission::MoveTickets]).await;
+    let mover = Client::with_role(&db, "mina@northgate.test", mover).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let harbor = testing::customer(&db, "Harbor Lane").await;
+    let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+    let twin = testing::requester(&db, brightfield, "a.ferrini@home.test").await;
+    let ivo = testing::requester(&db, harbor, "ivo@harbor.test").await;
+    let n = testing::ticket(&db, brightfield, Some(twin), "t1@home.test").await;
+
+    let merge = format!("/api/requesters/{ada}/merge");
+    let (status, _) = mover
+        .call(
+            "POST",
+            &merge,
+            Some(serde_json::json!({ "requester_id": twin })),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "merging needs managing customers"
+    );
+    let (status, json) = api
+        .call(
+            "POST",
+            &merge,
+            Some(serde_json::json!({ "requester_id": ivo })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    let (status, json) = api
+        .call(
+            "POST",
+            &merge,
+            Some(serde_json::json!({ "requester_id": twin })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+
+    let page = api.get(&format!("/api/requesters/{ada}")).await;
+    assert_eq!(
+        page["addresses"],
+        serde_json::json!(["ada@brightfield.test", "a.ferrini@home.test"])
+    );
+    let (status, _) = api
+        .call("GET", &format!("/api/requesters/{twin}"), None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let ticket = api.get(&format!("/api/tickets/{n}")).await;
+    assert_eq!(ticket["requester"]["id"], ada.to_string());
+    let customer = api.get(&format!("/api/customers/{brightfield}")).await;
+    assert_eq!(customer["requester_list"].as_array().unwrap().len(), 1);
+}
+
+/// A requester is moved from their page with all their tickets, by agents who move tickets to
+/// another customer; the page first shows what the move unlinks.
+#[sqlx::test]
+async fn a_requester_is_moved_from_their_page_through_the_api(db: PgPool) {
+    use crate::roles::Permission;
+    let manager = role_with(&db, "Manager", &[Permission::ManageCustomers]).await;
+    let manager = Client::with_role(&db, "mara@northgate.test", manager).await;
+    let mover = role_with(&db, "Mover", &[Permission::MoveTickets]).await;
+    let mover = Client::with_role(&db, "mina@northgate.test", mover).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let harbor = testing::customer(&db, "Harbor Lane").await;
+    let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+    let first = testing::ticket(&db, brightfield, Some(ada), "a1@brightfield.test").await;
+    let second = testing::ticket(&db, brightfield, Some(ada), "a2@brightfield.test").await;
+    let laptop = testing::asset(&db, brightfield, "Laptop", "BF-LT-07").await;
+    crate::catalog::link_asset(&db, second, laptop, true)
+        .await
+        .unwrap();
+
+    let preview = manager
+        .get(&format!(
+            "/api/requesters/{ada}/move-preview?customer_id={harbor}"
+        ))
+        .await;
+    assert_eq!(preview["tickets"], 2);
+    assert_eq!(preview["assets"][0]["name"], "BF-LT-07");
+    assert_eq!(preview["services"], serde_json::json!([]));
+
+    let moving = format!("/api/requesters/{ada}/move");
+    let to_harbor = serde_json::json!({ "customer_id": harbor });
+    let (status, _) = manager.call("POST", &moving, Some(to_harbor.clone())).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "moving needs moving tickets to another customer"
+    );
+    let (status, json) = mover.call("POST", &moving, Some(to_harbor.clone())).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json, serde_json::json!({ "moved": 2, "unlinked": 1 }));
+    for n in [first, second] {
+        let ticket = mover.get(&format!("/api/tickets/{n}")).await;
+        assert_eq!(ticket["customer"]["id"], harbor.to_string());
+    }
+    let (status, json) = mover.call("POST", &moving, Some(to_harbor)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+}

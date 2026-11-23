@@ -7,6 +7,7 @@ import {
   listCustomers,
   listCustomerServices,
   moveTicket,
+  previewRequesterMove,
   reply,
   setAssignee,
   setPriority,
@@ -15,6 +16,7 @@ import {
   type AgentEntry,
   type CustomerEntry,
   type Moved,
+  type MovePreview,
   type Priority,
   type Service,
   type TicketDetail,
@@ -30,6 +32,7 @@ import { requesterLabel } from './people'
 import { requesterHref } from './route'
 import { useSession } from './session'
 import { TicketAssets, TicketFamily, TicketServices } from './TicketLinks'
+import { UnlinkWarning } from './UnlinkWarning'
 import { useLoad } from './useAction'
 
 const states: TicketState[] = ['open', 'waiting', 'resolved', 'closed']
@@ -586,17 +589,30 @@ function MoveCustomer({ ticket, customers, busy, onCancel, onMove, onSignedOut }
   const id = useId()
   const requester = ticket.requester
   const others = requester ? requester.ticket_count - 1 : 0
+  // A requester who moves too takes their other tickets along, with those tickets' links.
+  const withRequester = !!requester && requesterMove === 'move' && others > 0
   const linked = ticket.assets.length + ticket.services.length > 0
   // What the chosen customer uses decides which linked services stay.
   const loadUsed = useCallback(
-    (): Promise<Service[]> => (linked && customerId ? listCustomerServices(customerId) : Promise.resolve([])),
-    [linked, customerId])
+    (): Promise<Service[]> =>
+      (linked && customerId && !withRequester ? listCustomerServices(customerId) : Promise.resolve([])),
+    [linked, customerId, withRequester])
   const used = useLoad(loadUsed, onSignedOut)
+  const requesterId = requester?.id
+  const loadPreview = useCallback(
+    (): Promise<MovePreview | null> =>
+      (withRequester && requesterId && customerId ? previewRequesterMove(requesterId, customerId) : Promise.resolve(null)),
+    [withRequester, requesterId, customerId])
+  const preview = useLoad(loadPreview, onSignedOut)
   const target = customers?.find((c) => c.id === customerId)
-  const dropped = target && used.data
-    ? ticket.services.filter((s) => !used.data?.some((u) => u.id === s.id))
-    : null
-  const error = used.error
+  // What the move unlinks, once the chosen customer's services (or the requester's preview) are in.
+  const unlinks = !target ? null
+    : withRequester
+      ? (preview.data ? { assets: preview.data.assets, services: preview.data.services } : null)
+      : (used.data
+        ? { assets: ticket.assets, services: ticket.services.filter((s) => !used.data?.some((u) => u.id === s.id)) }
+        : null)
+  const error = used.error ?? preview.error
 
   function submit(event: FormEvent) {
     event.preventDefault()
@@ -629,25 +645,17 @@ function MoveCustomer({ ticket, customers, busy, onCancel, onMove, onSignedOut }
           </label>
         </fieldset>
       )}
-      {linked && (
+      {target && unlinks ? (
+        unlinks.assets.length + unlinks.services.length > 0 ? (
+          <UnlinkWarning from={ticket.customer.name} to={target.name} assets={unlinks.assets}
+            services={unlinks.services}
+            heading={withRequester ? t('move.willUnlinkWithRequester') : t('move.willUnlink')} />
+        ) : linked && (
+          <div className="warning" role="note"><p>{t('move.keepsLinks', { customer: target.name })}</p></div>
+        )
+      ) : linked && (
         <div className="warning" role="note">
-          {!target || !dropped ? (
-            <p>{t('move.linksWarning', { customer: ticket.customer.name })}</p>
-          ) : ticket.assets.length + dropped.length === 0 ? (
-            <p>{t('move.keepsLinks', { customer: target.name })}</p>
-          ) : (
-            <>
-              <p>{t('move.willUnlink')}</p>
-              <ul>
-                {ticket.assets.map((a) => (
-                  <li key={a.id}>{t('move.unlinkAsset', { name: a.name, kind: a.kind, customer: ticket.customer.name })}</li>
-                ))}
-                {dropped.map((s) => (
-                  <li key={s.id}>{t('move.unlinkService', { name: s.name, customer: target.name })}</li>
-                ))}
-              </ul>
-            </>
-          )}
+          <p>{t('move.linksWarning', { customer: ticket.customer.name })}</p>
         </div>
       )}
       {error !== null && <p className="error" role="alert">{errorText(error)}</p>}

@@ -18,6 +18,7 @@ export type FailingReply = Schemas['FailingReply']
 export type InboxMessage = Schemas['InboxMessage']
 export type MailState = Schemas['MailState']
 export type Moved = Schemas['Moved']
+export type MovePreview = Schemas['MovePreview']
 export type Permission = Schemas['Permission']
 export type Priority = Schemas['Priority']
 export type Proposal = Schemas['ProposalView']
@@ -378,6 +379,29 @@ export async function departRequester(id: string): Promise<void> {
 /** Brings a departed requester back; refused while they have no address of their own. */
 export async function bringBackRequester(id: string): Promise<void> {
   await call('POST', `${requesterPath(id)}/bring-back`)
+}
+
+/**
+ * Merges `mergedId`, another requester of the same customer who is the same person, into `id`,
+ * which remains with the addresses and tickets of both. A merge cannot be undone.
+ */
+export async function mergeRequester(id: string, mergedId: string): Promise<void> {
+  const request: Schemas['MergedRequester'] = { requester_id: mergedId }
+  await call('POST', `${requesterPath(id)}/merge`, request)
+}
+
+/** How many tickets would move with the requester, and the links that would be removed. */
+export function previewRequesterMove(id: string, customerId: string): Promise<MovePreview> {
+  return json('GET', `${requesterPath(id)}/move-preview?customer_id=${encodeURIComponent(customerId)}`)
+}
+
+/**
+ * Moves a requester identified with the wrong customer, with all of their tickets; links that do
+ * not fit the new customer are removed.
+ */
+export function moveRequester(id: string, customerId: string): Promise<Moved> {
+  const request: Schemas['RequesterMoveTarget'] = { customer_id: customerId }
+  return json('POST', `${requesterPath(id)}/move`, request)
 }
 
 /** No new tickets from then on; the customer's history stays. Refused for the help desk. */

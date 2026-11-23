@@ -898,6 +898,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/requesters/{id}/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Merges another requester of the same customer, who is the same person, into this one, which
+         *     remains. A merge cannot be undone; requesters of different customers are never merged, nor
+         *     departed ones.
+         */
+        post: operations["merge_requester"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/requesters/{id}/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Moves a requester identified with the wrong customer to the right one, under the rule for
+         *     moving tickets: all their tickets move with them, closed ones included, and linked assets and
+         *     services that do not fit the new customer are unlinked. They leave their site.
+         */
+        post: operations["move_requester"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/requesters/{id}/move-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What moving the requester to another customer would do: how many tickets move with them, and
+         *     the links of those tickets that do not fit the new customer and would be removed.
+         */
+        get: operations["preview_requester_move"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/services": {
         parameters: {
             query?: never;
@@ -1675,6 +1737,14 @@ export interface components {
             reading?: components["schemas"]["Activity"] | null;
             sending?: components["schemas"]["Activity"] | null;
         };
+        MergedRequester: {
+            /**
+             * Format: uuid
+             * @description The requester merged into this one: their addresses and tickets pass to this one, and they
+             *     are removed.
+             */
+            requester_id: string;
+        };
         MessageEntry: {
             /** @description The agent who wrote an outbound message. */
             author_name?: string | null;
@@ -1697,6 +1767,18 @@ export interface components {
             sent_at?: string | null;
             subject: string;
             to_address?: string | null;
+        };
+        /** @description What moving a requester to another customer would do, for the agent to see before confirming. */
+        MovePreview: {
+            /** @description The assets linked to their tickets: they belong to the old customer, so they are unlinked. */
+            assets: components["schemas"]["LinkedAsset"][];
+            /** @description The services linked to their tickets that the new customer does not use: unlinked too. */
+            services: components["schemas"]["LinkedService"][];
+            /**
+             * Format: int64
+             * @description How many tickets would move with the requester, closed ones included.
+             */
+            tickets: number;
         };
         /** @description What a move did. */
         Moved: {
@@ -1996,6 +2078,13 @@ export interface components {
          * @enum {string}
          */
         RequesterMove: "move" | "remove";
+        RequesterMoveTarget: {
+            /**
+             * Format: uuid
+             * @description The customer the requester is moved to.
+             */
+            customer_id: string;
+        };
         ResolveChildren: {
             /** @description Sent as a reply to the requester of every child that has one. */
             body: string;
@@ -4588,6 +4677,145 @@ export interface operations {
                 };
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    merge_requester: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The requester that remains */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergedRequester"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    move_requester: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The requester */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequesterMoveTarget"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Moved"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    preview_requester_move: {
+        parameters: {
+            query: {
+                /** @description The customer the requester is moved to. */
+                customer_id: string;
+            };
+            header?: never;
+            path: {
+                /** @description The requester */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MovePreview"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

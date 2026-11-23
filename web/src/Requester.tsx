@@ -5,10 +5,16 @@ import {
   departRequester,
   getCustomer,
   getRequester,
+  listCustomers,
   listTickets,
+  mergeRequester,
+  moveRequester,
+  previewRequesterMove,
   removeRequesterAddress,
   updateRequester,
   type CustomerDetail,
+  type Moved,
+  type MovePreview,
   type RequesterDetail,
 } from './api/client'
 import { useI18n } from './i18n/context'
@@ -17,6 +23,7 @@ import { Problem } from './Problem'
 import { customerHref, customersHref } from './route'
 import { useSession } from './session'
 import { TicketTable } from './Tickets'
+import { UnlinkWarning } from './UnlinkWarning'
 import { useAction, useLoad } from './useAction'
 
 interface PageProps {
@@ -39,6 +46,12 @@ export function RequesterPage({ id, onChanged, onSignedOut }: PageProps) {
     await reload()
     onChanged()
   }, [reload, onChanged])
+  // Merging and moving change the requester's tickets too.
+  const reloadTickets = tickets.reload
+  const changedWithTickets = useCallback(async () => {
+    await changed()
+    await reloadTickets()
+  }, [changed, reloadTickets])
 
   const r = requester.data
   if (!r) {
@@ -66,6 +79,12 @@ export function RequesterPage({ id, onChanged, onSignedOut }: PageProps) {
       <Details requester={r} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       <Addresses requester={r} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       {!readOnly && <Departure requester={r} onChanged={changed} onSignedOut={onSignedOut} />}
+      {/* A departed requester is not merged: they come back first. */}
+      {!readOnly && !r.departed_at && <Merge requester={r} onChanged={changedWithTickets} onSignedOut={onSignedOut} />}
+      {!r.customer.offboarded && can('tickets.move') && (
+        <MoveRequester requester={r} onChanged={changedWithTickets}
+          onSignedOut={onSignedOut} />
+      )}
       <section className="panel" aria-labelledby={`${id}-tickets`}>
         <h2 id={`${id}-tickets`}>{t('requester.tickets')}</h2>
         <Problem error={tickets.error} />
@@ -261,6 +280,135 @@ function Addresses({ requester: r, readOnly, onChanged, onSignedOut }: PartProps
         </form>
       )}
       <Problem error={action.error} />
+    </section>
+  )
+}
+
+/** Merging another requester of the same customer, who is the same person, into this one. */
+function Merge({ requester: r, onChanged, onSignedOut }: Omit<PartProps, 'readOnly'>) {
+  const { t } = useI18n()
+  const action = useAction(onSignedOut)
+  const id = useId()
+  const customerId = r.customer.id
+  const loadCustomer = useCallback(() => getCustomer(customerId), [customerId])
+  const customer = useLoad(loadCustomer, onSignedOut)
+  const [other, setOther] = useState('')
+  // Who was last merged into this requester, to say so.
+  const [merged, setMerged] = useState<string | null>(null)
+  const name = requesterLabel(t, r.name, r.addresses[0])
+  // Only requesters of the same customer who have not departed can be merged into this one.
+  const candidates = customer.data?.requester_list.filter((q) => q.id !== r.id && !q.departed) ?? []
+  const label = (q: (typeof candidates)[number]) =>
+    q.name && q.addresses[0] ? `${q.name} <${q.addresses[0]}>` : requesterLabel(t, q.name, q.addresses[0])
+
+  function merge(event: FormEvent) {
+    event.preventDefault()
+    const chosen = candidates.find((q) => q.id === other)
+    if (!chosen) return
+    const otherName = requesterLabel(t, chosen.name, chosen.addresses[0])
+    if (!window.confirm(t('requester.confirmMerge', { other: otherName, name }))) return
+    void action.run(() => mergeRequester(r.id, chosen.id)).then(async (ok) => {
+      if (!ok) return
+      setOther('')
+      setMerged(otherName)
+      await customer.reload()
+      await onChanged()
+    })
+  }
+
+  return (
+    <section className="panel" aria-labelledby={`${id}-title`}>
+      <h2 id={`${id}-title`}>{t('requester.merge')}</h2>
+      <p className="hint">{t('requester.mergeHint', { customer: r.customer.name })}</p>
+      {customer.data && candidates.length === 0 && (
+        <p className="empty">{t('requester.noneToMerge', { customer: r.customer.name })}</p>
+      )}
+      {candidates.length > 0 && (
+        <form className="inline-form" onSubmit={merge}>
+          <label>
+            {t('requester.mergeWith')}
+            <select value={other} onChange={(e) => { setOther(e.target.value); setMerged(null) }}>
+              <option value="">{t('requester.choose')}</option>
+              {candidates.map((q) => <option key={q.id} value={q.id}>{label(q)}</option>)}
+            </select>
+          </label>
+          <button type="submit" disabled={action.busy || !other}>{t('requester.mergeSubmit')}</button>
+        </form>
+      )}
+      {merged !== null && <p className="done" role="status">{t('requester.merged', { other: merged })}</p>}
+      <Problem error={customer.error ?? action.error} />
+    </section>
+  )
+}
+
+/** Moving a requester identified with the wrong customer, with all their tickets. */
+function MoveRequester({ requester: r, onChanged, onSignedOut }: Omit<PartProps, 'readOnly'>) {
+  const { t } = useI18n()
+  const action = useAction(onSignedOut)
+  const id = useId()
+  const customers = useLoad(listCustomers, onSignedOut)
+  const [customerId, setCustomerId] = useState('')
+  const requesterId = r.id
+  const loadPreview = useCallback(
+    (): Promise<MovePreview | null> => (customerId ? previewRequesterMove(requesterId, customerId) : Promise.resolve(null)),
+    [requesterId, customerId])
+  const preview = useLoad(loadPreview, onSignedOut)
+  // What the last move did, to say so.
+  const [moved, setMoved] = useState<Moved | null>(null)
+  const target = customers.data?.find((c) => c.id === customerId)
+  const plan = preview.data
+  const ready = target && plan
+
+  function move(event: FormEvent) {
+    event.preventDefault()
+    if (!customerId) return
+    let result: Moved | null = null
+    void action.run(async () => { result = await moveRequester(r.id, customerId) }).then(async (ok) => {
+      if (!ok) return
+      setCustomerId('')
+      setMoved(result)
+      await onChanged()
+    })
+  }
+
+  return (
+    <section className="panel" aria-labelledby={`${id}-title`}>
+      <h2 id={`${id}-title`}>{t('requester.move')}</h2>
+      <p className="hint">{t('requester.moveHint')}</p>
+      <form className="move" onSubmit={move}>
+        <label htmlFor={`${id}-customer`}>{t('requester.moveTo')}</label>
+        <select id={`${id}-customer`} value={customerId}
+          onChange={(e) => { setCustomerId(e.target.value); setMoved(null) }}>
+          <option value="">{t('customer.choose')}</option>
+          {customers.data?.filter((c) => c.id !== r.customer.id).map((c) => (
+            <option key={c.id} value={c.id}>{c.is_help_desk ? t('customer.helpDesk', { name: c.name }) : c.name}</option>
+          ))}
+        </select>
+        {target && plan && (
+          <div className="warning" role="note">
+            <p>
+              {plan.tickets === 0
+                ? t('requester.moveNoTickets')
+                : t('requester.moveTakesTickets', { count: plan.tickets })}
+            </p>
+            {r.site && <p>{t('requester.moveLeavesSite', { site: r.site.name, customer: r.customer.name })}</p>}
+          </div>
+        )}
+        {target && plan && (
+          <UnlinkWarning from={r.customer.name} to={target.name} assets={plan.assets}
+            services={plan.services} heading={t('requester.moveWillUnlink')} />
+        )}
+        <div className="move-foot">
+          <button type="submit" disabled={action.busy || !ready}>{t('requester.moveSubmit')}</button>
+        </div>
+      </form>
+      {moved !== null && (
+        <p className="done" role="status">
+          {moved.moved === 0 ? t('requester.moved') : t('requester.movedWithTickets', { count: moved.moved })}
+          {moved.unlinked > 0 && <> {t('ticket.unlinked', { count: moved.unlinked })}</>}
+        </p>
+      )}
+      <Problem error={customers.error ?? preview.error ?? action.error} />
     </section>
   )
 }
