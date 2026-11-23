@@ -1380,25 +1380,130 @@ mod tests {
         assert_eq!(at(&db, n).await, Vec::<String>::new(), "closed at no site");
     }
 
-    /// A requester identified with the wrong customer moves with all their tickets: the closed
-    /// ones stay at the sites they were closed at, the others follow the rule, and the requester
-    /// leaves their site.
+    /// A requester identified with the wrong customer moves with all their tickets, closed ones
+    /// included. The sites a closed ticket was kept at are its old customer's, so they go, as its
+    /// assets do: it is at no site. The others follow the rule, and the requester leaves their site.
     #[sqlx::test]
-    async fn a_closed_ticket_keeps_its_sites_when_its_requester_moves(db: PgPool) {
+    async fn a_closed_ticket_moved_with_its_requester_leaves_its_sites(db: PgPool) {
         let c = testing::customer(&db, "Brightfield").await;
         let harbor = testing::customer(&db, "Harbor Lane").await;
         let head = site(&db, c, "Head office").await;
+        let lab = site(&db, c, "Lab").await;
+        let ada = testing::requester(&db, c, "ada@brightfield.test").await;
+        put_at(&db, ada, Some(head)).await;
+        let printer = testing::asset_kind(&db, "Printer").await;
+        let printer_2f = crate::catalog::create_asset(
+            &db,
+            c,
+            &testing::asset_details(printer, "Printer 2F", None, Some(lab), None),
+        )
+        .await
+        .unwrap();
+        let by_requester = testing::ticket(&db, c, Some(ada), "a1@brightfield.test").await;
+        let by_asset = testing::ticket(&db, c, Some(ada), "a2@brightfield.test").await;
+        crate::catalog::link_asset(&db, by_asset, printer_2f, true)
+            .await
+            .unwrap();
+        for n in [by_requester, by_asset] {
+            set_state(&db, n, TicketState::Closed).await.unwrap();
+        }
+        let open = testing::ticket(&db, c, Some(ada), "a3@brightfield.test").await;
+
+        crate::requesters::move_to_customer(&db, ada, harbor)
+            .await
+            .unwrap();
+        for n in [by_requester, by_asset, open] {
+            assert_eq!(at(&db, n).await, Vec::<String>::new(), "ticket {n}");
+        }
+    }
+
+    /// The database keeps the sites a ticket was closed at only for a closed ticket, and only sites
+    /// of its own customer, also when the code is bypassed: a ticket moved to another customer
+    /// leaves them.
+    #[sqlx::test]
+    async fn the_database_keeps_only_sites_of_the_customer_of_a_closed_ticket(db: PgPool) {
+        let c = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let head = site(&db, c, "Head office").await;
+        let lab = site(&db, c, "Lab").await;
+        let quay = site(&db, harbor, "Quay office").await;
         let ada = testing::requester(&db, c, "ada@brightfield.test").await;
         put_at(&db, ada, Some(head)).await;
         let closed = testing::ticket(&db, c, Some(ada), "a1@brightfield.test").await;
         set_state(&db, closed, TicketState::Closed).await.unwrap();
         let open = testing::ticket(&db, c, Some(ada), "a2@brightfield.test").await;
+        let keep = |number: i64, customer: Uuid, site: Uuid| {
+            let db = db.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO closed_ticket_sites (ticket_id, customer_id, site_id)
+                     SELECT id, $2, $3 FROM tickets WHERE number = $1",
+                )
+                .bind(number)
+                .bind(customer)
+                .bind(site)
+                .execute(&db)
+                .await
+            }
+        };
 
-        crate::requesters::move_to_customer(&db, ada, harbor)
+        assert!(keep(open, c, lab).await.is_err(), "a ticket not closed");
+        assert!(
+            keep(closed, harbor, quay).await.is_err(),
+            "a site of another customer than the ticket's"
+        );
+        assert!(
+            keep(closed, c, quay).await.is_err(),
+            "a site of another customer"
+        );
+        assert_eq!(at(&db, closed).await, ["Head office"]);
+
+        sqlx::query("UPDATE tickets SET customer_id = $2, requester_id = NULL WHERE number = $1")
+            .bind(closed)
+            .bind(harbor)
+            .execute(&db)
             .await
             .unwrap();
-        assert_eq!(at(&db, closed).await, ["Head office"]);
-        assert_eq!(at(&db, open).await, Vec::<String>::new());
+        assert_eq!(at(&db, closed).await, Vec::<String>::new(), "moved");
+    }
+
+    /// A requester moved while one of their tickets is being closed waits for the close, then
+    /// takes the ticket along without the sites it was just closed at.
+    #[sqlx::test]
+    async fn a_requester_moved_while_their_ticket_closes_takes_it_without_its_sites(db: PgPool) {
+        tokio::time::timeout(std::time::Duration::from_secs(30), moved_while_closing(db))
+            .await
+            .expect("the statements did not end in time");
+    }
+
+    async fn moved_while_closing(db: PgPool) {
+        let c = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let head = site(&db, c, "Head office").await;
+        let ada = testing::requester(&db, c, "ada@brightfield.test").await;
+        put_at(&db, ada, Some(head)).await;
+        let n = testing::ticket(&db, c, Some(ada), "a1@brightfield.test").await;
+
+        let mut closing = db.begin().await.unwrap();
+        sqlx::query("UPDATE tickets SET state = 'closed' WHERE number = $1")
+            .bind(n)
+            .execute(&mut *closing)
+            .await
+            .unwrap();
+        let other = db.clone();
+        let moving =
+            tokio::spawn(
+                async move { crate::requesters::move_to_customer(&other, ada, harbor).await },
+            );
+        assert!(
+            testing::some_statement_waits_for_a_lock(&db).await,
+            "the move did not wait for the close"
+        );
+        assert!(!moving.is_finished(), "the move ended before the close");
+        closing.commit().await.unwrap();
+        moving.await.unwrap().unwrap();
+        assert_eq!(state(&db, n).await, "closed");
+        assert_eq!(at(&db, n).await, Vec::<String>::new());
     }
 
     /// Closing a ticket reads where its assets are without waiting for a change being made to them,
