@@ -215,7 +215,7 @@ pub(crate) async fn pass_held(
 pub async fn create_asset(db: &PgPool, customer: Uuid, fields: &AssetFields) -> Result<Uuid> {
     let mut tx = db.begin().await?;
     crate::customers::lock_active(&mut tx, customer).await?;
-    let details = stored_details(&mut tx, customer, fields).await?;
+    let details = checked_details(&mut tx, customer, fields).await?;
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO assets (id, customer_id, kind_id, name, serial_number, site_id, holder_id)
@@ -241,20 +241,24 @@ pub async fn create_asset(db: &PgPool, customer: Uuid, fields: &AssetFields) -> 
 pub async fn update_asset(db: &PgPool, id: Uuid, fields: &AssetFields) -> Result<()> {
     let mut tx = db.begin().await?;
     // An asset never changes customer, so its customer can be read before it is locked. The
-    // customer is locked first, as by every change to its requesters, sites and assets, which
-    // keeps them from waiting on one another; the asset is locked last.
+    // customer is locked first (FOR UPDATE), as by every change to its requesters, sites and
+    // assets; under that lock the order of the rest cannot make two such changes wait for each
+    // other: here the holder, then the site, then the asset, while retiring a site takes the site,
+    // then the requesters and assets at it. The asset is locked only against changes (`FOR NO KEY
+    // UPDATE`), so that a ticket being linked to it is not kept waiting.
     let customer: Uuid = sqlx::query_scalar("SELECT customer_id FROM assets WHERE id = $1")
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(Error::NotFound("asset"))?;
     crate::customers::lock_active(&mut tx, customer).await?;
-    let details = stored_details(&mut tx, customer, fields).await?;
-    let retired: bool =
-        sqlx::query_scalar("SELECT retired_at IS NOT NULL FROM assets WHERE id = $1 FOR UPDATE")
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await?;
+    let details = checked_details(&mut tx, customer, fields).await?;
+    let retired: bool = sqlx::query_scalar(
+        "SELECT retired_at IS NOT NULL FROM assets WHERE id = $1 FOR NO KEY UPDATE",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
     if retired && fields.holder_id.is_some() {
         return rule("a retired asset has no holder");
     }
@@ -275,19 +279,20 @@ pub async fn update_asset(db: &PgPool, id: Uuid, fields: &AssetFields) -> Result
     Ok(())
 }
 
-/// An asset's name and serial number as they are stored.
-struct Stored {
+/// An asset's name and serial number, cleaned to be stored.
+struct CleanDetails {
     name: String,
     serial_number: Option<String>,
 }
 
-/// Refuses details that break a rule for an asset of `customer`, which the caller has locked; the
-/// site and the holder are locked too, so that one retired or departing at the same time is seen.
-async fn stored_details(
+/// Checks the details of an asset of `customer`, which the caller has locked: refuses those that
+/// break a rule, and locks the holder and the site, so that one departing or retired at the same
+/// time is waited for. Returns the name and serial number to store.
+async fn checked_details(
     tx: &mut Transaction<'_, Postgres>,
     customer: Uuid,
     fields: &AssetFields,
-) -> Result<Stored> {
+) -> Result<CleanDetails> {
     let name = text(&fields.name, "name")?;
     kind_exists(&mut **tx, fields.kind_id).await?;
     if let Some(holder) = fields.holder_id {
@@ -326,7 +331,7 @@ async fn stored_details(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
-    Ok(Stored {
+    Ok(CleanDetails {
         name,
         serial_number,
     })

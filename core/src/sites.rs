@@ -73,6 +73,9 @@ pub async fn retire(db: &PgPool, id: Uuid) -> Result<()> {
     if retired {
         return rule("the site is already retired");
     }
+    // The site is locked before the requesters and assets at it, while changing a requester or an
+    // asset locks it before their site: both lock the customer first (FOR UPDATE), so the two
+    // never wait for each other.
     sqlx::query("UPDATE requesters SET site_id = NULL WHERE site_id = $1")
         .bind(id)
         .execute(&mut *tx)
