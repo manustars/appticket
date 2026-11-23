@@ -350,10 +350,10 @@
   "requester.departHint": "Un richiedente che lascia il cliente viene segnato come uscito e conserva lo storico; gli asset che ha in uso non sono più in uso a nessuno. Chi passa a un altro cliente diventa lì un nuovo richiedente, e gli indirizzi che tiene passano a quello.",
   "requester.depart": "Segna come uscito",
   "requester.confirmDepart": "Segnare {name} come uscito? Lo storico resta, ma non gli si apre alcun ticket, e ogni messaggio dai suoi indirizzi, risposte comprese, attende nella posta in arrivo. Può rientrare.",
-  "requester.departLeavesAssets": {
-    "one": "L'asset che ha in uso, {assets}, non sarà più in uso a nessuno.",
-    "many": "I {count} asset che ha in uso non saranno più in uso a nessuno: {assets}.",
-    "other": "I {count} asset che ha in uso non saranno più in uso a nessuno: {assets}."
+  "requester.confirmDepartWithAssets": {
+    "one": "Segnare {name} come uscito? Lo storico resta, ma non gli si apre alcun ticket, e ogni messaggio dai suoi indirizzi, risposte comprese, attende nella posta in arrivo. L'asset che ha in uso, {assets}, non sarà più in uso a nessuno. Può rientrare.",
+    "many": "Segnare {name} come uscito? Lo storico resta, ma non gli si apre alcun ticket, e ogni messaggio dai suoi indirizzi, risposte comprese, attende nella posta in arrivo. I {count} asset che ha in uso non saranno più in uso a nessuno: {assets}. Può rientrare.",
+    "other": "Segnare {name} come uscito? Lo storico resta, ma non gli si apre alcun ticket, e ogni messaggio dai suoi indirizzi, risposte comprese, attende nella posta in arrivo. I {count} asset che ha in uso non saranno più in uso a nessuno: {assets}. Può rientrare."
   },
   "requester.comeBackHint": "Un richiedente uscito può rientrare: i suoi messaggi tornano ad aprire e seguire i ticket.",
   "requester.comeBackNeedsAddress": "Per rientrare il richiedente ha bisogno di un indirizzo suo: aggiungine prima uno qui sopra.",
@@ -399,18 +399,27 @@
   "sites.retire": "Dismetti",
   "sites.retireNamed": "Dismetti {name}",
   "sites.retired": "Dismessa il {date}",
-  "sites.retireAsk": "Dismettere {name}?",
-  "sites.retireLeavesRequesters": {
-    "one": "{requesters} vi si trova e resterà senza sede.",
-    "many": "Vi si trovano {count} richiedenti, che resteranno senza sede: {requesters}.",
-    "other": "Vi si trovano {count} richiedenti, che resteranno senza sede: {requesters}."
+  "sites.confirmRetire": "Dismettere {name}? Resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+  "sites.confirmRetireWithRequesters": {
+    "one": "Dismettere {name}? {requesters} vi si trova e resterà senza sede. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+    "many": "Dismettere {name}? Vi si trovano {count} richiedenti, che resteranno senza sede: {requesters}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+    "other": "Dismettere {name}? Vi si trovano {count} richiedenti, che resteranno senza sede: {requesters}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset."
   },
-  "sites.retireLeavesAssets": {
-    "one": "Vi si trova l'asset {assets}, che resterà senza sede.",
-    "many": "Vi si trovano {count} asset, che resteranno senza sede: {assets}.",
-    "other": "Vi si trovano {count} asset, che resteranno senza sede: {assets}."
+  "sites.confirmRetireWithAssets": {
+    "one": "Dismettere {name}? L'asset {assets} non vi si troverà più. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+    "many": "Dismettere {name}? {count} asset non vi si troveranno più: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+    "other": "Dismettere {name}? {count} asset non vi si troveranno più: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset."
   },
-  "sites.retireStays": "La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+  "sites.confirmRetireWithRequesterAndAssets": {
+    "one": "Dismettere {name}? {requesters} vi si trova e resterà senza sede, e l'asset {assets} non vi si troverà più. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+    "many": "Dismettere {name}? {requesters} vi si trova e resterà senza sede, e {count} asset non vi si troveranno più: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+    "other": "Dismettere {name}? {requesters} vi si trova e resterà senza sede, e {count} asset non vi si troveranno più: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset."
+  },
+  "sites.confirmRetireWithRequestersAndAssets": {
+    "one": "Dismettere {name}? Vi si trovano {requesterCount} richiedenti, che resteranno senza sede: {requesters}; e l'asset {assets} non vi si troverà più. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+    "many": "Dismettere {name}? Vi si trovano {requesterCount} richiedenti, che resteranno senza sede: {requesters}; e {count} asset non vi si troveranno più: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+    "other": "Dismettere {name}? Vi si trovano {requesterCount} richiedenti, che resteranno senza sede: {requesters}; e {count} asset non vi si troveranno più: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset."
+  },
   "externalReferences.title": "Riferimenti esterni",
   "externalReferences.hint": "I nomi con cui altri sistemi indicano questo cliente, come un gruppo in uno strumento di monitoraggio. In ciascun sistema un nome indica un solo cliente; gli add-on li leggono.",
   "externalReferences.empty": "Nessun riferimento esterno.",

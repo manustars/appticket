@@ -348,9 +348,9 @@
   "requester.departHint": "A requester who leaves the customer is marked departed and keeps their history; the assets they hold lose their holder. Someone who moves to another customer becomes a new requester there, and the addresses they keep pass to it.",
   "requester.depart": "Mark as departed",
   "requester.confirmDepart": "Mark {name} as departed? Their history stays, but no ticket is opened for them, and every message from their addresses, replies included, waits in the inbox. They can come back.",
-  "requester.departLeavesAssets": {
-    "one": "The asset they hold, {assets}, loses its holder.",
-    "other": "The {count} assets they hold lose their holder: {assets}."
+  "requester.confirmDepartWithAssets": {
+    "one": "Mark {name} as departed? Their history stays, but no ticket is opened for them, and every message from their addresses, replies included, waits in the inbox. The asset they hold, {assets}, loses its holder. They can come back.",
+    "other": "Mark {name} as departed? Their history stays, but no ticket is opened for them, and every message from their addresses, replies included, waits in the inbox. The {count} assets they hold lose their holder: {assets}. They can come back."
   },
   "requester.comeBackHint": "A departed requester can come back: their messages open and follow tickets again.",
   "requester.comeBackNeedsAddress": "To come back, the requester needs an address of their own: add one above first.",
@@ -395,16 +395,23 @@
   "sites.retire": "Retire",
   "sites.retireNamed": "Retire {name}",
   "sites.retired": "Retired {date}",
-  "sites.retireAsk": "Retire {name}?",
-  "sites.retireLeavesRequesters": {
-    "one": "{requesters} is at it and will be left without a site.",
-    "other": "{count} requesters are at it and will be left without a site: {requesters}."
+  "sites.confirmRetire": "Retire {name}? It stays visible, but no requester or asset can be put at it any more.",
+  "sites.confirmRetireWithRequesters": {
+    "one": "Retire {name}? {requesters} is at it and will be left without a site. The site stays visible, but no requester or asset can be put at it any more.",
+    "other": "Retire {name}? {count} requesters are at it and will be left without a site: {requesters}. The site stays visible, but no requester or asset can be put at it any more."
   },
-  "sites.retireLeavesAssets": {
-    "one": "The asset {assets} is at it and will be left without a site.",
-    "other": "{count} assets are at it and will be left without a site: {assets}."
+  "sites.confirmRetireWithAssets": {
+    "one": "Retire {name}? The asset {assets} will no longer be at it. The site stays visible, but no requester or asset can be put at it any more.",
+    "other": "Retire {name}? {count} assets will no longer be at it: {assets}. The site stays visible, but no requester or asset can be put at it any more."
   },
-  "sites.retireStays": "The site stays visible, but no requester or asset can be put at it any more.",
+  "sites.confirmRetireWithRequesterAndAssets": {
+    "one": "Retire {name}? {requesters} is at it and will be left without a site, and the asset {assets} will no longer be at it. The site stays visible, but no requester or asset can be put at it any more.",
+    "other": "Retire {name}? {requesters} is at it and will be left without a site, and {count} assets will no longer be at it: {assets}. The site stays visible, but no requester or asset can be put at it any more."
+  },
+  "sites.confirmRetireWithRequestersAndAssets": {
+    "one": "Retire {name}? {requesterCount} requesters are at it and will be left without a site: {requesters}; and the asset {assets} will no longer be at it. The site stays visible, but no requester or asset can be put at it any more.",
+    "other": "Retire {name}? {requesterCount} requesters are at it and will be left without a site: {requesters}; and {count} assets will no longer be at it: {assets}. The site stays visible, but no requester or asset can be put at it any more."
+  },
   "externalReferences.title": "External references",
   "externalReferences.hint": "The names other systems use for this customer, such as a group in a monitoring tool. Within its system a name names one customer only; add-ons read them.",
   "externalReferences.empty": "No external references.",

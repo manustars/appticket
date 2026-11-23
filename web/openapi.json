@@ -5293,7 +5293,7 @@
       },
       "AddonAsset": {
         "type": "object",
-        "description": "An asset as add-ons read it: without its holder, who is a person.",
+        "description": "An asset as add-ons read it: what an add-on can be the source of, with its own site, but not\nits holder, who is a person, nor the site it is at through them.",
         "required": [
           "id",
           "customer_id",
@@ -5331,6 +5331,23 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "serial_number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "site": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SiteRef",
+                "description": "Its own site, one of its customer's."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "source_addon": {
             "type": [
@@ -6810,7 +6827,7 @@
           "held_assets": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/LinkedAsset"
+              "$ref": "#/components/schemas/Asset"
             },
             "description": "The assets they hold: these stay with the old customer, without a holder."
           },

@@ -310,7 +310,7 @@ export interface Messages {
   "requester.departHint": { plural: false; placeholders: never; tags: never }
   "requester.depart": { plural: false; placeholders: never; tags: never }
   "requester.confirmDepart": { plural: false; placeholders: "name"; tags: never }
-  "requester.departLeavesAssets": { plural: true; placeholders: "assets" | "count"; tags: never }
+  "requester.confirmDepartWithAssets": { plural: true; placeholders: "assets" | "count" | "name"; tags: never }
   "requester.comeBackHint": { plural: false; placeholders: never; tags: never }
   "requester.comeBackNeedsAddress": { plural: false; placeholders: never; tags: never }
   "requester.comeBack": { plural: false; placeholders: never; tags: never }
@@ -345,10 +345,11 @@ export interface Messages {
   "sites.retire": { plural: false; placeholders: never; tags: never }
   "sites.retireNamed": { plural: false; placeholders: "name"; tags: never }
   "sites.retired": { plural: false; placeholders: "date"; tags: never }
-  "sites.retireAsk": { plural: false; placeholders: "name"; tags: never }
-  "sites.retireLeavesRequesters": { plural: true; placeholders: "count" | "requesters"; tags: never }
-  "sites.retireLeavesAssets": { plural: true; placeholders: "assets" | "count"; tags: never }
-  "sites.retireStays": { plural: false; placeholders: never; tags: never }
+  "sites.confirmRetire": { plural: false; placeholders: "name"; tags: never }
+  "sites.confirmRetireWithRequesters": { plural: true; placeholders: "count" | "name" | "requesters"; tags: never }
+  "sites.confirmRetireWithAssets": { plural: true; placeholders: "assets" | "count" | "name"; tags: never }
+  "sites.confirmRetireWithRequesterAndAssets": { plural: true; placeholders: "assets" | "count" | "name" | "requesters"; tags: never }
+  "sites.confirmRetireWithRequestersAndAssets": { plural: true; placeholders: "assets" | "count" | "name" | "requesterCount" | "requesters"; tags: never }
   "externalReferences.title": { plural: false; placeholders: never; tags: never }
   "externalReferences.hint": { plural: false; placeholders: never; tags: never }
   "externalReferences.empty": { plural: false; placeholders: never; tags: never }
