@@ -235,13 +235,14 @@ How the provider's sign-in finds the agent:
   scopes). The identity is then linked to that agent. A provider that does not send
   `email_verified: true` in the ID token links nobody: check that yours does.
 - From then on, by the provider's stable identifier (`sub`), even after the address changed
-  there. The agent's name follows the provider at every sign-in; so does the e-mail, but only
-  when the provider says it is verified: an unverified one is ignored and the agent keeps the
-  address they have. A linked agent's name and e-mail cannot be edited in the help desk.
+  there. The agent's name and e-mail follow the provider at every sign-in, the e-mail whether or
+  not the provider says it is verified (that matters only the first time). When the provider
+  sends no name or no e-mail, the agent keeps the one they have. A linked agent's name and e-mail
+  cannot be edited in the help desk.
 - Refused, with the reason on the sign-in page: an unverified e-mail with no link yet, someone who
-  is not an agent, a deactivated agent (signing in never reactivates one), and a verified e-mail
-  that belongs to another agent, including the first time an agent already linked to another
-  identity of the provider.
+  is not an agent, a deactivated agent (signing in never reactivates one), and an e-mail, verified
+  or not, that belongs to another agent, including the first time an agent already linked to
+  another identity of the provider.
 
 A session opened through the provider lasts `sessionHours`, so that an account disabled there
 loses access within hours; one opened with a local password lasts 14 days. Signing out ends the
