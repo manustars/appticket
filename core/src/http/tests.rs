@@ -218,6 +218,43 @@ async fn repeated_failed_sign_ins_are_refused_for_known_and_unknown_accounts_ali
     assert_eq!(again.status, StatusCode::NO_CONTENT);
 }
 
+/// An agent without a local password is answered as a wrong password is, and the attempt counts
+/// as a failure; signed in through the identity provider, they are told they have none.
+#[sqlx::test]
+async fn an_agent_without_a_local_password_cannot_sign_in_with_one_through_the_api(db: PgPool) {
+    let api = Client::new(&db).await;
+    let state = &api.state;
+    let vera = crate::auth::tests::agent_without_local_password(&db, "vera.lind@example.com").await;
+    let none = sign_in_from(state, "203.0.113.7", &[], "vera.lind@example.com", "guess").await;
+    let wrong = sign_in_from(state, "203.0.113.8", &[], "marco@northgate.test", "guess").await;
+    assert_eq!(none.status, StatusCode::UNAUTHORIZED);
+    assert_eq!((none.status, &none.body), (wrong.status, &wrong.body));
+    for _ in 1..9 {
+        sign_in_from(state, "203.0.113.7", &[], "vera.lind@example.com", "").await;
+    }
+    assert_refused(&sign_in_from(state, "198.51.100.4", &[], "vera.lind@example.com", "x").await);
+
+    let token = crate::auth::open_session(
+        &db,
+        vera,
+        crate::auth::OpenedWith::OpenIdConnect,
+        time::Duration::HOUR,
+    )
+    .await
+    .unwrap();
+    let vera = Client {
+        cookie: format!("{}={token}", crate::auth::SESSION_COOKIE),
+        ..Client::anonymous(state.clone())
+    };
+    assert_eq!(vera.get("/api/session").await["local_password"], false);
+    assert_eq!(api.get("/api/session").await["local_password"], true);
+    let change = serde_json::json!({"current_password": "", "new_password": "a long new password"});
+    let (status, _) = vera
+        .call("PUT", "/api/session/password", Some(change))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
 /// With no trusted proxy, `X-Forwarded-For` is the client's own writing: a client cannot pick
 /// the address it is counted under.
 #[sqlx::test]
