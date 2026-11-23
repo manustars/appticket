@@ -284,4 +284,103 @@ mod tests {
             [(ada, Some("ada@brightfield.test".to_owned()))]
         );
     }
+
+    /// Runs `sql` with the requester as `$1` and `text` as `$2`, as code that bypasses the core
+    /// would.
+    async fn run(db: &PgPool, sql: &'static str, requester: Uuid, text: &str) -> bool {
+        sqlx::query(sql)
+            .bind(requester)
+            .bind(text.to_owned())
+            .execute(db)
+            .await
+            .is_ok()
+    }
+
+    const MARK: &str = "INSERT INTO key_requesters (requester_id, customer_id, contact_address)
+                        SELECT id, customer_id, $2 FROM requesters WHERE id = $1";
+
+    /// The database keeps a departed requester from being a key requester, also when the code is
+    /// bypassed: one is not marked, and a key requester does not depart.
+    #[sqlx::test]
+    async fn the_database_keeps_departed_requesters_from_being_key_requesters(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        let depart = "UPDATE requesters SET departed_at = now() WHERE id = $1 AND $2 <> ''";
+
+        assert!(run(&db, MARK, ada, "ada@brightfield.test").await);
+        assert!(
+            !run(&db, depart, ada, "x").await,
+            "a key requester departed"
+        );
+        assert!(run(&db, depart, lena, "x").await);
+        assert!(
+            !run(&db, MARK, lena, "lena@brightfield.test").await,
+            "a departed requester was marked"
+        );
+    }
+
+    /// The database keeps a key requester's contact address among their addresses, and a key
+    /// requester with their customer, also when the code is bypassed.
+    #[sqlx::test]
+    async fn the_database_keeps_the_contact_address_and_the_customer(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        crate::requesters::add_address(&db, ada, "ada@home.test")
+            .await
+            .unwrap();
+
+        assert!(
+            !run(&db, MARK, ada, "lena@brightfield.test").await,
+            "written to at another requester's address"
+        );
+        assert!(
+            !run(&db, MARK, ada, "ada@elsewhere.test").await,
+            "written to at an address of nobody"
+        );
+        assert!(run(&db, MARK, ada, "ada@home.test").await);
+        assert!(
+            !run(
+                &db,
+                "DELETE FROM requester_addresses WHERE requester_id = $1 AND address = $2",
+                ada,
+                "ada@home.test"
+            )
+            .await,
+            "the contact address was removed"
+        );
+        // A merge is the one way an address of a requester who has not departed passes on.
+        let mut tx = db.begin().await.unwrap();
+        sqlx::query("INSERT INTO requester_merges (merged_id, kept_id) VALUES ($1, $2)")
+            .bind(ada)
+            .bind(lena)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let passed = sqlx::query(
+            "UPDATE requester_addresses SET requester_id = $2 WHERE address = 'ada@home.test'",
+        )
+        .bind(ada)
+        .bind(lena)
+        .execute(&mut *tx)
+        .await;
+        assert!(passed.is_err(), "the contact address passed to another");
+        drop(tx);
+        assert!(
+            !run(
+                &db,
+                "UPDATE requesters SET customer_id = $2::uuid WHERE id = $1",
+                ada,
+                &harbor.to_string()
+            )
+            .await,
+            "a key requester moved to another customer"
+        );
+        assert_eq!(
+            contacts(&db, brightfield).await,
+            [(ada, Some("ada@home.test".to_owned())), (lena, None)]
+        );
+    }
 }

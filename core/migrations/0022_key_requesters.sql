@@ -21,3 +21,57 @@ CREATE TABLE key_requesters (
 );
 
 CREATE INDEX key_requesters_customer ON key_requesters (customer_id);
+
+-- A key requester has not departed: a departed requester is not marked, and one who departs stops
+-- being a key requester first. The requester is locked, so that one departing at the same time is
+-- seen.
+CREATE FUNCTION key_requesters_are_present() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_TABLE_NAME = 'key_requesters' THEN
+        IF EXISTS (SELECT 1 FROM requesters WHERE id = NEW.requester_id AND departed_at IS NOT NULL
+                   FOR SHARE) THEN
+            RAISE EXCEPTION 'a departed requester is not a key requester'
+                USING ERRCODE = 'check_violation';
+        END IF;
+    ELSIF EXISTS (SELECT 1 FROM key_requesters WHERE requester_id = NEW.id) THEN
+        RAISE EXCEPTION 'a key requester does not depart: they stop being one first'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER key_requesters_are_present
+    AFTER INSERT OR UPDATE OF requester_id ON key_requesters
+    FOR EACH ROW EXECUTE FUNCTION key_requesters_are_present();
+
+CREATE TRIGGER departed_requesters_are_not_key
+    AFTER UPDATE OF departed_at ON requesters
+    FOR EACH ROW
+    WHEN (NEW.departed_at IS NOT NULL)
+    EXECUTE FUNCTION key_requesters_are_present();
+
+-- A message the help desk sends on a ticket goes to one person (docs/domain-rules.md, "Tickets"):
+-- the ticket's requester, at one of their addresses, or a key requester of the ticket's customer,
+-- at their contact address. A ticket with neither gets no message.
+CREATE FUNCTION messages_go_to_the_requester_or_key_requesters() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM tickets t
+                   JOIN requester_addresses a ON a.requester_id = t.requester_id
+                   WHERE t.id = NEW.ticket_id AND a.address = NEW.to_address)
+       AND NOT EXISTS (SELECT 1 FROM tickets t
+                       JOIN key_requesters k ON k.customer_id = t.customer_id
+                       WHERE t.id = NEW.ticket_id AND k.contact_address = NEW.to_address) THEN
+        RAISE EXCEPTION 'a message goes to the ticket''s requester or to a key requester of its customer'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER messages_go_to_the_requester_or_key_requesters
+    AFTER INSERT ON messages
+    FOR EACH ROW
+    WHEN (NEW.direction = 'outbound')
+    EXECUTE FUNCTION messages_go_to_the_requester_or_key_requesters();
