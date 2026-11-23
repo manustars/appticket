@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Context;
 use axum::{
@@ -57,6 +58,8 @@ pub struct AppState {
     pub sign_in_limits: SignInLimits,
     /// The reverse proxies whose forwarded client addresses are believed.
     pub trusted_proxies: TrustedProxies,
+    /// The OpenID Connect identity provider agents may sign in through, when configured.
+    pub identity_provider: Option<Arc<crate::oidc::Provider>>,
 }
 
 #[cfg(test)]
@@ -68,6 +71,7 @@ impl AppState {
             mail: MailStatus::default(),
             sign_in_limits: SignInLimits::for_tests(5, std::time::Duration::from_secs(15 * 60)),
             trusted_proxies: TrustedProxies::default(),
+            identity_provider: None,
         }
     }
 }
@@ -131,6 +135,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(health))
         .routes(routes!(current_session, sign_in, sign_out))
         .routes(routes!(change_password))
+        .routes(routes!(sign_in_options))
         .merge(tickets::routes())
         .merge(inbox::routes())
         .merge(directory::routes())
@@ -307,6 +312,32 @@ async fn current_session(agent: SignedIn) -> Json<Agent> {
         email: agent.email,
         name: agent.name,
         role_name: agent.role_name,
+    })
+}
+
+/// How agents can sign in, for the sign-in page.
+#[derive(Serialize, ToSchema)]
+struct SignInOptions {
+    /// The identity provider's button, when one is configured.
+    identity_provider: Option<IdentityProviderButton>,
+}
+
+#[derive(Serialize, ToSchema)]
+struct IdentityProviderButton {
+    /// What the button names: "Sign in with <label>".
+    label: String,
+}
+
+/// How agents can sign in; asked before anyone is signed in.
+#[utoipa::path(get, path = "/api/session/options", tag = "session",
+    responses((status = OK, body = SignInOptions)))]
+async fn sign_in_options(State(state): State<AppState>) -> Json<SignInOptions> {
+    Json(SignInOptions {
+        identity_provider: state.identity_provider.as_ref().map(|provider| {
+            IdentityProviderButton {
+                label: provider.label().to_owned(),
+            }
+        }),
     })
 }
 
