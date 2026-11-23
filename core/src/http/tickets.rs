@@ -30,6 +30,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(move_ticket))
         .routes(routes!(set_parent, clear_parent))
         .routes(routes!(resolve_children))
+        .routes(routes!(announce))
 }
 
 #[derive(Serialize, ToSchema, sqlx::FromRow)]
@@ -412,6 +413,38 @@ async fn resolve_children(
         crate::parents::resolve_children(&state.db, sender, number, agent.id, &request.body)
             .await?,
     ))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct NewAnnouncement {
+    /// Sent to each key requester of the customers the failure affects, each person once.
+    body: String,
+}
+
+/// Sends an announcement from this parent ticket, which is not closed, to the key requesters of
+/// its children's customers and of the customers that use the services it links, one message to
+/// each person. No ticket changes state.
+#[utoipa::path(post, path = "/api/tickets/{number}/announcements", tag = "tickets",
+    params(("number" = i64, Path, description = "The parent ticket's number")),
+    request_body = NewAnnouncement,
+    responses((status = CREATED, body = crate::announcements::Announcement),
+        (status = NOT_FOUND, body = Problem), (status = CONFLICT, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn announce(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(number): Path<i64>,
+    Json(request): Json<NewAnnouncement>,
+) -> Result<(StatusCode, Json<crate::announcements::Announcement>), ApiError> {
+    agent.grant.require(Permission::Reply)?;
+    let Some(sender) = &state.sender else {
+        return Err(ApiError::Conflict(
+            "sending mail is not configured on this help desk".into(),
+        ));
+    };
+    let sent =
+        crate::announcements::send(&state.db, sender, number, agent.id, &request.body).await?;
+    Ok((StatusCode::CREATED, Json(sent)))
 }
 
 #[derive(Deserialize, ToSchema)]
