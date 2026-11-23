@@ -58,6 +58,16 @@ impl Client {
         }
     }
 
+    /// A client nobody signed in with, of the core in `state`.
+    pub fn anonymous(state: AppState) -> Client {
+        Client {
+            state,
+            cookie: String::new(),
+            bearer: None,
+            agent: Uuid::nil(),
+        }
+    }
+
     /// A client that authenticates with an add-on's bearer token instead of a session.
     pub fn new_with_token(db: &PgPool, token: &str, agent: Uuid) -> Client {
         Client {
@@ -2202,4 +2212,48 @@ async fn announcements_are_sent_and_listed_through_the_api(db: PgPool) {
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, json) = replier.call("POST", &uri, body).await;
     assert_eq!(status, StatusCode::CONFLICT, "from a closed parent: {json}");
+}
+
+/// The sign-in page offers the identity provider only when one is configured.
+#[sqlx::test]
+async fn the_sign_in_page_offers_the_identity_provider_only_when_configured(db: PgPool) {
+    let without = Client::anonymous(AppState::for_tests(&db));
+    let (status, options) = without.call("GET", "/api/session/options", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(options, serde_json::json!({"identity_provider": null}));
+    let (status, _) = without
+        .call("GET", "/api/session/identity-provider", None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = without
+        .call(
+            "GET",
+            "/api/session/identity-provider/callback?code=c&state=s",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let settings = crate::oidc::Settings {
+        issuer: Some("https://login.example.com/realms/staff".to_owned()),
+        client_id: Some("helpdesk".to_owned()),
+        client_secret: Some("invented-secret".to_owned()),
+        client_secret_file: None,
+        label: Some("Northgate".to_owned()),
+        session_hours: 12,
+        public_url: Some("https://helpdesk.example.com".to_owned()),
+    };
+    let config = crate::oidc::Config::from_settings(settings)
+        .unwrap()
+        .unwrap();
+    let with = Client::anonymous(AppState {
+        identity_provider: Some(crate::oidc::Provider::new(config).unwrap()),
+        ..AppState::for_tests(&db)
+    });
+    let (status, options) = with.call("GET", "/api/session/options", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        options,
+        serde_json::json!({"identity_provider": {"label": "Northgate"}})
+    );
 }

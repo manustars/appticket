@@ -25,6 +25,7 @@ mod import;
 mod key_requesters;
 mod mail;
 mod mail_status;
+mod oidc;
 mod outbound;
 mod parents;
 mod proposals;
@@ -101,6 +102,8 @@ enum Command {
         #[arg(long, env = "HD_TRUSTED_PROXIES", default_value = "", hide_default_value = true,
             value_parser = http::parse_proxies)]
         trusted_proxies: http::TrustedProxies,
+        #[command(flatten)]
+        identity_provider: oidc::Settings,
     },
     /// Apply pending database migrations and exit.
     Migrate,
@@ -173,7 +176,17 @@ async fn main() -> anyhow::Result<()> {
             sign_in_failures,
             sign_in_window_seconds,
             trusted_proxies,
+            identity_provider,
         } => {
+            // A provider configured in part stops the core; one that is down at startup does not,
+            // since it is asked only when an agent signs in through it.
+            let identity_provider = match oidc::Config::from_settings(identity_provider)? {
+                Some(config) => {
+                    tracing::info!(issuer = %config.issuer.as_str(), "agents can sign in through the OpenID Connect identity provider");
+                    Some(oidc::Provider::new(config)?)
+                }
+                None => None,
+            };
             if let Some(dir) = &web_dir
                 && !dir.join("index.html").is_file()
             {
@@ -239,6 +252,7 @@ async fn main() -> anyhow::Result<()> {
                     Duration::from_secs(sign_in_window_seconds),
                 ),
                 trusted_proxies,
+                identity_provider,
             };
             http::serve(state, listen, web_dir).await
         }
