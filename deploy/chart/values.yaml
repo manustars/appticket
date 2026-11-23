@@ -67,7 +67,7 @@ core:
 
   # HD_PUBLIC_URL: the address agents open the help desk at, such as
   # https://helpdesk.example.com; the identity provider sends them back to it. Empty: https:// and
-  # ingress.host when the Ingress is enabled.
+  # ingress.host when the Ingress is enabled; required with an identity provider otherwise.
   publicUrl: ""
 
   # Signing in through an OpenID Connect identity provider (docs/deploy.md). Off while the issuer

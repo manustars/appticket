@@ -100,6 +100,7 @@ spec:
             {{- end }}
             {{- with $core.oidc }}
             {{- if .issuer }}
+            {{- $_ := required "core.publicUrl is required with core.oidc.issuer when ingress.enabled is false" $publicUrl }}
             - name: HD_OIDC_ISSUER
               value: {{ .issuer | quote }}
             - name: HD_OIDC_CLIENT_ID
