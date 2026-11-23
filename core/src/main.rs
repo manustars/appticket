@@ -84,6 +84,22 @@ enum Command {
         /// served, as in development, where Vite serves the UI.
         #[arg(long, env = "HD_WEB_DIR")]
         web_dir: Option<PathBuf>,
+        /// Failed sign-ins within the window, for an account or from an address, after which
+        /// attempts are slowed: the next four wait 1, 2, 4 and 8 seconds, and attempts after
+        /// those are refused until a window has passed since the last failure.
+        #[arg(long, env = "HD_SIGN_IN_FAILURES", default_value_t = 5,
+            value_parser = clap::value_parser!(u32).range(1..=100))]
+        sign_in_failures: u32,
+        /// Seconds over which failed sign-ins are counted, and that a refusal lasts.
+        #[arg(long, env = "HD_SIGN_IN_WINDOW_SECONDS", default_value_t = 900,
+            value_parser = clap::value_parser!(u64).range(1..=86_400))]
+        sign_in_window_seconds: u64,
+        /// Reverse proxies, as addresses or networks separated by commas (192.0.2.10,
+        /// 198.51.100.0/24), whose X-Forwarded-For gives the client's address. Without them the
+        /// header is ignored and the connection's address is the client's.
+        #[arg(long, env = "HD_TRUSTED_PROXIES", value_delimiter = ',',
+            value_parser = http::parse_proxy)]
+        trusted_proxies: Vec<ipnet::IpNet>,
     },
     /// Apply pending database migrations and exit.
     Migrate,
@@ -153,6 +169,9 @@ async fn main() -> anyhow::Result<()> {
             imap_import_existing,
             imap_poll_seconds,
             web_dir,
+            sign_in_failures,
+            sign_in_window_seconds,
+            trusted_proxies,
         } => {
             if let Some(dir) = &web_dir
                 && !dir.join("index.html").is_file()
@@ -207,7 +226,20 @@ async fn main() -> anyhow::Result<()> {
                 addons::http_client()?,
                 Duration::from_secs(5),
             ));
-            http::serve(http::AppState { db, sender, mail }, listen, web_dir).await
+            if trusted_proxies.is_empty() {
+                tracing::info!("HD_TRUSTED_PROXIES is not set: X-Forwarded-For is ignored");
+            }
+            let state = http::AppState {
+                db,
+                sender,
+                mail,
+                sign_in_limits: sign_in_limits::SignInLimits::new(
+                    sign_in_failures,
+                    Duration::from_secs(sign_in_window_seconds),
+                ),
+                trusted_proxies: http::TrustedProxies::new(trusted_proxies),
+            };
+            http::serve(state, listen, web_dir).await
         }
     }
 }
