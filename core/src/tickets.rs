@@ -293,8 +293,8 @@ pub struct Moved {
 }
 
 /// Moves the ticket to another customer. A requester of the old customer either moves along,
-/// taking all of their tickets (closed ones too, see [`move_requester`]), or leaves this ticket.
-/// Links that do not fit the new customer are removed.
+/// taking all of their tickets (closed ones too, see [`crate::requesters::move_requester`]), or
+/// leaves this ticket. Links that do not fit the new customer are removed.
 pub async fn move_to_customer(
     db: &PgPool,
     number: i64,
@@ -302,23 +302,38 @@ pub async fn move_to_customer(
     requester: RequesterMove,
 ) -> Result<Moved> {
     let mut tx = db.begin().await?;
-    let (ticket_id, state) = lock(&mut tx, number).await?;
+    // Read before any lock: locks are taken customers first, then requesters, then tickets.
+    let (ticket_id, state, current, requester_id): (Uuid, TicketState, Uuid, Option<Uuid>) =
+        sqlx::query_as(
+            "SELECT id, state, customer_id, requester_id FROM tickets WHERE number = $1",
+        )
+        .bind(number)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(Error::NotFound("ticket"))?;
     not_closed(state)?;
-    let (current, requester_id): (Uuid, Option<Uuid>) =
+    if current == customer {
+        return rule("the ticket already belongs to this customer");
+    }
+    // The requester who moves along, if any.
+    let moving = requester_id.filter(|_| requester == RequesterMove::Move);
+    if let Some(moving) = moving {
+        crate::requesters::lock_for_move(&mut tx, moving, customer).await?;
+    }
+    let (_, state) = lock(&mut tx, number).await?;
+    not_closed(state)?;
+    let now: (Uuid, Option<Uuid>) =
         sqlx::query_as("SELECT customer_id, requester_id FROM tickets WHERE id = $1")
             .bind(ticket_id)
             .fetch_one(&mut *tx)
             .await?;
-    if current == customer {
-        return rule("the ticket already belongs to this customer");
+    if now != (current, requester_id) {
+        return rule("the ticket has just changed; reload and try again");
     }
-    let moved = match (requester_id, requester) {
-        (Some(requester_id), RequesterMove::Move) => {
-            crate::requesters::lock_with_customer(&mut tx, requester_id).await?;
-            move_requester(&mut tx, requester_id, customer).await?
-        }
-        (Some(_), RequesterMove::Remove) | (None, _) => {
-            receives_tickets(&mut tx, customer, &[ticket_id]).await?;
+    let moved = match moving {
+        Some(moving) => crate::requesters::move_requester(&mut tx, moving, customer).await?,
+        None => {
+            ensure_ticket_may_move_to(&mut tx, ticket_id, customer).await?;
             let unlinked = crate::catalog::unlink_for_move(&mut tx, &[ticket_id], customer).await?;
             sqlx::query(
                 "UPDATE tickets SET customer_id = $2, requester_id = NULL, updated_at = now()
@@ -335,50 +350,12 @@ pub async fn move_to_customer(
     Ok(moved)
 }
 
-/// Moves a requester identified with the wrong customer to `customer`, with all of their tickets,
-/// closed ones included; links that do not fit the new customer are removed. The requester and
-/// their customer are locked by the caller. Their site is one of the old customer's, so they
-/// leave it.
-pub(crate) async fn move_requester(
+/// Guards a ticket moving alone: `customer` must exist and not be offboarded, and the ticket must
+/// not be a parent ticket, which stays with the help desk's own organization.
+async fn ensure_ticket_may_move_to(
     tx: &mut Transaction<'_, Postgres>,
-    requester: Uuid,
+    ticket: Uuid,
     customer: Uuid,
-) -> Result<Moved> {
-    let current: Uuid = sqlx::query_scalar("SELECT customer_id FROM requesters WHERE id = $1")
-        .bind(requester)
-        .fetch_one(&mut **tx)
-        .await?;
-    if current == customer {
-        return rule("the requester already belongs to this customer");
-    }
-    let affected: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM tickets WHERE requester_id = $1")
-        .bind(requester)
-        .fetch_all(&mut **tx)
-        .await?;
-    receives_tickets(tx, customer, &affected).await?;
-    let unlinked = crate::catalog::unlink_for_move(tx, &affected, customer).await?;
-    // The foreign key cascades the new customer to every ticket of the requester.
-    sqlx::query("UPDATE requesters SET customer_id = $2, site_id = NULL WHERE id = $1")
-        .bind(requester)
-        .bind(customer)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query("UPDATE tickets SET updated_at = now() WHERE requester_id = $1")
-        .bind(requester)
-        .execute(&mut **tx)
-        .await?;
-    Ok(Moved {
-        moved: affected.len() as i64,
-        unlinked,
-    })
-}
-
-/// Refuses to move `tickets` to `customer` when it is missing or offboarded, or when one of them is
-/// a parent ticket, which stays with the help desk's own organization.
-async fn receives_tickets(
-    tx: &mut Transaction<'_, Postgres>,
-    customer: Uuid,
-    tickets: &[Uuid],
 ) -> Result<()> {
     let offboarded: Option<bool> =
         sqlx::query_scalar("SELECT offboarded_at IS NOT NULL FROM customers WHERE id = $1")
@@ -391,8 +368,8 @@ async fn receives_tickets(
         Some(false) => {}
     }
     let parent: bool =
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM tickets WHERE parent_id = ANY($1))")
-            .bind(tickets)
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM tickets WHERE parent_id = $1)")
+            .bind(ticket)
             .fetch_one(&mut **tx)
             .await?;
     if parent {

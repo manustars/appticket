@@ -7,7 +7,6 @@ import {
   listCustomers,
   listCustomerServices,
   moveTicket,
-  previewRequesterMove,
   reply,
   setAssignee,
   setPriority,
@@ -16,7 +15,6 @@ import {
   type AgentEntry,
   type CustomerEntry,
   type Moved,
-  type MovePreview,
   type Priority,
   type Service,
   type TicketDetail,
@@ -32,7 +30,8 @@ import { requesterLabel } from './people'
 import { requesterHref } from './route'
 import { useSession } from './session'
 import { TicketAssets, TicketFamily, TicketServices } from './TicketLinks'
-import { UnlinkWarning } from './UnlinkWarning'
+import { RequesterMoveWarnings, UnlinkWarning } from './MoveWarnings'
+import { useMovePreview } from './movePreview'
 import { useLoad } from './useAction'
 
 const states: TicketState[] = ['open', 'waiting', 'resolved', 'closed']
@@ -589,8 +588,9 @@ function MoveCustomer({ ticket, customers, busy, onCancel, onMove, onSignedOut }
   const id = useId()
   const requester = ticket.requester
   const others = requester ? requester.ticket_count - 1 : 0
-  // A requester who moves too takes their other tickets along, with those tickets' links.
-  const withRequester = !!requester && requesterMove === 'move' && others > 0
+  // A requester who moves too takes their other tickets along, with those tickets' links, and
+  // leaves their site.
+  const withRequester = !!requester && requesterMove === 'move'
   const linked = ticket.assets.length + ticket.services.length > 0
   // What the chosen customer uses decides which linked services stay.
   const loadUsed = useCallback(
@@ -598,17 +598,12 @@ function MoveCustomer({ ticket, customers, busy, onCancel, onMove, onSignedOut }
       (linked && customerId && !withRequester ? listCustomerServices(customerId) : Promise.resolve([])),
     [linked, customerId, withRequester])
   const used = useLoad(loadUsed, onSignedOut)
-  const requesterId = requester?.id
-  const loadPreview = useCallback(
-    (): Promise<MovePreview | null> =>
-      (withRequester && requesterId && customerId ? previewRequesterMove(requesterId, customerId) : Promise.resolve(null)),
-    [withRequester, requesterId, customerId])
-  const preview = useLoad(loadPreview, onSignedOut)
+  const preview = useMovePreview(withRequester && requester ? requester.id : null, customerId, onSignedOut)
   const target = customers?.find((c) => c.id === customerId)
   // What the move unlinks, once the chosen customer's services (or the requester's preview) are in.
   const unlinks = !target ? null
     : withRequester
-      ? (preview.data ? { assets: preview.data.assets, services: preview.data.services } : null)
+      ? preview.data
       : (used.data
         ? { assets: ticket.assets, services: ticket.services.filter((s) => !used.data?.some((u) => u.id === s.id)) }
         : null)
@@ -645,12 +640,16 @@ function MoveCustomer({ ticket, customers, busy, onCancel, onMove, onSignedOut }
           </label>
         </fieldset>
       )}
+      {withRequester && target && preview.data && (
+        <RequesterMoveWarnings preview={preview.data} from={ticket.customer.name} to={target.name}
+          heading={others > 0 ? t('move.willUnlinkWithRequester') : t('move.willUnlink')} />
+      )}
+      {!withRequester && target && unlinks && (
+        <UnlinkWarning from={ticket.customer.name} to={target.name} assets={unlinks.assets}
+          services={unlinks.services} heading={t('move.willUnlink')} />
+      )}
       {target && unlinks ? (
-        unlinks.assets.length + unlinks.services.length > 0 ? (
-          <UnlinkWarning from={ticket.customer.name} to={target.name} assets={unlinks.assets}
-            services={unlinks.services}
-            heading={withRequester ? t('move.willUnlinkWithRequester') : t('move.willUnlink')} />
-        ) : linked && (
+        linked && unlinks.assets.length + unlinks.services.length === 0 && (
           <div className="warning" role="note"><p>{t('move.keepsLinks', { customer: target.name })}</p></div>
         )
       ) : linked && (

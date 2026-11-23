@@ -1774,6 +1774,7 @@ export interface components {
             assets: components["schemas"]["LinkedAsset"][];
             /** @description The services linked to their tickets that the new customer does not use: unlinked too. */
             services: components["schemas"]["LinkedService"][];
+            site?: components["schemas"]["SiteRef"] | null;
             /**
              * Format: int64
              * @description How many tickets would move with the requester, closed ones included.
