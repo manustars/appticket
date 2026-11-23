@@ -203,8 +203,8 @@ kubectl -n helpdesk exec -i deploy/hd-core -- hd import --customers - --apply < 
 The command lists every row with what it does, or why it is left out. Run on a machine with
 access to the database, `hd import --customers customers.csv --sites sites.csv` takes both
 files in one import and writes the rows left out to `customers-left-out.csv` and
-`sites-left-out.csv` beside them (or into `--left-out DIR`). `hd import --help` describes the
-columns too.
+`sites-left-out.csv` beside them (or into `--left-out DIR`); it refuses to write one over a file
+it imports. `hd import --help` describes the columns too.
 
 ## The Assistant
 
