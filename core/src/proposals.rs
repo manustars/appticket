@@ -209,8 +209,15 @@ pub async fn submit(
                     if body.trim().is_empty() {
                         return rule("a draft reply cannot be empty");
                     }
-                    if !has_requester {
-                        return rule("the ticket has no requester to reply to");
+                    // Without a requester, a reply goes to the customer's key requesters.
+                    if !has_requester
+                        && crate::key_requesters::of_customer(&mut *tx, customer)
+                            .await?
+                            .is_empty()
+                    {
+                        return rule(
+                            "the ticket has no requester and its customer has no key requesters: there is nobody to reply to",
+                        );
                     }
                 }
                 Content::Priority { .. } | Content::Triage(_) => {}
@@ -664,6 +671,32 @@ mod tests {
         let draft = crate::drafts::get(&db, n, agent).await.unwrap().unwrap();
         assert_eq!(draft.body, "Buongiorno Ada,");
         assert_eq!(draft.mode, crate::drafts::DraftMode::Reply);
+    }
+
+    /// A draft reply is proposed on a ticket without a requester when its customer has key
+    /// requesters, who would get the reply; with neither there is nobody to reply to.
+    #[sqlx::test]
+    async fn a_draft_reply_without_a_requester_needs_key_requesters(db: PgPool) {
+        assistant(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        crate::key_requesters::mark(&db, lena, None).await.unwrap();
+        let ours = testing::ticket(&db, brightfield, None, "b@monitor.test").await;
+        let theirs = testing::ticket(&db, harbor, None, "h@monitor.test").await;
+        let draft = || Content::Reply {
+            body: "Buongiorno,".into(),
+        };
+
+        submit(&db, "assistant", Target::Ticket(ours), &draft(), &en(""))
+            .await
+            .unwrap();
+        let Err(Error::Rule(why)) =
+            submit(&db, "assistant", Target::Ticket(theirs), &draft(), &en("")).await
+        else {
+            panic!("a draft reply to nobody");
+        };
+        assert!(why.contains("key requesters"), "{why}");
     }
 
     #[sqlx::test]

@@ -301,6 +301,20 @@ mod tests {
             .is_ok()
     }
 
+    /// Like [`run`], for a statement the database refuses: why it does.
+    async fn refusal(db: &PgPool, sql: &'static str, requester: Uuid, text: &str) -> String {
+        sqlx::query(sql)
+            .bind(requester)
+            .bind(text.to_owned())
+            .execute(db)
+            .await
+            .expect_err(sql)
+            .to_string()
+    }
+
+    /// The key that keeps a contact address among the requester's own addresses.
+    const CONTACT_KEY: &str = "key_requesters_contact_address_requester_id_fkey";
+
     const MARK: &str = "INSERT INTO key_requesters (requester_id, customer_id, contact_address)
                         SELECT id, customer_id, $2 FROM requesters WHERE id = $1";
 
@@ -314,15 +328,11 @@ mod tests {
         let depart = "UPDATE requesters SET departed_at = now() WHERE id = $1 AND $2 <> ''";
 
         assert!(run(&db, MARK, ada, "ada@brightfield.test").await);
-        assert!(
-            !run(&db, depart, ada, "x").await,
-            "a key requester departed"
-        );
+        let why = refusal(&db, depart, ada, "x").await;
+        assert!(why.contains("a key requester does not depart"), "{why}");
         assert!(run(&db, depart, lena, "x").await);
-        assert!(
-            !run(&db, MARK, lena, "lena@brightfield.test").await,
-            "a departed requester was marked"
-        );
+        let why = refusal(&db, MARK, lena, "lena@brightfield.test").await;
+        assert!(why.contains("a departed requester is not"), "{why}");
     }
 
     /// The database keeps a key requester's contact address among their addresses, and a key
@@ -337,24 +347,22 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(
-            !run(&db, MARK, ada, "lena@brightfield.test").await,
-            "written to at another requester's address"
-        );
-        assert!(
-            !run(&db, MARK, ada, "ada@elsewhere.test").await,
-            "written to at an address of nobody"
-        );
+        // Written to at another requester's address, or at an address of nobody.
+        for address in ["lena@brightfield.test", "ada@elsewhere.test"] {
+            let why = refusal(&db, MARK, ada, address).await;
+            assert!(why.contains(CONTACT_KEY), "{why}");
+        }
         assert!(run(&db, MARK, ada, "ada@home.test").await);
+        let why = refusal(
+            &db,
+            "DELETE FROM requester_addresses WHERE requester_id = $1 AND address = $2",
+            ada,
+            "ada@home.test",
+        )
+        .await;
         assert!(
-            !run(
-                &db,
-                "DELETE FROM requester_addresses WHERE requester_id = $1 AND address = $2",
-                ada,
-                "ada@home.test"
-            )
-            .await,
-            "the contact address was removed"
+            why.contains(CONTACT_KEY),
+            "the contact address was removed: {why}"
         );
         // A merge is the one way an address of a requester who has not departed passes on.
         let mut tx = db.begin().await.unwrap();
@@ -370,18 +378,21 @@ mod tests {
         .bind(ada)
         .bind(lena)
         .execute(&mut *tx)
-        .await;
-        assert!(passed.is_err(), "the contact address passed to another");
+        .await
+        .expect_err("the contact address passed to another")
+        .to_string();
+        assert!(passed.contains(CONTACT_KEY), "{passed}");
         drop(tx);
+        let why = refusal(
+            &db,
+            "UPDATE requesters SET customer_id = $2::uuid WHERE id = $1",
+            ada,
+            &harbor.to_string(),
+        )
+        .await;
         assert!(
-            !run(
-                &db,
-                "UPDATE requesters SET customer_id = $2::uuid WHERE id = $1",
-                ada,
-                &harbor.to_string()
-            )
-            .await,
-            "a key requester moved to another customer"
+            why.contains("key_requesters_requester_id_customer_id_fkey"),
+            "a key requester moved to another customer: {why}"
         );
         assert_eq!(
             contacts(&db, brightfield).await,
