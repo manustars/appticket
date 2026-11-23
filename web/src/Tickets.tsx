@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  getCustomer,
   listAgents,
   listAllCustomers,
   Refused,
   type AgentEntry,
+  type CustomerDetail,
   type CustomerSummary,
   type TicketState,
   type TicketSummary,
@@ -76,7 +78,7 @@ export function TicketTable({ tickets }: { tickets: TicketSummary[] }) {
       <thead>
         <tr>
           <th>{t('tickets.number')}</th><th>{t('tickets.title')}</th><th>{t('tickets.customer')}</th>
-          <th>{t('tickets.requester')}</th><th>{t('tickets.assignee')}</th><th>{t('tickets.state')}</th>
+          <th>{t('tickets.sites')}</th><th>{t('tickets.requester')}</th><th>{t('tickets.assignee')}</th><th>{t('tickets.state')}</th>
           <th>{t('tickets.priority')}</th>
           <th>{t('tickets.updated')}</th>
         </tr>
@@ -88,6 +90,7 @@ export function TicketTable({ tickets }: { tickets: TicketSummary[] }) {
             <td className="number">{ticket.number}</td>
             <td><a href={ticketHref(ticket.number)}>{ticket.title}</a></td>
             <td>{ticket.customer_name}</td>
+            <td>{ticket.sites.length > 0 ? ticket.sites.map((s) => s.name).join(', ') : '—'}</td>
             <td>
               {ticket.requester_email ?? '—'}
               {ticket.requester_departed && <DepartedMarker />}
@@ -139,6 +142,11 @@ function TicketFilterBar({ filters, onSignedOut }: { filters: TicketFilters; onS
   const { t } = useI18n()
   const agents = useLoad<AgentEntry[]>(loadAgents, onSignedOut)
   const customers = useLoad<CustomerSummary[]>(loadCustomers, onSignedOut)
+  // A site is picked among the chosen customer's: site names are only unique within a customer.
+  const loadSites = useCallback(
+    () => (filters.customer ? getCustomer(filters.customer).then((c) => c.sites) : Promise.resolve([])),
+    [filters.customer])
+  const sites = useLoad<CustomerDetail['sites']>(loadSites, onSignedOut)
   const choice = stateChoice(filters.states)
   const isDefault = ticketsHref(filters) === ticketsHref(defaultFilters)
 
@@ -162,6 +170,10 @@ function TicketFilterBar({ filters, onSignedOut }: { filters: TicketFilters; onS
   const active = customers.data?.filter((c) => !c.offboarded_at) ?? []
   const offboarded = customers.data?.filter((c) => c.offboarded_at) ?? []
   const knownCustomer = !filters.customer || customers.data?.some((c) => c.id === filters.customer)
+  // Retired sites keep the tickets closed at them, so they can be picked too, apart from the others.
+  const activeSites = sites.data?.filter((s) => !s.retired_at) ?? []
+  const retiredSites = sites.data?.filter((s) => s.retired_at) ?? []
+  const knownSite = !filters.site || sites.data?.some((s) => s.id === filters.site)
   const knownAssignee = ['', 'me', 'none'].includes(filters.assignee)
     || agents.data?.some((a) => a.id === filters.assignee)
 
@@ -197,7 +209,7 @@ function TicketFilterBar({ filters, onSignedOut }: { filters: TicketFilters; onS
       </label>
       <label>
         {t('filters.customer')}
-        <select value={filters.customer} onChange={(e) => setFilters({ customer: e.target.value })}>
+        <select value={filters.customer} onChange={(e) => setFilters({ customer: e.target.value, site: '' })}>
           <option value="">{t('filters.allCustomers')}</option>
           {active.map((c) => (
             <option key={c.id} value={c.id}>{c.is_help_desk ? t('customer.helpDesk', { name: c.name }) : c.name}</option>
@@ -210,6 +222,21 @@ function TicketFilterBar({ filters, onSignedOut }: { filters: TicketFilters; onS
           {!knownCustomer && customers.data && <option value={filters.customer}>{filters.customer}</option>}
         </select>
       </label>
+      {(filters.customer || filters.site) && (
+        <label>
+          {t('filters.site')}
+          <select value={filters.site} onChange={(e) => setFilters({ site: e.target.value })}>
+            <option value="">{t('filters.allSites')}</option>
+            {activeSites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            {retiredSites.length > 0 && (
+              <optgroup label={t('filters.retiredSites')}>
+                {retiredSites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </optgroup>
+            )}
+            {!knownSite && sites.data && <option value={filters.site}>{filters.site}</option>}
+          </select>
+        </label>
+      )}
       <label className="search">
         {t('filters.search')}
         <input type="search" value={text} placeholder={t('filters.searchPlaceholder')}

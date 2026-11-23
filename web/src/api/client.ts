@@ -119,6 +119,8 @@ export interface TicketQuery {
   customer?: string
   /** A requester's id. */
   requester?: string
+  /** A site's id, retired ones included. */
+  site?: string
   q?: string
 }
 
