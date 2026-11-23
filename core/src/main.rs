@@ -126,6 +126,9 @@ enum Command {
     /// Manage add-ons.
     #[command(subcommand)]
     Addon(cli::AddonCommand),
+    /// How agents sign in: switch local sign-in off and on.
+    #[command(subcommand)]
+    SignIn(cli::SignInCommand),
     /// Import customers, sites, requesters and assets from CSV files: shows what it would do,
     /// and does it with --apply (--help lists the columns).
     Import(cli::ImportArgs),
@@ -169,6 +172,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Agent(command) => cli::agent(&db, command).await,
         Command::Role(command) => cli::role(&db, command).await,
         Command::Addon(command) => cli::addon(&db, command).await,
+        Command::SignIn(command) => cli::sign_in(&db, command, &mut std::io::stdout()).await,
         Command::Import(args) => cli::import(&db, args, &mut std::io::stdout()).await,
         Command::Serve {
             listen,
