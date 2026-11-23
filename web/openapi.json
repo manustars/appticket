@@ -3017,6 +3017,116 @@
         }
       }
     },
+    "/api/requesters/{id}/key": {
+      "put": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Makes the requester a key requester of their customer, written to at their contact address;\nfor a key requester, it changes the contact address. A departed requester cannot be one.",
+        "operationId": "mark_key_requester",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The requester",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeyRequesterContact"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Makes a key requester a plain requester of their customer again.",
+        "operationId": "unmark_key_requester",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The requester",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/requesters/{id}/merge": {
       "post": {
         "tags": [
@@ -4683,7 +4793,7 @@
         "tags": [
           "tickets"
         ],
-        "summary": "Queues a reply to the ticket's requester. It is sent by e-mail shortly after.",
+        "summary": "Queues a reply to the ticket's requester or, on a ticket without one, to each key requester of\nits customer at their contact address, in a message of their own; a ticket with neither cannot\nbe replied to. It is sent by e-mail shortly after.",
         "operationId": "reply",
         "parameters": [
           {
@@ -4744,7 +4854,7 @@
         "tags": [
           "tickets"
         ],
-        "summary": "Resolves every open or waiting child of this parent ticket, replying to each requester.",
+        "summary": "Resolves every open or waiting child of this parent ticket, writing to each child's requester\nand to the key requesters of each child's customer, one message to each person.",
         "operationId": "resolve_children",
         "parameters": [
           {
@@ -6088,6 +6198,42 @@
           }
         }
       },
+      "KeyRequester": {
+        "type": "object",
+        "description": "A requester who speaks for their customer.",
+        "required": [
+          "id",
+          "contact_address"
+        ],
+        "properties": {
+          "contact_address": {
+            "type": "string",
+            "description": "The address the messages for key requesters go to, one of the requester's."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "KeyRequesterContact": {
+        "type": "object",
+        "properties": {
+          "contact_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One of the requester's addresses, where the messages for key requesters go. It can be\nleft out for a requester with one address, and for a key requester, who keeps theirs."
+          }
+        }
+      },
       "LinkedAsset": {
         "type": "object",
         "required": [
@@ -6255,6 +6401,7 @@
         "description": "What moving a requester to another customer would do, for the agent to see before confirming.",
         "required": [
           "tickets",
+          "key_requester",
           "assets",
           "services"
         ],
@@ -6265,6 +6412,10 @@
               "$ref": "#/components/schemas/LinkedAsset"
             },
             "description": "The assets linked to their tickets: they belong to the old customer, so they are unlinked."
+          },
+          "key_requester": {
+            "type": "boolean",
+            "description": "The requester is a key requester of the old customer, which they would stop being."
           },
           "services": {
             "type": "array",
@@ -6474,7 +6625,7 @@
               "string",
               "null"
             ],
-            "description": "One of the requester's addresses, picked by the agent on a ticket the requester has not\nwritten on; needed then when they have several. Where they last wrote from on the ticket,\nthe reply goes there, and any other address is refused."
+            "description": "One of the requester's addresses, picked by the agent on a ticket the requester has not\nwritten on; needed then when they have several. Where they last wrote from on the ticket,\nthe reply goes there, and any other address is refused. On a ticket without a requester\nnone is picked."
           }
         }
       },
@@ -7050,6 +7201,13 @@
             },
             "description": "The requester's e-mail addresses, the first registered first; there is at least one unless\nthe requester has departed."
           },
+          "contact_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set while the requester is one of the customer's key requesters: the address the replies\non its tickets without a requester, and the messages about failures that affect it, go to."
+          },
           "departed": {
             "type": "boolean",
             "description": "The requester has left the customer."
@@ -7107,7 +7265,7 @@
         "properties": {
           "body": {
             "type": "string",
-            "description": "Sent as a reply to the requester of every child that has one."
+            "description": "Sent to each child's requester and to the key requesters of each child's customer, each\nperson once."
           }
         }
       },
@@ -7122,7 +7280,7 @@
           "replied": {
             "type": "integer",
             "format": "int64",
-            "description": "Replies queued to their requesters."
+            "description": "Messages queued: one to each person written to, the children's requesters and the key\nrequesters of the children's customers."
           },
           "resolved": {
             "type": "integer",
@@ -7393,6 +7551,7 @@
           "state",
           "priority",
           "customer",
+          "key_requesters",
           "assets",
           "services",
           "children",
@@ -7436,6 +7595,13 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "key_requesters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyRequester"
+            },
+            "description": "The key requesters of the ticket's customer. Without a requester, a reply on the ticket goes\nto each of them, at their contact address; with none either, it cannot be replied to."
           },
           "number": {
             "type": "integer",

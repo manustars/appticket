@@ -214,6 +214,11 @@ mod tests {
         let hers = testing::ticket(&db, brightfield, Some(lena), "l1@brightfield.test").await;
         mark(&db, ada, None).await.unwrap();
         mark(&db, lena, None).await.unwrap();
+        // The agent is told before moving.
+        let preview = crate::requesters::move_preview(&db, ada, harbor)
+            .await
+            .unwrap();
+        assert!(preview.key_requester);
 
         crate::requesters::move_to_customer(&db, ada, harbor)
             .await

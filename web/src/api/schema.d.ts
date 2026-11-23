@@ -898,6 +898,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/requesters/{id}/key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Makes the requester a key requester of their customer, written to at their contact address;
+         *     for a key requester, it changes the contact address. A departed requester cannot be one.
+         */
+        put: operations["mark_key_requester"];
+        post?: never;
+        /** Makes a key requester a plain requester of their customer again. */
+        delete: operations["unmark_key_requester"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/requesters/{id}/merge": {
         parameters: {
             query?: never;
@@ -1288,7 +1309,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Queues a reply to the ticket's requester. It is sent by e-mail shortly after. */
+        /**
+         * Queues a reply to the ticket's requester or, on a ticket without one, to each key requester of
+         *     its customer at their contact address, in a message of their own; a ticket with neither cannot
+         *     be replied to. It is sent by e-mail shortly after.
+         */
         post: operations["reply"];
         delete?: never;
         options?: never;
@@ -1305,7 +1330,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Resolves every open or waiting child of this parent ticket, replying to each requester. */
+        /**
+         * Resolves every open or waiting child of this parent ticket, writing to each child's requester
+         *     and to the key requesters of each child's customer, one message to each person.
+         */
         post: operations["resolve_children"];
         delete?: never;
         options?: never;
@@ -1718,6 +1746,21 @@ export interface components {
             received_at: string;
             subject: string;
         };
+        /** @description A requester who speaks for their customer. */
+        KeyRequester: {
+            /** @description The address the messages for key requesters go to, one of the requester's. */
+            contact_address: string;
+            /** Format: uuid */
+            id: string;
+            name?: string | null;
+        };
+        KeyRequesterContact: {
+            /**
+             * @description One of the requester's addresses, where the messages for key requesters go. It can be
+             *     left out for a requester with one address, and for a key requester, who keeps theirs.
+             */
+            contact_address?: string | null;
+        };
         LinkedAsset: {
             /** Format: uuid */
             id: string;
@@ -1772,6 +1815,8 @@ export interface components {
         MovePreview: {
             /** @description The assets linked to their tickets: they belong to the old customer, so they are unlinked. */
             assets: components["schemas"]["LinkedAsset"][];
+            /** @description The requester is a key requester of the old customer, which they would stop being. */
+            key_requester: boolean;
             /** @description The services linked to their tickets that the new customer does not use: unlinked too. */
             services: components["schemas"]["LinkedService"][];
             site?: components["schemas"]["SiteRef"] | null;
@@ -1852,7 +1897,8 @@ export interface components {
             /**
              * @description One of the requester's addresses, picked by the agent on a ticket the requester has not
              *     written on; needed then when they have several. Where they last wrote from on the ticket,
-             *     the reply goes there, and any other address is refused.
+             *     the reply goes there, and any other address is refused. On a ticket without a requester
+             *     none is picked.
              */
             to?: string | null;
         };
@@ -2061,6 +2107,11 @@ export interface components {
              *     the requester has departed.
              */
             addresses: string[];
+            /**
+             * @description Set while the requester is one of the customer's key requesters: the address the replies
+             *     on its tickets without a requester, and the messages about failures that affect it, go to.
+             */
+            contact_address?: string | null;
             /** @description The requester has left the customer. */
             departed: boolean;
             /** Format: uuid */
@@ -2087,14 +2138,18 @@ export interface components {
             customer_id: string;
         };
         ResolveChildren: {
-            /** @description Sent as a reply to the requester of every child that has one. */
+            /**
+             * @description Sent to each child's requester and to the key requesters of each child's customer, each
+             *     person once.
+             */
             body: string;
         };
         /** @description What resolving the children did. */
         ResolvedChildren: {
             /**
              * Format: int64
-             * @description Replies queued to their requesters.
+             * @description Messages queued: one to each person written to, the children's requesters and the key
+             *     requesters of the children's customers.
              */
             replied: number;
             /**
@@ -2197,6 +2252,11 @@ export interface components {
             customer: components["schemas"]["TicketCustomer"];
             /** Format: uuid */
             id: string;
+            /**
+             * @description The key requesters of the ticket's customer. Without a requester, a reply on the ticket goes
+             *     to each of them, at their contact address; with none either, it cannot be replied to.
+             */
+            key_requesters: components["schemas"]["KeyRequester"][];
             /** Format: int64 */
             number: number;
             parent?: components["schemas"]["RelatedTicket"] | null;
@@ -4644,6 +4704,98 @@ export interface operations {
         };
     };
     depart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The requester */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    mark_key_requester: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The requester */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeyRequesterContact"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    unmark_key_requester: {
         parameters: {
             query?: never;
             header?: never;

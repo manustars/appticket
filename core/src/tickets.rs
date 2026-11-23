@@ -472,6 +472,9 @@ pub struct TicketDetail {
     pub priority: Priority,
     pub customer: TicketCustomer,
     pub requester: Option<Requester>,
+    /// The key requesters of the ticket's customer. Without a requester, a reply on the ticket goes
+    /// to each of them, at their contact address; with none either, it cannot be replied to.
+    pub key_requesters: Vec<crate::key_requesters::KeyRequester>,
     pub assignee: Option<Party>,
     /// Assets of the ticket's customer the ticket is about.
     pub assets: Vec<crate::catalog::LinkedAsset>,
@@ -648,6 +651,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
     let (parent, children) = crate::parents::related(db, row.id).await?;
     let proposals = crate::proposals::open_on_ticket(db, row.id).await?;
     let recipient = crate::requesters::recipient(&mut *db.acquire().await?, row.id).await?;
+    let key_requesters = crate::key_requesters::of_customer(db, row.customer_id).await?;
 
     Ok(TicketDetail {
         id: row.id,
@@ -675,6 +679,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
                 ticket_count: row.requester_tickets.unwrap_or(1),
                 departed: row.requester_departed.unwrap_or(false),
             }),
+        key_requesters,
         assignee: row.assignee_id.map(|id| Party {
             id,
             name: row.assignee_name.unwrap_or_default(),
