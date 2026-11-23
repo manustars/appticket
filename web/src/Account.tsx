@@ -1,4 +1,5 @@
-// The signed-in agent's own account: who they are, their role, and changing their password.
+// The signed-in agent's own account: who they are, their role, and changing their password if
+// they have a local one.
 import { useId, useState, type FormEvent } from 'react'
 import { changeOwnPassword, Refused } from './api/client'
 import { useI18n } from './i18n/context'
@@ -23,7 +24,9 @@ export function Account({ onSignedOut }: { onSignedOut: () => void }) {
           <dd>{agent.administrator ? t('role.administrator') : agent.role_name}</dd>
         </div>
       </dl>
-      <ChangePassword onSignedOut={onSignedOut} />
+      {agent.local_password
+        ? <ChangePassword onSignedOut={onSignedOut} />
+        : <p className="hint">{t('account.noLocalPassword')}</p>}
     </div>
   )
 }
