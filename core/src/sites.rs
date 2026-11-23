@@ -20,20 +20,31 @@ pub struct Site {
 
 /// Changes a site's name and address.
 pub async fn update(db: &PgPool, id: Uuid, name: &str, address: &str) -> Result<()> {
-    let (name, address) = clean(name, address)?;
     let mut tx = db.begin().await?;
-    let (customer, retired) = lock(&mut tx, id).await?;
+    update_in(&mut tx, id, name, address).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`update`], inside the caller's transaction.
+pub(crate) async fn update_in(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    name: &str,
+    address: &str,
+) -> Result<()> {
+    let (name, address) = clean(name, address)?;
+    let (customer, retired) = lock(tx, id).await?;
     // Only active sites need names of their own.
     if !retired {
-        name_free(&mut tx, customer, name, Some(id)).await?;
+        name_free(tx, customer, name, Some(id)).await?;
     }
     sqlx::query("UPDATE sites SET name = $2, address = $3 WHERE id = $1")
         .bind(id)
         .bind(name)
         .bind(address)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    tx.commit().await?;
     Ok(())
 }
 
@@ -122,19 +133,30 @@ async fn name_free(
 
 /// Adds a site to the customer.
 pub async fn create(db: &PgPool, customer: Uuid, name: &str, address: &str) -> Result<Uuid> {
-    let (name, address) = clean(name, address)?;
     let mut tx = db.begin().await?;
-    crate::customers::lock_active(&mut tx, customer).await?;
-    name_free(&mut tx, customer, name, None).await?;
+    let id = create_in(&mut tx, customer, name, address).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// [`create`], inside the caller's transaction.
+pub(crate) async fn create_in(
+    tx: &mut Transaction<'_, Postgres>,
+    customer: Uuid,
+    name: &str,
+    address: &str,
+) -> Result<Uuid> {
+    let (name, address) = clean(name, address)?;
+    crate::customers::lock_active(tx, customer).await?;
+    name_free(tx, customer, name, None).await?;
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO sites (id, customer_id, name, address) VALUES ($1, $2, $3, $4)")
         .bind(id)
         .bind(customer)
         .bind(name)
         .bind(address)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    tx.commit().await?;
     Ok(id)
 }
 

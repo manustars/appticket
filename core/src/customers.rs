@@ -190,18 +190,28 @@ pub(crate) async fn lock_active(tx: &mut Transaction<'_, Postgres>, id: Uuid) ->
 /// Adds a customer with the mail domains of its requesters. The help desk's own organization is
 /// created once, at setup, from the command line.
 pub async fn create(db: &PgPool, name: &str, domains: &[String]) -> Result<Uuid> {
-    let name = clean_name(name)?;
     let mut tx = db.begin().await?;
+    let id = create_in(&mut tx, name, domains).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// [`create`], inside the caller's transaction.
+pub(crate) async fn create_in(
+    tx: &mut Transaction<'_, Postgres>,
+    name: &str,
+    domains: &[String],
+) -> Result<Uuid> {
+    let name = clean_name(name)?;
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO customers (id, name) VALUES ($1, $2)")
         .bind(id)
         .bind(name)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     for domain in domains {
-        add_domain_in(&mut tx, id, domain).await?;
+        add_domain_in(tx, id, domain).await?;
     }
-    tx.commit().await?;
     Ok(id)
 }
 
@@ -274,6 +284,18 @@ fn clean_website(website: &str) -> Result<String> {
 
 /// Corrects a customer's name and details. An offboarded customer's do not change.
 pub async fn update(db: &PgPool, id: Uuid, details: &CustomerDetails) -> Result<()> {
+    let mut tx = db.begin().await?;
+    update_in(&mut tx, id, details).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`update`], inside the caller's transaction.
+pub(crate) async fn update_in(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    details: &CustomerDetails,
+) -> Result<()> {
     let name = clean_name(&details.name)?;
     let tax_id = filled(details.tax_id.as_deref());
     let tax_country = filled(details.tax_country.as_deref())
@@ -285,8 +307,7 @@ pub async fn update(db: &PgPool, id: Uuid, details: &CustomerDetails) -> Result<
     let website = filled(details.website.as_deref())
         .map(clean_website)
         .transpose()?;
-    let mut tx = db.begin().await?;
-    lock_active(&mut tx, id).await?;
+    lock_active(tx, id).await?;
     sqlx::query(
         "UPDATE customers SET name = $2, legal_name = $3, tax_id = $4, tax_country = $5,
                 address = $6, phone = $7, website = $8, notes = $9
@@ -301,9 +322,8 @@ pub async fn update(db: &PgPool, id: Uuid, details: &CustomerDetails) -> Result<
     .bind(filled(details.phone.as_deref()))
     .bind(website)
     .bind(details.notes.trim())
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 

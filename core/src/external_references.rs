@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use serde::Serialize;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -86,6 +86,19 @@ pub async fn systems(db: &PgPool) -> Result<Vec<String>> {
 /// Gives the customer an external reference: a name in another system. A name that already names
 /// a customer in that system, ignoring case, is refused, even when it is this customer.
 pub async fn add(db: &PgPool, customer: Uuid, system: &str, name: &str) -> Result<Uuid> {
+    let mut tx = db.begin().await?;
+    let id = add_in(&mut tx, customer, system, name).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// [`add`], inside the caller's transaction.
+pub(crate) async fn add_in(
+    tx: &mut Transaction<'_, Postgres>,
+    customer: Uuid,
+    system: &str,
+    name: &str,
+) -> Result<Uuid> {
     let (system, name) = (system.trim(), name.trim());
     if system.is_empty() {
         return rule("an external reference needs the system it belongs to");
@@ -93,8 +106,7 @@ pub async fn add(db: &PgPool, customer: Uuid, system: &str, name: &str) -> Resul
     if name.is_empty() {
         return rule("an external reference needs a name");
     }
-    let mut tx = db.begin().await?;
-    crate::customers::lock_active(&mut tx, customer).await?;
+    crate::customers::lock_active(tx, customer).await?;
     let id = Uuid::new_v4();
     // Another customer can take the name at the same time: the database decides.
     let added = sqlx::query(
@@ -105,7 +117,7 @@ pub async fn add(db: &PgPool, customer: Uuid, system: &str, name: &str) -> Resul
     .bind(customer)
     .bind(system)
     .bind(name)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?
     .rows_affected();
     if added == 0 {
@@ -116,7 +128,7 @@ pub async fn add(db: &PgPool, customer: Uuid, system: &str, name: &str) -> Resul
         )
         .bind(system)
         .bind(name)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?;
         return match taken {
             Some((taken_system, taken, owner)) => {
@@ -128,7 +140,6 @@ pub async fn add(db: &PgPool, customer: Uuid, system: &str, name: &str) -> Resul
             )),
         };
     }
-    tx.commit().await?;
     Ok(id)
 }
 
