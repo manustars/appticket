@@ -1032,6 +1032,62 @@ mod tests {
         ));
     }
 
+    /// The database sends a message on a ticket only to its requester or to a key requester of its
+    /// customer, at their contact address, also when the code is bypassed; a ticket with neither
+    /// gets none.
+    #[sqlx::test]
+    async fn the_database_writes_only_to_the_requester_or_key_requesters(db: PgPool) {
+        let c = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, c, "ada@brightfield.test").await;
+        let lena = testing::requester(&db, c, "lena@brightfield.test").await;
+        crate::requesters::add_address(&db, lena, "lena@home.test")
+            .await
+            .unwrap();
+        crate::key_requesters::mark(&db, lena, Some("lena@home.test"))
+            .await
+            .unwrap();
+        let ivo = testing::requester(&db, harbor, "ivo@harbor.test").await;
+        crate::key_requesters::mark(&db, ivo, None).await.unwrap();
+        let a = testing::agent(&db, "marco@northgate.test").await;
+        let hers = testing::ticket(&db, c, Some(ada), "a1@brightfield.test").await;
+        let none = testing::ticket(&db, c, None, "n1@brightfield.test").await;
+        let send = |number: i64, to: &'static str| {
+            let db = db.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO messages (id, ticket_id, direction, from_address, to_address,
+                                           author_id, subject, body_text)
+                     SELECT $1, id, 'outbound', 'helpdesk@helpdesk.test', $3, $4, 'Re: x', 'Hi.'
+                     FROM tickets WHERE number = $2",
+                )
+                .bind(Uuid::new_v4())
+                .bind(number)
+                .bind(to)
+                .bind(a)
+                .execute(&db)
+                .await
+                .is_ok()
+            }
+        };
+
+        assert!(send(hers, "ada@brightfield.test").await);
+        assert!(send(hers, "lena@home.test").await, "a key requester");
+        assert!(send(none, "lena@home.test").await);
+        assert!(
+            !send(none, "lena@brightfield.test").await,
+            "not the contact address"
+        );
+        assert!(
+            !send(none, "ivo@harbor.test").await,
+            "another customer's key requester"
+        );
+        assert!(
+            !send(none, "someone@elsewhere.test").await,
+            "an address of nobody"
+        );
+    }
+
     #[test]
     fn reply_subjects_do_not_stack() {
         assert_eq!(
