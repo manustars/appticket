@@ -7,6 +7,7 @@ export type AddonRow = Schemas['AddonRow']
 export type Agent = Schemas['Agent']
 export type AgentAccount = Schemas['AgentAccount']
 export type AgentEntry = Schemas['AgentEntry']
+export type Announcement = Schemas['Announcement']
 export type Asset = Schemas['Asset']
 export type AssetFields = Schemas['AssetFields']
 export type AssetKind = Schemas['AssetKind']
@@ -269,6 +270,15 @@ export async function clearParent(number: number): Promise<void> {
 export function resolveChildren(number: number, body: string): Promise<ResolvedChildren> {
   const request: Schemas['ResolveChildren'] = { body }
   return json('POST', `${ticketPath(number)}/resolve-children`, request)
+}
+
+/**
+ * Sends `body` from the parent ticket to the key requesters of its children's customers and of the
+ * customers that use its services, each person once. No ticket changes state.
+ */
+export function announce(number: number, body: string): Promise<Announcement> {
+  const request: Schemas['NewAnnouncement'] = { body }
+  return json('POST', `${ticketPath(number)}/announcements`, request)
 }
 
 /** Opens a ticket for `customerId` from an inbox message; returns the new ticket's number. */

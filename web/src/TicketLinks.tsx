@@ -2,6 +2,7 @@
 // to other tickets (its parent, or its children).
 import { useCallback, useId, useState, type FormEvent } from 'react'
 import {
+  announce,
   clearParent,
   linkTicketAsset,
   linkTicketService,
@@ -11,6 +12,7 @@ import {
   setParent,
   unlinkTicketAsset,
   unlinkTicketService,
+  type Announcement,
   type Asset,
   type ResolvedChildren,
   type Service,
@@ -325,6 +327,65 @@ function Children({ ticket, onChanged, onSignedOut }: Props) {
         </form>
       )}
       <Problem error={action.error} />
+      {ticket.state !== 'closed' && can('tickets.reply') && (
+        <Announce ticket={ticket} onChanged={onChanged} onSignedOut={onSignedOut} />
+      )}
     </section>
+  )
+}
+
+/**
+ * Sending an announcement from a parent that is not closed, as often as needed: it goes to the key
+ * requesters of the customers the failure affects, and changes no ticket's state.
+ */
+function Announce({ ticket, onChanged, onSignedOut }: Props) {
+  const { t } = useI18n()
+  const action = useAction(onSignedOut)
+  const [open, setOpen] = useState(false)
+  const [body, setBody] = useState('')
+  // How many people the last announcement was queued to.
+  const [done, setDone] = useState<number | null>(null)
+  const id = useId()
+
+  function submit(event: FormEvent) {
+    event.preventDefault()
+    if (!body.trim()) return
+    if (!window.confirm(t('parent.confirmAnnounce', { number: ticket.number }))) return
+    let sent: Announcement | null = null
+    void action.run(async () => {
+      sent = await announce(ticket.number, body)
+    }).then(async (ok) => {
+      const recipients = (sent as Announcement | null)?.recipients
+      if (ok && recipients) {
+        setDone(recipients.length)
+        setBody('')
+        setOpen(false)
+      }
+      await onChanged()
+    })
+  }
+
+  return (
+    <>
+      {done !== null && <p className="done" role="status">{t('parent.announced', { count: done })}</p>}
+      {!open && (
+        <div>
+          <button type="button" onClick={() => { setOpen(true); setDone(null) }}>{t('parent.announce')}</button>
+        </div>
+      )}
+      {open && (
+        <form className="resolve" onSubmit={submit}>
+          <label htmlFor={`${id}-body`}>{t('parent.announcement')}</label>
+          <textarea id={`${id}-body`} rows={4} value={body} aria-describedby={`${id}-hint`}
+            onChange={(e) => setBody(e.target.value)} />
+          <p className="hint" id={`${id}-hint`}>{t('parent.announceHint')}</p>
+          <div className="move-foot">
+            <button type="button" onClick={() => { setOpen(false); action.clear() }}>{t('action.cancel')}</button>
+            <button type="submit" disabled={action.busy || !body.trim()}>{t('parent.announce')}</button>
+          </div>
+        </form>
+      )}
+      <Problem error={action.error} />
+    </>
   )
 }

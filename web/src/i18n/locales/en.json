@@ -132,6 +132,11 @@
   "entry.gaveUp": "This message was not sent: the help desk stopped trying. Last error: {error}",
   "entry.unknownError": "unknown",
   "entry.retrying": "Not sent yet, will try again: {error}",
+  "entry.announcement": "Announcement",
+  "entry.announcedTo": {
+    "one": "Sent to {count} key requester",
+    "other": "Sent to {count} key requesters"
+  },
   "composer.modes": "What you are writing",
   "composer.reply": "Reply to requester",
   "composer.replyKeyRequesters": "Reply to key requesters",
@@ -217,6 +222,14 @@
   "parent.writtenTo": {
     "one": "Queued the message to {count} person.",
     "other": "Queued the message to {count} people."
+  },
+  "parent.announce": "Send an announcement",
+  "parent.announcement": "Announcement to the key requesters",
+  "parent.announceHint": "It goes to the key requesters of the child tickets' customers and of the customers that use the services this ticket links, each person once, in a message of their own. No ticket changes state.",
+  "parent.confirmAnnounce": "Send this announcement from #{number} to the key requesters of the customers the failure affects?",
+  "parent.announced": {
+    "one": "Queued the announcement to {count} person.",
+    "other": "Queued the announcement to {count} people."
   },
   "customers.title": "Customers",
   "customers.name": "Name",

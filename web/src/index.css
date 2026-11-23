@@ -218,6 +218,10 @@ select.state { font-weight: 500; }
 }
 .entry.outbound .tag { color: var(--accent); }
 .tag.note-tag { color: var(--note-ink); }
+.entry .recipients { margin-top: 0.5rem; font-size: 0.9rem; }
+.entry .recipients summary { color: var(--muted); cursor: pointer; }
+.entry .recipients ul { list-style: none; margin: 0.3rem 0 0; padding: 0; display: grid; gap: 0.2rem; }
+.entry .recipients li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.6rem; overflow-wrap: anywhere; }
 .status { font-size: 0.8rem; padding: 0 0.45em; border-radius: 999px; border: 1px solid currentColor; }
 .status.queued { color: var(--waiting); }
 .status.sent { color: var(--resolved); }

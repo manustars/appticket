@@ -132,6 +132,12 @@
   "entry.gaveUp": "Questo messaggio non è stato inviato: l'help desk ha smesso di riprovare. Ultimo errore: {error}",
   "entry.unknownError": "sconosciuto",
   "entry.retrying": "Non ancora inviato, verrà ritentato: {error}",
+  "entry.announcement": "Annuncio",
+  "entry.announcedTo": {
+    "one": "Inviato a {count} richiedente chiave",
+    "many": "Inviato a {count} richiedenti chiave",
+    "other": "Inviato a {count} richiedenti chiave"
+  },
   "composer.modes": "Tipo di testo",
   "composer.reply": "Rispondi al richiedente",
   "composer.replyKeyRequesters": "Rispondi ai richiedenti chiave",
@@ -219,6 +225,15 @@
     "one": "Messo in coda il messaggio per {count} persona.",
     "many": "Messo in coda il messaggio per {count} persone.",
     "other": "Messo in coda il messaggio per {count} persone."
+  },
+  "parent.announce": "Invia un annuncio",
+  "parent.announcement": "Annuncio ai richiedenti chiave",
+  "parent.announceHint": "Va ai richiedenti chiave dei clienti dei ticket figli e dei clienti che usano i servizi collegati a questo ticket, una volta a ciascuno, con un messaggio a sé. Nessun ticket cambia stato.",
+  "parent.confirmAnnounce": "Inviare questo annuncio da #{number} ai richiedenti chiave dei clienti colpiti dal guasto?",
+  "parent.announced": {
+    "one": "Messo in coda l'annuncio per {count} persona.",
+    "many": "Messo in coda l'annuncio per {count} persone.",
+    "other": "Messo in coda l'annuncio per {count} persone."
   },
   "customers.title": "Clienti",
   "customers.name": "Nome",
