@@ -1139,6 +1139,97 @@ mod tests {
         assert_eq!(service_detail(&db, mail).await.unwrap().used_by.len(), 2);
     }
 
+    /// The database keeps an asset's details within the rules even when the code above is
+    /// bypassed: its serial number trimmed, its site and holder of its customer, the site not
+    /// retired, the holder not departed, and no holder once it is retired.
+    #[sqlx::test]
+    async fn the_database_keeps_the_asset_rules(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let quay = crate::sites::create(&db, harbor, "Quay office", "Molo delle Reti 2")
+            .await
+            .unwrap();
+        let old = crate::sites::create(&db, brightfield, "Old office", "Via del Glicine 3")
+            .await
+            .unwrap();
+        crate::sites::retire(&db, old).await.unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        crate::requesters::depart(&db, lena).await.unwrap();
+        let ivo = testing::requester(&db, harbor, "ivo@harbor.test").await;
+        let pc = testing::asset(&db, brightfield, "Laptop", "PC-0042").await;
+        let set = |column: &'static str, value: Option<Uuid>| {
+            let db = db.clone();
+            async move {
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "UPDATE assets SET {column} = $2 WHERE id = $1"
+                )))
+                .bind(pc)
+                .bind(value)
+                .execute(&db)
+                .await
+            }
+        };
+        let serial = |value: &'static str| {
+            let db = db.clone();
+            async move {
+                sqlx::query("UPDATE assets SET serial_number = $2 WHERE id = $1")
+                    .bind(pc)
+                    .bind(value)
+                    .execute(&db)
+                    .await
+            }
+        };
+
+        assert!(serial("SN-0042").await.is_ok());
+        assert!(serial(" SN-0042").await.is_err(), "an untrimmed serial");
+        assert!(serial("").await.is_err(), "a blank serial rather than none");
+        assert!(set("site_id", Some(quay)).await.is_err(), "another customer's site");
+        assert!(set("site_id", Some(old)).await.is_err(), "a retired site");
+        assert!(set("holder_id", Some(ivo)).await.is_err(), "another customer's requester");
+        assert!(set("holder_id", Some(lena)).await.is_err(), "a departed holder");
+        assert!(set("site_id", Some(head)).await.is_ok());
+        assert!(set("holder_id", Some(ada)).await.is_ok());
+        let retire = sqlx::query("UPDATE assets SET retired_at = now() WHERE id = $1")
+            .bind(pc)
+            .execute(&db)
+            .await;
+        assert!(retire.is_err(), "retired with its holder");
+
+        // What would leave the asset breaking them is refused too.
+        let run = |sql: &'static str, id: Uuid| {
+            let db = db.clone();
+            async move { sqlx::query(sql).bind(id).execute(&db).await }
+        };
+        assert!(
+            run("UPDATE sites SET retired_at = now() WHERE id = $1", head)
+                .await
+                .is_err(),
+            "a site retired with an asset at it"
+        );
+        assert!(
+            run("UPDATE requesters SET departed_at = now() WHERE id = $1", ada)
+                .await
+                .is_err(),
+            "a holder departed"
+        );
+        let to_harbor = sqlx::query("UPDATE requesters SET customer_id = $2 WHERE id = $1")
+            .bind(ada)
+            .bind(harbor)
+            .execute(&db)
+            .await;
+        assert!(to_harbor.is_err(), "a holder moved to another customer");
+        let mut tx = db.begin().await.unwrap();
+        let removed = sqlx::query("DELETE FROM requesters WHERE id = $1")
+            .bind(ada)
+            .execute(&mut *tx)
+            .await;
+        assert!(removed.is_err(), "a holder merged away");
+    }
+
     #[sqlx::test]
     async fn moving_a_ticket_drops_links_that_do_not_fit(db: PgPool) {
         help_desk(&db).await;

@@ -65,8 +65,8 @@ async fn lock(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<(Uuid, boo
     Ok((customer, retired))
 }
 
-/// Retires a site: it stays visible but gets no new requesters or assets, and the requesters at
-/// it are left without a site.
+/// Retires a site: it stays visible but gets no new requesters or assets, and the requesters and
+/// assets at it are left without a site.
 pub async fn retire(db: &PgPool, id: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
     let (_, retired) = lock(&mut tx, id).await?;
@@ -74,6 +74,10 @@ pub async fn retire(db: &PgPool, id: Uuid) -> Result<()> {
         return rule("the site is already retired");
     }
     sqlx::query("UPDATE requesters SET site_id = NULL WHERE site_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE assets SET site_id = NULL WHERE site_id = $1")
         .bind(id)
         .execute(&mut *tx)
         .await?;
@@ -297,6 +301,53 @@ mod tests {
             retire(&db, Uuid::new_v4()).await,
             Err(Error::NotFound(_))
         ));
+    }
+
+    #[sqlx::test]
+    async fn retiring_a_site_leaves_its_assets_without_one(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let head = create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let lab = create(&db, brightfield, "Lab", "Via del Glicine 3")
+            .await
+            .unwrap();
+        let printer = testing::asset_kind(&db, "Printer").await;
+        for (name, site) in [("Printer 2F", head), ("Printer 3F", head), ("Plotter", lab)] {
+            let fields = crate::catalog::AssetFields {
+                site_id: Some(site),
+                ..testing::asset_fields(printer, name)
+            };
+            crate::catalog::create_asset(&db, brightfield, &fields)
+                .await
+                .unwrap();
+        }
+        let retired = testing::asset(&db, brightfield, "Printer", "Printer 1F").await;
+        let fields = crate::catalog::AssetFields {
+            site_id: Some(head),
+            ..testing::asset_fields(printer, "Printer 1F")
+        };
+        crate::catalog::update_asset(&db, retired, &fields)
+            .await
+            .unwrap();
+        crate::catalog::retire_asset(&db, retired).await.unwrap();
+
+        retire(&db, head).await.unwrap();
+        let sites: Vec<(String, Option<String>)> = crate::catalog::assets_of(&db, brightfield)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|a| (a.name, a.site.map(|s| s.name)))
+            .collect();
+        assert_eq!(
+            sites,
+            [
+                ("Plotter".to_owned(), Some("Lab".to_owned())),
+                ("Printer 2F".to_owned(), None),
+                ("Printer 3F".to_owned(), None),
+                ("Printer 1F".to_owned(), None),
+            ]
+        );
     }
 
     #[sqlx::test]
