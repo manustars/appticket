@@ -427,6 +427,10 @@ pub async fn run(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -
             let mut savepoint = tx.begin().await?;
             let mut candidates = Vec::new();
             let done = match kind {
+                // The database's text cannot hold it.
+                _ if row.cells.iter().any(|cell| cell.contains('\0')) => {
+                    rule("a cell holds a NUL character, which cannot be stored: remove it")
+                }
                 Kind::Customers => {
                     customer_row(&mut savepoint, table, row, &mut so_far, &mut candidates).await
                 }
@@ -488,6 +492,16 @@ fn left_out(done: Result<Done>) -> Result<std::result::Result<Done, String>> {
     match done {
         Ok(done) => Ok(Ok(done)),
         Err(Error::Rule(why)) => Ok(Err(why)),
+        // Someone else took a name the import was given a moment before, between its check and
+        // its write: the whole import is refused, to be run again on the data as it is now.
+        Err(Error::Internal(error))
+            if error
+                .downcast_ref::<sqlx::Error>()
+                .and_then(|e| e.as_database_error())
+                .is_some_and(|e| e.is_unique_violation()) =>
+        {
+            rule("the help desk's data changed during the import: reload and try again")
+        }
         Err(error) => Err(error),
     }
 }
@@ -1602,6 +1616,50 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(names(&db).await, ["Brightfield"]);
+    }
+
+    #[sqlx::test]
+    async fn a_cell_the_database_cannot_hold_is_left_out(db: PgPool) {
+        let file = "name,notes\nBrightfield,Ask for Ada\0\nHarbor Lane,\n";
+        let report = import(&db, vec![customers(file)], Mode::Apply).await;
+        let reasons = reasons(&report.files[0]);
+        assert!(
+            reasons.len() == 1 && reasons[0].0 == 2 && reasons[0].1.contains("NUL"),
+            "{reasons:?}"
+        );
+        assert_eq!(names(&db).await, ["Harbor Lane"]);
+    }
+
+    /// Another session that takes a site's name while the import adds it: the database refuses
+    /// the second, and the import asks to be run again rather than failing on its own.
+    #[sqlx::test]
+    async fn an_import_overtaken_by_another_change_asks_to_try_again(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        crate::sites::create(&db, brightfield, "Old lab", "Via 1")
+            .await
+            .unwrap();
+        // Renamed straight in the database, without the core's lock on the customer.
+        let mut other = db.begin().await.unwrap();
+        sqlx::query("UPDATE sites SET name = 'Lab' WHERE customer_id = $1")
+            .bind(brightfield)
+            .execute(&mut *other)
+            .await
+            .unwrap();
+
+        let file = sites("customer,name,address\nBrightfield,Lab,Via del Glicine 3\n");
+        let importing = tokio::spawn({
+            let db = db.clone();
+            async move { run(&db, &Grant::command_line(), vec![file], Mode::Apply).await }
+        });
+        // The import waits on the other session's new site, then finds the name taken.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        other.commit().await.unwrap();
+        match importing.await.unwrap() {
+            Err(Error::Rule(why)) => assert!(why.contains("try again"), "{why}"),
+            other => panic!("not refused: {other:?}"),
+        }
     }
 
     /// A row that changes nothing neither writes nor locks, so that an import waits only for
