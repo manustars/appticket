@@ -1,7 +1,7 @@
 // Importing customers, sites, requesters and assets from CSV files: a preview first, then the
 // import itself, and the rows left out to download, correct and import again.
 import { useId, useState } from 'react'
-import { applyImport, previewImport, Refused, type ImportFile, type ImportKind, type ImportReport, type ImportRow, type Permission } from './api/client'
+import { applyImport, previewImport, Refused, type ImportFile, type ImportKind, type ImportReport, type ImportRow } from './api/client'
 import { useI18n } from './i18n/context'
 import { Problem } from './Problem'
 import { customersHref } from './route'
@@ -27,9 +27,6 @@ const kinds: { kind: ImportKind; columns: string[] }[] = [
       'site', 'holder'],
   },
 ]
-
-/** The permission an agent needs beyond managing customers to import a kind, if any. */
-const alsoNeeds: Partial<Record<ImportKind, Permission>> = { assets: 'catalog.manage' }
 
 /** A file the browser could not read as UTF-8. */
 class NotUtf8 extends Error {}
@@ -57,12 +54,9 @@ function download(name: string, text: string) {
 export function Import({ onSignedOut }: { onSignedOut: () => void }) {
   const { t } = useI18n()
   const id = useId()
-  const { can } = useSession()
-  // The kinds this agent can import: assets only for an agent who manages the catalog too.
-  const offered = kinds.filter(({ kind }) => {
-    const needed = alsoNeeds[kind]
-    return !needed || can(needed)
-  })
+  // Assets only for an agent who manages the catalog too.
+  const importsAssets = useSession().can('catalog.manage')
+  const offered = kinds.filter(({ kind }) => kind !== 'assets' || importsAssets)
   const action = useAction(onSignedOut)
   const [chosen, setChosen] = useState<Partial<Record<ImportKind, File>>>({})
   // The files as previewed: applying sends exactly these, so that what was seen is what is imported.
@@ -132,7 +126,7 @@ export function Import({ onSignedOut }: { onSignedOut: () => void }) {
           ))}
         </div>
         <p className="hint">
-          {t(offered.some(({ kind }) => kind === 'assets') ? 'import.filesHint' : 'import.filesHintWithoutAssets')}
+          {t(importsAssets ? 'import.filesHint' : 'import.filesHintWithoutAssets')}
         </p>
         <div className="import-actions">
           <button type="button" disabled={action.busy || nothingChosen} onClick={preview}>
