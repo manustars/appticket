@@ -23,6 +23,8 @@ Keycloak, on 127.0.0.1:55080, is a test identity provider for signing in through
 It imports `dev/keycloak/helpdesk-realm.json` when it starts and keeps nothing: realm `helpdesk`,
 client `hd-core` with the secret `dev-only-client-secret`, and the users `lena`, `otto`, `nadia`
 and `piet` (password `<user>-dev-password`, addresses `@example.com`; Otto's is not verified).
+Lena, Otto and Piet are in the group `helpdesk-agents`, which the client sends in the ID token's
+`groups` claim; Nadia is not.
 These are for development and CI only. `podman compose up -d keycloak` starts it alone.
 
 ## Configuration
@@ -71,7 +73,9 @@ HD_OIDC_LABEL=Keycloak
 HD_PUBLIC_URL=http://localhost:5173
 ```
 
-and add an agent with a Keycloak user's address, such as `lena.marsh@example.com`. Use the same
+and add an agent with a Keycloak user's address, such as `lena.marsh@example.com`; or add
+`HD_OIDC_AUTHORIZED_GROUP=helpdesk-agents`, so that Lena, Otto and Piet become agents at their
+first sign-in and Nadia is refused. Use the same
 host for the browser as in `HD_PUBLIC_URL`. [`deploy.md`](deploy.md#signing-in-through-an-identity-provider)
 explains how the sign-in finds the agent. With these settings, `cargo run -p hd-core -- sign-in
 local off` leaves only the Keycloak button on the sign-in page, and `sign-in local on` brings the

@@ -84,6 +84,13 @@ core:
     label: ""
     # HD_OIDC_SESSION_HOURS: how long a session opened through the provider lasts (1 to 24).
     sessionHours: 12
+    # HD_OIDC_AUTHORIZED_GROUP: only the provider's users in this group sign in, checked at
+    # every sign-in, and someone in it who is not an agent yet becomes one with the default role.
+    # Empty: only existing agents sign in.
+    authorizedGroup: ""
+    # HD_OIDC_GROUP_CLAIM: the ID token claim the authorized group is looked for in, such as
+    # roles for an Entra ID app role.
+    groupClaim: groups
 
   # HD_LOG: a tracing filter.
   log: "info,sqlx=warn"
