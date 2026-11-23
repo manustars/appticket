@@ -722,14 +722,7 @@ mod tests {
             1
         );
 
-        let own = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO customers (id, name, is_help_desk) VALUES ($1, 'Northgate', true)",
-        )
-        .bind(own)
-        .execute(&db)
-        .await
-        .unwrap();
+        let own = testing::help_desk(&db).await;
         assert!(matches!(offboard(&db, own).await, Err(Error::Rule(_))));
         let names: Vec<String> = list(&db)
             .await

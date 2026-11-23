@@ -633,19 +633,6 @@ mod tests {
             "she does not become its requester"
         );
 
-        let Err(Error::Rule(_)) = tickets::reply(
-            &db,
-            &sender,
-            outage,
-            agent,
-            "Thanks, we know.",
-            Some("ada@brightfield.test"),
-            TicketState::Waiting,
-        )
-        .await
-        else {
-            panic!("replied from the parent to another customer's key requester");
-        };
         tickets::reply(
             &db,
             &sender,

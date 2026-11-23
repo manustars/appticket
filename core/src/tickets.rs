@@ -549,7 +549,7 @@ pub fn reply_subject(title: &str, number: i64) -> String {
 
 /// "<title> [#<number>]": the subject of a message about the ticket, its title without a leading
 /// "Re:" and tagged with its number.
-pub fn ticket_subject(title: &str, number: i64) -> String {
+pub(crate) fn ticket_subject(title: &str, number: i64) -> String {
     let bare = title
         .trim()
         .strip_prefix("Re:")
