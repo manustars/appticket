@@ -1,0 +1,1073 @@
+//! Importing customers and their sites from CSV files. Rules are in docs/domain-rules.md
+//! ("Importing").
+
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+use sqlx::{Acquire, PgPool, Postgres, Transaction};
+use utoipa::ToSchema;
+use uuid::Uuid;
+
+use crate::customers::CustomerDetails;
+use crate::error::{Error, Result, rule};
+use crate::roles::Grant;
+
+/// What a file of an import holds, one kind per file. Files are taken in this order, so that a
+/// row can refer to something an earlier file creates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    Customers,
+    Sites,
+}
+
+impl Kind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Kind::Customers => "customers",
+            Kind::Sites => "sites",
+        }
+    }
+}
+
+/// The column the rows left out come back with, saying why; an import ignores it, so that the
+/// file can be corrected and imported again.
+const ERROR_COLUMN: &str = "error";
+
+/// One CSV file of an import.
+pub struct File {
+    pub kind: Kind,
+    pub content: Vec<u8>,
+}
+
+/// Whether an import only shows what it would do, or does it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Preview,
+    Apply,
+}
+
+/// What an import does, or would do, file by file.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Report {
+    /// Whether the import was applied; a preview changes nothing.
+    pub applied: bool,
+    pub files: Vec<FileReport>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FileReport {
+    pub kind: Kind,
+    /// Every row of the file, in its order.
+    pub rows: Vec<RowReport>,
+    /// The rows left out, as a CSV file with the same columns, separator and byte order mark as
+    /// this one and their reason in an `error` column, ready to correct and import again; none
+    /// when no row is left out.
+    pub left_out: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RowReport {
+    /// The line of the file the row starts on; the header is line 1.
+    pub line: u64,
+    pub outcome: Outcome,
+    /// What the row is about: a customer's name, or a site's customer and name.
+    pub label: String,
+    /// The columns whose values a row that updates changes.
+    pub changes: Vec<String>,
+    /// Why the row is left out.
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    Create,
+    Update,
+    Unchanged,
+    LeftOut,
+}
+
+/// The columns of a customers file.
+const CUSTOMER_COLUMNS: &[&str] = &[
+    "name",
+    "external_system",
+    "external_name",
+    "legal_name",
+    "tax_id",
+    "tax_country",
+    "address",
+    "phone",
+    "website",
+    "notes",
+];
+
+/// A file read: its columns and rows, and how it was written.
+struct Table {
+    /// Where each known column is, by its name.
+    columns: HashMap<&'static str, usize>,
+    rows: Vec<Line>,
+    /// The header as written.
+    header: Vec<String>,
+    /// Where the error column is, when the file has one.
+    error_at: Option<usize>,
+    separator: u8,
+    /// Whether the file started with a byte order mark.
+    bom: bool,
+}
+
+/// One row of a file.
+struct Line {
+    /// The line of the file the row starts on.
+    line: u64,
+    cells: Vec<String>,
+}
+
+impl Table {
+    /// The row's cell in `column`, trimmed; `None` when the column is absent or the cell blank.
+    fn cell<'a>(&self, row: &'a Line, column: &str) -> Option<&'a str> {
+        let at = *self.columns.get(column)?;
+        row.cells
+            .get(at)
+            .map(|c| c.trim())
+            .filter(|c| !c.is_empty())
+    }
+
+    /// The rows left out as a file like this one, each with its reason in the error column.
+    fn left_out(&self, rows: &[(&Line, &str)]) -> Result<Option<String>> {
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let mut header = self.header.clone();
+        let error_at = self.error_at.unwrap_or_else(|| {
+            header.push(ERROR_COLUMN.to_owned());
+            header.len() - 1
+        });
+        let mut out = if self.bom { BOM.to_vec() } else { Vec::new() };
+        {
+            let mut writer = csv::WriterBuilder::new()
+                .delimiter(self.separator)
+                .terminator(csv::Terminator::CRLF)
+                .from_writer(&mut out);
+            writer.write_record(&header)?;
+            for (row, why) in rows {
+                let mut cells = row.cells.clone();
+                cells.resize(header.len(), String::new());
+                cells[error_at] = (*why).to_owned();
+                writer.write_record(&cells)?;
+            }
+            writer.flush()?;
+        }
+        Ok(Some(String::from_utf8(out)?))
+    }
+
+    /// What the row is about, as the report shows it.
+    fn label(&self, kind: Kind, row: &Line) -> String {
+        let cell = |column| self.cell(row, column).unwrap_or_default();
+        match kind {
+            Kind::Customers => cell("name").to_owned(),
+            Kind::Sites => format!("{} / {}", cell("customer"), cell("name")),
+        }
+    }
+}
+
+/// The most rows a file of an import can have: an import runs in one transaction.
+pub const MAX_ROWS: usize = 10_000;
+
+/// The byte order mark Excel puts at the start of a "CSV UTF-8" file.
+const BOM: &[u8] = b"\xEF\xBB\xBF";
+
+/// The separator of a file, a semicolon or a comma: whichever its header line has more of,
+/// outside quotes. The column names contain neither.
+fn separator(content: &[u8]) -> u8 {
+    let (mut commas, mut semicolons, mut quoted) = (0, 0, false);
+    for byte in content {
+        match byte {
+            b'"' => quoted = !quoted,
+            b'\n' | b'\r' if !quoted => break,
+            b',' if !quoted => commas += 1,
+            b';' if !quoted => semicolons += 1,
+            _ => {}
+        }
+    }
+    if semicolons > commas { b';' } else { b',' }
+}
+
+fn read(kind: Kind, content: &[u8]) -> Result<Table> {
+    let (known, required): (&[&str], &[&str]) = match kind {
+        Kind::Customers => (CUSTOMER_COLUMNS, &["name"]),
+        Kind::Sites => (&[], &[]),
+    };
+    let bom = content.starts_with(BOM);
+    let content = content.strip_prefix(BOM).unwrap_or(content);
+    if std::str::from_utf8(content).is_err() {
+        return rule(format!(
+            "the {} file is not in UTF-8: save it as \"CSV UTF-8\"",
+            kind.as_str()
+        ));
+    }
+    let unreadable = |e: csv::Error| {
+        Error::Rule(match e.kind() {
+            csv::ErrorKind::UnequalLengths {
+                pos,
+                expected_len,
+                len,
+                ..
+            } => format!(
+                "the {} file: line {} has {len} cells where the header has {expected_len}",
+                kind.as_str(),
+                line_at(content, pos.as_ref().map_or(0, |p| p.byte() as usize)),
+            ),
+            _ => format!("the {} file cannot be read: {e}", kind.as_str()),
+        })
+    };
+    let separator = separator(content);
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(separator)
+        .from_reader(content);
+    let header: Vec<String> = reader
+        .headers()
+        .map_err(unreadable)?
+        .iter()
+        .map(str::to_owned)
+        .collect();
+    let mut columns = HashMap::new();
+    let mut error_at = None;
+    let mut problems = Vec::new();
+    for (at, name) in header.iter().enumerate() {
+        let name = name.trim().to_lowercase();
+        if name == ERROR_COLUMN {
+            error_at = Some(at);
+            continue;
+        }
+        match known.iter().find(|c| **c == name) {
+            Some(column) => {
+                if columns.insert(*column, at).is_some() {
+                    problems.push(format!("the column \"{column}\" is there twice"));
+                }
+            }
+            None => problems.push(format!("unknown column \"{name}\"")),
+        }
+    }
+    for column in required {
+        if !columns.contains_key(column) {
+            problems.push(format!("missing column \"{column}\""));
+        }
+    }
+    if !problems.is_empty() {
+        return rule(format!(
+            "the {} file: {} (its columns are {})",
+            kind.as_str(),
+            problems.join("; "),
+            known.join(", ")
+        ));
+    }
+    let mut rows = Vec::new();
+    // Lines are counted here: the reader's own count is off by one after a CRLF line end.
+    let (mut counted, mut line) = (0, 1);
+    for record in reader.records() {
+        let record = record.map_err(unreadable)?;
+        let start = row_start(content, record.position().map_or(0, |p| p.byte() as usize));
+        line += newlines(&content[counted..start]);
+        counted = start;
+        // Spreadsheets often end with rows of empty cells.
+        if record.iter().all(|cell| cell.trim().is_empty()) {
+            continue;
+        }
+        if rows.len() == MAX_ROWS {
+            return rule(format!(
+                "the {} file has more than {MAX_ROWS} rows: split it into several imports",
+                kind.as_str()
+            ));
+        }
+        rows.push(Line {
+            line,
+            cells: record.iter().map(str::to_owned).collect(),
+        });
+    }
+    Ok(Table {
+        columns,
+        rows,
+        header,
+        error_at,
+        separator,
+        bom,
+    })
+}
+
+/// Where the row the reader places at `byte` starts: past the line end before it.
+fn row_start(content: &[u8], mut byte: usize) -> usize {
+    while matches!(content.get(byte), Some(b'\r' | b'\n')) {
+        byte += 1;
+    }
+    byte
+}
+
+fn newlines(bytes: &[u8]) -> u64 {
+    bytes.iter().filter(|b| **b == b'\n').count() as u64
+}
+
+/// The line the row the reader places at `byte` starts on.
+fn line_at(content: &[u8], byte: usize) -> u64 {
+    1 + newlines(&content[..row_start(content, byte).min(content.len())])
+}
+
+/// Previews or applies an import of CSV files.
+pub async fn run(db: &PgPool, _grant: &Grant, mut files: Vec<File>, mode: Mode) -> Result<Report> {
+    files.sort_by_key(|f| f.kind);
+    if let Some(twice) = files.windows(2).find(|w| w[0].kind == w[1].kind) {
+        return rule(format!(
+            "an import takes one {} file",
+            twice[0].kind.as_str()
+        ));
+    }
+    let mut tables = Vec::new();
+    for file in &files {
+        tables.push((file.kind, read(file.kind, &file.content)?));
+    }
+    let mut tx = db.begin().await?;
+    let mut so_far = SoFar::default();
+    let mut report = Report {
+        applied: mode == Mode::Apply,
+        files: Vec::new(),
+    };
+    for (kind, table) in &tables {
+        let mut rows = Vec::new();
+        for row in &table.rows {
+            // Each row on its own: one left out leaves nothing behind.
+            let mut savepoint = tx.begin().await?;
+            let done = customer_row(&mut savepoint, table, row, &mut so_far).await;
+            let (outcome, changes, reason) = match left_out(done)? {
+                Ok(done) => {
+                    savepoint.commit().await?;
+                    (done.outcome, done.changes, None)
+                }
+                Err(why) => {
+                    savepoint.rollback().await?;
+                    (Outcome::LeftOut, Vec::new(), Some(why))
+                }
+            };
+            rows.push(RowReport {
+                line: row.line,
+                outcome,
+                label: table.label(*kind, row),
+                changes: changes.into_iter().map(str::to_owned).collect(),
+                reason,
+            });
+        }
+        let left_out: Vec<(&Line, &str)> = table
+            .rows
+            .iter()
+            .zip(&rows)
+            .filter_map(|(row, done)| done.reason.as_deref().map(|why| (row, why)))
+            .collect();
+        let left_out = table.left_out(&left_out)?;
+        report.files.push(FileReport {
+            kind: *kind,
+            rows,
+            left_out,
+        });
+    }
+    match mode {
+        Mode::Preview => tx.rollback().await?,
+        Mode::Apply => tx.commit().await?,
+    }
+    Ok(report)
+}
+
+/// What a row did, or why it is left out: the rule it breaks. Anything else, the database
+/// refusing what the core let through included, fails the whole import.
+fn left_out(done: Result<Done>) -> Result<std::result::Result<Done, String>> {
+    match done {
+        Ok(done) => Ok(Ok(done)),
+        Err(Error::Rule(why)) => Ok(Err(why)),
+        Err(error) => Err(error),
+    }
+}
+
+/// What the rows before have done, for the rows after them.
+#[derive(Default)]
+struct SoFar {
+    /// The customers imported, with the line of the row that did.
+    customers: HashMap<Uuid, u64>,
+}
+
+/// What a row did.
+struct Done {
+    outcome: Outcome,
+    changes: Vec<&'static str>,
+}
+
+impl Done {
+    fn created() -> Done {
+        Done {
+            outcome: Outcome::Create,
+            changes: Vec::new(),
+        }
+    }
+
+    /// An update, or no change at all.
+    fn updated(changes: Vec<&'static str>) -> Done {
+        Done {
+            outcome: if changes.is_empty() {
+                Outcome::Unchanged
+            } else {
+                Outcome::Update
+            },
+            changes,
+        }
+    }
+}
+
+/// An external reference a row gives: a system and a name in it.
+struct Reference<'a> {
+    system: &'a str,
+    name: &'a str,
+}
+
+/// The external reference of a row, in two columns: both filled, or neither.
+fn reference<'a>(
+    table: &Table,
+    row: &'a Line,
+    system: &str,
+    name: &str,
+) -> Result<Option<Reference<'a>>> {
+    match (table.cell(row, system), table.cell(row, name)) {
+        (Some(system), Some(name)) => Ok(Some(Reference { system, name })),
+        (None, None) => Ok(None),
+        _ => rule(format!(
+            "an external reference needs both its system ({system}) and its name ({name})"
+        )),
+    }
+}
+
+/// The customer an external reference names.
+async fn named_by(
+    tx: &mut Transaction<'_, Postgres>,
+    reference: &Reference<'_>,
+) -> Result<Option<Uuid>> {
+    Ok(sqlx::query_scalar(
+        "SELECT customer_id FROM external_references
+         WHERE lower(system) = lower($1) AND lower(name) = lower($2)",
+    )
+    .bind(reference.system)
+    .bind(reference.name)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+/// The customers with that name, ignoring case, offboarded ones too: their ids and names.
+async fn with_name(tx: &mut Transaction<'_, Postgres>, name: &str) -> Result<Vec<(Uuid, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT id, name FROM customers WHERE lower(name) = lower($1) ORDER BY name, id",
+    )
+    .bind(name)
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
+async fn name_of(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<String> {
+    Ok(
+        sqlx::query_scalar("SELECT name FROM customers WHERE id = $1")
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?,
+    )
+}
+
+/// The customer a row is about: the one its external reference names, else the one with its
+/// name. A row that could be two customers is about neither.
+async fn recognise(
+    tx: &mut Transaction<'_, Postgres>,
+    name: Option<&str>,
+    reference: Option<&Reference<'_>>,
+) -> Result<Option<Uuid>> {
+    let named = match name {
+        Some(name) => with_name(tx, name).await?,
+        None => Vec::new(),
+    };
+    if let Some(reference) = reference
+        && let Some(id) = named_by(tx, reference).await?
+    {
+        if let Some((_, other)) = named.first()
+            && !named.iter().any(|(n, _)| *n == id)
+        {
+            let owner = name_of(tx, id).await?;
+            return rule(format!(
+                "{} in {} names {owner}, but {other} has the name {}",
+                reference.name,
+                reference.system,
+                name.unwrap_or_default()
+            ));
+        }
+        return Ok(Some(id));
+    }
+    match named.as_slice() {
+        [] => Ok(None),
+        [(id, _)] => Ok(Some(*id)),
+        several => rule(format!(
+            "{} customers are named {}, ignoring case: tell them apart with an external reference",
+            several.len(),
+            name.unwrap_or_default()
+        )),
+    }
+}
+
+/// Refuses an offboarded customer: its sites and requesters do not change, and an import does
+/// not bring it back.
+async fn not_offboarded(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<()> {
+    let (name, offboarded): (String, bool) =
+        sqlx::query_as("SELECT name, offboarded_at IS NOT NULL FROM customers WHERE id = $1")
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?;
+    if offboarded {
+        return rule(format!(
+            "{name} is offboarded: bring it back first, an import does not"
+        ));
+    }
+    Ok(())
+}
+
+async fn customer_details(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<CustomerDetails> {
+    Ok(sqlx::query_as(
+        "SELECT name, legal_name, tax_id, tax_country, address, phone, website, notes
+         FROM customers WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
+/// The columns whose values differ.
+fn customer_changes(before: &CustomerDetails, after: &CustomerDetails) -> Vec<&'static str> {
+    [
+        ("name", before.name == after.name),
+        ("legal_name", before.legal_name == after.legal_name),
+        ("tax_id", before.tax_id == after.tax_id),
+        ("tax_country", before.tax_country == after.tax_country),
+        ("address", before.address == after.address),
+        ("phone", before.phone == after.phone),
+        ("website", before.website == after.website),
+        ("notes", before.notes == after.notes),
+    ]
+    .into_iter()
+    .filter(|(_, same)| !same)
+    .map(|(column, _)| column)
+    .collect()
+}
+
+async fn customer_row(
+    tx: &mut Transaction<'_, Postgres>,
+    table: &Table,
+    row: &Line,
+    so_far: &mut SoFar,
+) -> Result<Done> {
+    let name = table.cell(row, "name");
+    let reference = reference(table, row, "external_system", "external_name")?;
+    let found = recognise(tx, name, reference.as_ref()).await?;
+    if let Some(line) = found.and_then(|id| so_far.customers.get(&id)) {
+        return rule(format!("line {line} already imports this customer"));
+    }
+    if let Some(id) = found {
+        not_offboarded(tx, id).await?;
+    }
+    let (id, before) = match found {
+        Some(id) => (id, Some(customer_details(tx, id).await?)),
+        None => (
+            crate::customers::create_in(tx, name.unwrap_or_default(), &[]).await?,
+            None,
+        ),
+    };
+    // Filled cells over the values the customer has.
+    let mut details = match &before {
+        Some(before) => before.clone(),
+        None => customer_details(tx, id).await?,
+    };
+    let cell = |column| table.cell(row, column).map(str::to_owned);
+    let set = |value: &mut Option<String>, column| {
+        if let Some(filled) = cell(column) {
+            *value = Some(filled);
+        }
+    };
+    if let Some(name) = name {
+        details.name = name.to_owned();
+    }
+    set(&mut details.legal_name, "legal_name");
+    set(&mut details.tax_id, "tax_id");
+    set(&mut details.tax_country, "tax_country");
+    set(&mut details.address, "address");
+    set(&mut details.phone, "phone");
+    set(&mut details.website, "website");
+    if let Some(notes) = cell("notes") {
+        details.notes = notes;
+    }
+    crate::customers::update_in(tx, id, &details).await?;
+    let mut changes = match &before {
+        Some(before) => customer_changes(before, &customer_details(tx, id).await?),
+        None => Vec::new(),
+    };
+    if let Some(reference) = &reference
+        && named_by(tx, reference).await?.is_none()
+    {
+        crate::external_references::add_in(tx, id, reference.system, reference.name).await?;
+        changes.push("external_name");
+    }
+    so_far.customers.insert(id, row.line);
+    Ok(match before {
+        Some(_) => Done::updated(changes),
+        None => Done::created(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn customers(csv: &str) -> File {
+        File {
+            kind: Kind::Customers,
+            content: csv.as_bytes().to_vec(),
+        }
+    }
+
+    async fn import(db: &PgPool, files: Vec<File>, mode: Mode) -> Report {
+        run(db, &Grant::command_line(), files, mode).await.unwrap()
+    }
+
+    fn outcomes(report: &Report) -> Vec<Vec<(u64, Outcome, &str)>> {
+        report
+            .files
+            .iter()
+            .map(|f| {
+                f.rows
+                    .iter()
+                    .map(|r| (r.line, r.outcome, r.label.as_str()))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The reasons of the rows left out, by line.
+    fn reasons(file: &FileReport) -> Vec<(u64, &str)> {
+        file.rows
+            .iter()
+            .filter_map(|r| r.reason.as_deref().map(|why| (r.line, why)))
+            .collect()
+    }
+
+    #[sqlx::test]
+    async fn rows_that_break_a_rule_are_left_out_and_the_others_imported(db: PgPool) {
+        let file = "name,tax_id,tax_country,website\n\
+            Brightfield,00000000000,IT,brightfield.test\n\
+            Harbor Lane,00000000000,ITA,\n\
+            Copperleaf,,,javascript:alert(1)\n\
+            ,,,\n\
+            Ninefold,,,\n";
+        let report = import(&db, vec![customers(file)], Mode::Apply).await;
+        assert_eq!(
+            outcomes(&report),
+            [[
+                (2, Outcome::Create, "Brightfield"),
+                (3, Outcome::LeftOut, "Harbor Lane"),
+                (4, Outcome::LeftOut, "Copperleaf"),
+                (6, Outcome::Create, "Ninefold"),
+            ]],
+            "a row of blank cells is no row"
+        );
+        let reasons = reasons(&report.files[0]);
+        assert!(reasons[0].1.contains("country code"), "{reasons:?}");
+        assert!(reasons[1].1.contains("web address"), "{reasons:?}");
+        assert_eq!(names(&db).await, ["Brightfield", "Ninefold"]);
+    }
+
+    fn references(shown: &crate::customers::CustomerDetail) -> Vec<(&str, &str)> {
+        shown
+            .external_references
+            .iter()
+            .map(|r| (r.system.as_str(), r.name.as_str()))
+            .collect()
+    }
+
+    #[sqlx::test]
+    async fn customers_are_recognised_by_external_reference_else_by_name(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let details = CustomerDetails {
+            name: "Brightfield".into(),
+            legal_name: Some("Brightfield S.r.l.".into()),
+            phone: Some("000 000 0100".into()),
+            ..CustomerDetails::default()
+        };
+        crate::customers::update(&db, brightfield, &details)
+            .await
+            .unwrap();
+        crate::external_references::add(&db, brightfield, "Watchtower", "BF-01")
+            .await
+            .unwrap();
+        let harbor = crate::customers::create(&db, "Harbor Lane", &[])
+            .await
+            .unwrap();
+        crate::customers::create(&db, "Ninefold", &[])
+            .await
+            .unwrap();
+
+        let file = "name,external_system,external_name,legal_name,phone,website\n\
+            Brightfield Labs,watchtower,bf-01,,000 000 0199,\n\
+            Harbor Lane,,,,,harbor.test\n\
+            Copperleaf,Watchtower,CL-07,,,\n\
+            Ninefold,,,,,\n";
+        let report = import(&db, vec![customers(file)], Mode::Apply).await;
+        let changes: Vec<(Outcome, Vec<&str>)> = report.files[0]
+            .rows
+            .iter()
+            .map(|r| (r.outcome, r.changes.iter().map(String::as_str).collect()))
+            .collect();
+        assert_eq!(
+            changes,
+            [
+                (Outcome::Update, vec!["name", "phone"]),
+                (Outcome::Update, vec!["website"]),
+                (Outcome::Create, vec![]),
+                (Outcome::Unchanged, vec![]),
+            ]
+        );
+
+        let shown = crate::customers::detail(&db, brightfield).await.unwrap();
+        assert_eq!(shown.summary.name, "Brightfield Labs");
+        assert_eq!(
+            (shown.legal_name.as_deref(), shown.phone.as_deref()),
+            (Some("Brightfield S.r.l."), Some("000 000 0199")),
+            "a filled cell sets a value, an empty one leaves it"
+        );
+        assert_eq!(references(&shown), [("Watchtower", "BF-01")]);
+        let shown = crate::customers::detail(&db, harbor).await.unwrap();
+        assert_eq!(shown.website.as_deref(), Some("https://harbor.test"));
+        let copperleaf = crate::customers::list(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|c| c.name == "Copperleaf")
+            .unwrap();
+        let shown = crate::customers::detail(&db, copperleaf.id).await.unwrap();
+        assert_eq!(references(&shown), [("Watchtower", "CL-07")]);
+    }
+
+    #[sqlx::test]
+    async fn a_row_that_could_be_two_customers_is_left_out(db: PgPool) {
+        crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        crate::customers::create(&db, "BRIGHTFIELD", &[])
+            .await
+            .unwrap();
+        let harbor = crate::customers::create(&db, "Harbor Lane", &[])
+            .await
+            .unwrap();
+        crate::external_references::add(&db, harbor, "Watchtower", "HL")
+            .await
+            .unwrap();
+        crate::customers::create(&db, "Copperleaf", &[])
+            .await
+            .unwrap();
+
+        let file = "name,external_system,external_name,phone\n\
+            brightfield,,,000 000 0100\n\
+            Copperleaf,Watchtower,HL,000 000 0101\n\
+            Harbor Lane,Watchtower,HL,000 000 0102\n";
+        let report = import(&db, vec![customers(file)], Mode::Apply).await;
+        let reasons = reasons(&report.files[0]);
+        assert_eq!(reasons.len(), 2, "{reasons:?}");
+        assert_eq!(reasons[0].0, 2);
+        assert!(reasons[0].1.contains("2 customers"), "{reasons:?}");
+        assert_eq!(reasons[1].0, 3);
+        assert!(
+            reasons[1].1.contains("Harbor Lane") && reasons[1].1.contains("Copperleaf"),
+            "the reference names one customer and the name another: {reasons:?}"
+        );
+        assert_eq!(report.files[0].rows[2].outcome, Outcome::Update);
+        let phones: Vec<Option<String>> = {
+            let mut phones = Vec::new();
+            for c in crate::customers::list(&db).await.unwrap() {
+                phones.push(crate::customers::detail(&db, c.id).await.unwrap().phone);
+            }
+            phones
+        };
+        assert_eq!(
+            phones.iter().flatten().collect::<Vec<_>>(),
+            ["000 000 0102"],
+            "only the row that is one customer changes it"
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_customer_is_imported_once_per_file(db: PgPool) {
+        let harbor = crate::customers::create(&db, "Harbor Lane", &[])
+            .await
+            .unwrap();
+        let file = "name,external_system,external_name,phone\n\
+            Harbor Lane,Ledgerly,HRB-0007,\n\
+            harbor lane,,,000 000 0100\n\
+            Ninefold,,,\n\
+            Ninefold,,,000 000 0101\n\
+            ,Ledgerly,hrb-0007,000 000 0102\n";
+        let report = import(&db, vec![customers(file)], Mode::Apply).await;
+        assert_eq!(
+            report.files[0]
+                .rows
+                .iter()
+                .map(|r| r.outcome)
+                .collect::<Vec<_>>(),
+            [
+                Outcome::Update,
+                Outcome::LeftOut,
+                Outcome::Create,
+                Outcome::LeftOut,
+                Outcome::LeftOut
+            ]
+        );
+        let reasons = reasons(&report.files[0]);
+        assert!(reasons[0].1.contains("line 2"), "{reasons:?}");
+        assert!(reasons[1].1.contains("line 4"), "{reasons:?}");
+        assert!(reasons[2].1.contains("line 2"), "{reasons:?}");
+
+        let shown = crate::customers::detail(&db, harbor).await.unwrap();
+        assert_eq!(
+            references(&shown),
+            [("Ledgerly", "HRB-0007")],
+            "a reference no customer has is given to the customer with the name"
+        );
+        assert_eq!(shown.phone, None);
+        assert_eq!(names(&db).await, ["Harbor Lane", "Ninefold"]);
+    }
+
+    /// An import never brings an offboarded customer back, nor changes it.
+    #[sqlx::test]
+    async fn a_row_of_an_offboarded_customer_is_left_out(db: PgPool) {
+        let harbor = crate::customers::create(&db, "Harbor Lane", &[])
+            .await
+            .unwrap();
+        crate::customers::offboard(&db, harbor).await.unwrap();
+
+        for file in [
+            "name,phone\nHarbor Lane,000 000 0100\n",
+            "name\nHarbor Lane\n",
+        ] {
+            let report = import(&db, vec![customers(file)], Mode::Apply).await;
+            let reasons = reasons(&report.files[0]);
+            assert!(
+                reasons.len() == 1 && reasons[0].1.contains("bring it back"),
+                "{reasons:?}"
+            );
+        }
+        let shown = crate::customers::detail(&db, harbor).await.unwrap();
+        assert!(shown.summary.offboarded_at.is_some());
+        assert_eq!(shown.phone, None);
+        assert_eq!(
+            names(&db).await,
+            ["Harbor Lane"],
+            "and no second one is made"
+        );
+    }
+
+    #[sqlx::test]
+    async fn an_external_reference_names_one_customer_in_an_import_too(db: PgPool) {
+        let file = "name,external_system,external_name\n\
+            Copperleaf,Watchtower,CL\n\
+            Ninefold,watchtower,cl\n";
+        let report = import(&db, vec![customers(file)], Mode::Apply).await;
+        assert_eq!(
+            outcomes(&report),
+            [[
+                (2, Outcome::Create, "Copperleaf"),
+                (3, Outcome::LeftOut, "Ninefold")
+            ]]
+        );
+        assert_eq!(names(&db).await, ["Copperleaf"]);
+    }
+
+    #[sqlx::test]
+    async fn the_rows_left_out_come_back_as_a_file_to_correct_and_import_again(db: PgPool) {
+        let file = "\u{feff}Name;tax_id;tax_country\r\n\
+            Brightfield;00000000000;IT\r\n\
+            Harbor Lane;\"00 000; 000\";ITA\r\n";
+        let report = import(&db, vec![customers(file)], Mode::Apply).await;
+        assert_eq!(
+            report.files[0].left_out.as_deref(),
+            Some(
+                "\u{feff}Name;tax_id;tax_country;error\r\n\
+                 Harbor Lane;\"00 000; 000\";ITA;\"\"\"ITA\"\" is not a country code: use the two \
+                 letters of ISO 3166-1, such as IT\"\r\n"
+            ),
+            "the same columns, separator and byte order mark, with the reason last"
+        );
+
+        // Corrected, it is imported; its error column is not a column of customers.
+        let corrected = report.files[0]
+            .left_out
+            .as_deref()
+            .unwrap()
+            .replace(";ITA;", ";IT;");
+        let report = import(&db, vec![customers(&corrected)], Mode::Apply).await;
+        assert_eq!(outcomes(&report), [[(2, Outcome::Create, "Harbor Lane")]]);
+        assert_eq!(report.files[0].left_out, None, "nothing left out");
+
+        // A file that has an error column already gets the new reason in it.
+        let again = "name,error,website\nNinefold,an old reason,ftp://ninefold.test\n";
+        let report = import(&db, vec![customers(again)], Mode::Apply).await;
+        assert_eq!(
+            report.files[0].left_out.as_deref(),
+            Some(
+                "name,error,website\r\nNinefold,a website starts with http:// or https://,ftp://ninefold.test\r\n"
+            )
+        );
+    }
+
+    async fn names(db: &PgPool) -> Vec<String> {
+        let mut names: Vec<String> = crate::customers::list(db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[sqlx::test]
+    async fn a_preview_shows_the_customers_it_would_create_and_changes_nothing(db: PgPool) {
+        let file = "name,legal_name\nBrightfield,Brightfield Labs S.r.l.\nHarbor Lane,\n";
+
+        let preview = import(&db, vec![customers(file)], Mode::Preview).await;
+        assert!(!preview.applied);
+        assert_eq!(
+            outcomes(&preview),
+            [[
+                (2, Outcome::Create, "Brightfield"),
+                (3, Outcome::Create, "Harbor Lane")
+            ]]
+        );
+        assert!(names(&db).await.is_empty(), "a preview changes nothing");
+
+        let applied = import(&db, vec![customers(file)], Mode::Apply).await;
+        assert!(applied.applied);
+        assert_eq!(outcomes(&applied), outcomes(&preview));
+        assert_eq!(names(&db).await, ["Brightfield", "Harbor Lane"]);
+        let brightfield = crate::customers::list(&db).await.unwrap()[0].id;
+        assert_eq!(
+            crate::customers::detail(&db, brightfield)
+                .await
+                .unwrap()
+                .legal_name
+                .as_deref(),
+            Some("Brightfield Labs S.r.l.")
+        );
+    }
+
+    /// Excel saves "CSV UTF-8" with a byte order mark and, in many languages, semicolons.
+    #[sqlx::test]
+    async fn semicolons_and_a_byte_order_mark_are_read(db: PgPool) {
+        let file = "\u{feff}name;legal_name\r\nBrightfield;Brightfield Labs, S.r.l.\r\n";
+        let report = import(&db, vec![customers(file)], Mode::Apply).await;
+        assert_eq!(outcomes(&report), [[(2, Outcome::Create, "Brightfield")]]);
+        let brightfield = crate::customers::list(&db).await.unwrap()[0].id;
+        let shown = crate::customers::detail(&db, brightfield).await.unwrap();
+        assert_eq!(
+            (shown.summary.name.as_str(), shown.legal_name.as_deref()),
+            ("Brightfield", Some("Brightfield Labs, S.r.l."))
+        );
+    }
+
+    /// Why `files` are refused as a whole.
+    async fn refused(db: &PgPool, files: Vec<File>) -> String {
+        match run(db, &Grant::command_line(), files, Mode::Apply).await {
+            Err(Error::Rule(why)) => why,
+            other => panic!("not refused: {other:?}"),
+        }
+    }
+
+    #[sqlx::test]
+    async fn an_unknown_or_missing_column_is_reported_before_anything_is_imported(db: PgPool) {
+        let why = refused(
+            &db,
+            vec![customers("name,adress\nBrightfield,Via dei Tigli 1\n")],
+        )
+        .await;
+        assert!(why.contains("\"adress\""), "{why}");
+        let why = refused(&db, vec![customers("legal_name\nBrightfield Labs\n")]).await;
+        assert!(why.contains("\"name\""), "{why}");
+        let why = refused(&db, vec![customers("name,Name\nBrightfield,Harbor Lane\n")]).await;
+        assert!(why.contains("twice"), "{why}");
+        assert!(names(&db).await.is_empty());
+
+        // Column names ignore case and the spaces around them.
+        import(
+            &db,
+            vec![customers(" Name ,LEGAL_NAME\nBrightfield,\n")],
+            Mode::Apply,
+        )
+        .await;
+        assert_eq!(names(&db).await, ["Brightfield"]);
+    }
+
+    #[sqlx::test]
+    async fn a_file_that_cannot_be_read_is_refused_before_anything_is_imported(db: PgPool) {
+        // Excel's plain "CSV" is often Windows-1252, not UTF-8.
+        let latin = File {
+            kind: Kind::Customers,
+            content: b"name\nBrightfield\nCaff\xe8 Nero\n".to_vec(),
+        };
+        let why = refused(&db, vec![latin]).await;
+        assert!(why.contains("UTF-8"), "{why}");
+
+        let why = refused(&db, vec![customers("name,phone\nBrightfield\n")]).await;
+        assert!(why.contains("line 2"), "{why}");
+
+        let why = refused(&db, vec![customers("name,phone\n\"Brightfield,000\n")]).await;
+        assert!(why.contains("line 2"), "{why}");
+
+        let mut many = String::from("name\n");
+        for n in 0..=MAX_ROWS {
+            many.push_str(&format!("Customer {n}\n"));
+        }
+        let why = refused(&db, vec![customers(&many)]).await;
+        assert!(why.contains("10000"), "{why}");
+
+        let why = refused(
+            &db,
+            vec![
+                customers("name\nBrightfield\n"),
+                customers("name\nHarbor Lane\n"),
+            ],
+        )
+        .await;
+        assert!(why.contains("one customers file"), "{why}");
+        assert!(names(&db).await.is_empty());
+    }
+
+    #[sqlx::test]
+    async fn quoted_cells_keep_separators_quotes_and_line_ends(db: PgPool) {
+        let file = "name,address,notes\n\
+            \"Harbor Lane, Ltd\",\"Molo delle Reti 2\nPortoalto\",\"Ask for \"\"Bo\"\"; mornings only\"\n\
+            Brightfield,,\n";
+        let report = import(&db, vec![customers(file)], Mode::Apply).await;
+        assert_eq!(
+            outcomes(&report),
+            [[
+                (2, Outcome::Create, "Harbor Lane, Ltd"),
+                (4, Outcome::Create, "Brightfield")
+            ]],
+            "a row starts on the line after the line ends inside the one before"
+        );
+        let harbor = crate::customers::list(&db).await.unwrap()[1].id;
+        let shown = crate::customers::detail(&db, harbor).await.unwrap();
+        assert_eq!(
+            (shown.address.as_deref(), shown.notes.as_str()),
+            (
+                Some("Molo delle Reti 2\nPortoalto"),
+                "Ask for \"Bo\"; mornings only"
+            )
+        );
+    }
+}
