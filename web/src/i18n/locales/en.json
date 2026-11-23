@@ -7,6 +7,7 @@
   "signIn.password": "Password",
   "signIn.submit": "Sign in",
   "signIn.wrong": "Wrong e-mail or password.",
+  "signIn.later": "Too many failed sign-ins. Try again later.",
   "desk.tickets": "Tickets",
   "desk.inbox": "Inbox",
   "desk.customers": "Customers",

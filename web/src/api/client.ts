@@ -87,13 +87,17 @@ export async function currentAgent(): Promise<Agent | null> {
   }
 }
 
-/** Returns false when the e-mail or the password is wrong. */
-export async function signIn(email: string, password: string): Promise<boolean> {
+/**
+ * Whether the agent is signed in; `wrong` when the e-mail or the password is wrong, `later` when
+ * too many sign-ins failed and attempts are refused for a while.
+ */
+export async function signIn(email: string, password: string): Promise<'signedIn' | 'wrong' | 'later'> {
   try {
     await call('POST', '/api/session', { email, password })
-    return true
+    return 'signedIn'
   } catch (error) {
-    if (error instanceof Unauthorized) return false
+    if (error instanceof Unauthorized) return 'wrong'
+    if (error instanceof Refused && error.status === 429) return 'later'
     throw error
   }
 }
