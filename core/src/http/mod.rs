@@ -334,7 +334,7 @@ struct Agent {
     name: String,
     /// Whether the agent has a local password to sign in and change; agents created by signing
     /// in through the identity provider have none.
-    local_password: bool,
+    has_local_password: bool,
     role_name: String,
     /// Whether the agent's role is the Administrator role.
     administrator: bool,
@@ -358,7 +358,7 @@ async fn current_session(agent: SignedIn) -> Json<Agent> {
         administrator: agent.grant.administrator,
         email: agent.email,
         name: agent.name,
-        local_password: agent.local_password,
+        has_local_password: agent.has_local_password,
         role_name: agent.role_name,
     })
 }

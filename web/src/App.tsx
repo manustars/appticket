@@ -63,6 +63,7 @@ const sameAgent = (a: Agent, b: Agent) => JSON.stringify(a) === JSON.stringify(b
 /** Why a sign-in through the identity provider did not open a session, as the core says it. */
 const providerErrors = {
   not_in_authorized_group: 'signIn.refused.notInAuthorizedGroup',
+  no_email: 'signIn.refused.noEmail',
   email_of_another_agent: 'signIn.refused.emailOfAnotherAgent',
   email_not_verified: 'signIn.refused.emailNotVerified',
   not_an_agent: 'signIn.refused.notAnAgent',

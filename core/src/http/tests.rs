@@ -246,8 +246,8 @@ async fn an_agent_without_a_local_password_cannot_sign_in_with_one_through_the_a
         cookie: format!("{}={token}", crate::auth::SESSION_COOKIE),
         ..Client::anonymous(state.clone())
     };
-    assert_eq!(vera.get("/api/session").await["local_password"], false);
-    assert_eq!(api.get("/api/session").await["local_password"], true);
+    assert_eq!(vera.get("/api/session").await["has_local_password"], false);
+    assert_eq!(api.get("/api/session").await["has_local_password"], true);
     let change = serde_json::json!({"current_password": "", "new_password": "a long new password"});
     let (status, _) = vera
         .call("PUT", "/api/session/password", Some(change))

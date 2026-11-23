@@ -24,7 +24,7 @@ export function Account({ onSignedOut }: { onSignedOut: () => void }) {
           <dd>{agent.administrator ? t('role.administrator') : agent.role_name}</dd>
         </div>
       </dl>
-      {agent.local_password
+      {agent.has_local_password
         ? <ChangePassword onSignedOut={onSignedOut} />
         : <p className="hint">{t('account.noLocalPassword')}</p>}
     </div>
