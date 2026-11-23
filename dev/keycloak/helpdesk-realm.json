@@ -32,8 +32,27 @@
       "webOrigins": [],
       "attributes": {
         "pkce.code.challenge.method": "S256"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "false"
+          }
+        }
+      ]
     }
+  ],
+  "groups": [
+    { "name": "helpdesk-agents" }
   ],
   "users": [
     {
@@ -44,6 +63,7 @@
       "emailVerified": true,
       "firstName": "Lena",
       "lastName": "Marsh",
+      "groups": ["/helpdesk-agents"],
       "credentials": [{ "type": "password", "value": "lena-dev-password", "temporary": false }]
     },
     {
@@ -54,6 +74,7 @@
       "emailVerified": false,
       "firstName": "Otto",
       "lastName": "Vale",
+      "groups": ["/helpdesk-agents"],
       "credentials": [{ "type": "password", "value": "otto-dev-password", "temporary": false }]
     },
     {
@@ -74,6 +95,7 @@
       "emailVerified": true,
       "firstName": "Piet",
       "lastName": "Oak",
+      "groups": ["/helpdesk-agents"],
       "credentials": [{ "type": "password", "value": "piet-dev-password", "temporary": false }]
     }
   ]

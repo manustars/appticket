@@ -216,6 +216,8 @@ pub enum SignInCommand {
     },
 }
 
+// Parsed once per command; `Off` is large because it carries the identity provider's settings.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum LocalSignIn {
     /// Let agents sign in with their local password again.
@@ -718,6 +720,8 @@ mod tests {
             client_secret_file: None,
             label: None,
             session_hours: 12,
+            authorized_group: None,
+            group_claim: "groups".to_owned(),
         };
         let public_url = has("public_url").then(|| "https://helpdesk.example.com".to_owned());
         (settings, public_url)

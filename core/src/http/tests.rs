@@ -329,6 +329,8 @@ async fn with_local_sign_in_off_a_password_is_refused_the_same_way_for_every_acc
         client_secret_file: None,
         label: Some("Northgate".to_owned()),
         session_hours: 12,
+        authorized_group: None,
+        group_claim: "groups".to_owned(),
     };
     let provider =
         crate::oidc::Config::from_settings(settings, Some("https://helpdesk.example.com"))
@@ -401,6 +403,8 @@ async fn local_sign_in_off_and_an_unreachable_provider_are_recovered_with_the_co
         client_secret_file: None,
         label: Some("Northgate".to_owned()),
         session_hours: 12,
+        authorized_group: None,
+        group_claim: "groups".to_owned(),
     };
     let public_url = "http://127.0.0.1:8080".to_owned();
     let config = crate::oidc::Config::from_settings(settings.clone(), Some(&public_url))
@@ -2424,6 +2428,8 @@ async fn the_sign_in_page_offers_the_identity_provider_only_when_configured(db: 
         client_secret_file: None,
         label: Some("Northgate".to_owned()),
         session_hours: 12,
+        authorized_group: None,
+        group_claim: "groups".to_owned(),
     };
     let config = crate::oidc::Config::from_settings(settings, Some("https://helpdesk.example.com"))
         .unwrap()

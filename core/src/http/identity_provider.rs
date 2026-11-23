@@ -72,7 +72,8 @@ async fn begin(
 
 /// Where the identity provider sends the browser back: opens the product's session and goes to
 /// the help desk, or back to the sign-in page with `sign_in_error` saying why not:
-/// `email_of_another_agent`, `email_not_verified`, `not_an_agent`, `deactivated` or `failed`.
+/// `not_in_authorized_group`, `email_of_another_agent`, `email_not_verified`, `not_an_agent`,
+/// `deactivated` or `failed`. Someone in the authorized group who is not an agent yet becomes one.
 #[utoipa::path(get, path = "/api/session/identity-provider/callback", tag = "session",
     params(CallbackQuery),
     responses((status = SEE_OTHER, description = "To the help desk, signed in, or to the \
@@ -152,11 +153,28 @@ mod tests {
     /// Otto's stable identifier at Keycloak, where his address is not verified.
     const OTTO: &str = "6f1c2a0e-8d3b-4c55-9a41-0b7e2d6f3a02";
 
+    /// Lena, Otto and Piet are in this group at Keycloak; Nadia is not.
+    const GROUP: &str = "helpdesk-agents";
+
     fn state(db: &PgPool) -> AppState {
         state_with_issuer(db, ISSUER)
     }
 
     fn state_with_issuer(db: &PgPool, issuer: &str) -> AppState {
+        state_with(db, issuer, None, "groups")
+    }
+
+    /// The core, with `group` as the authorized group, looked for in the claim `claim`.
+    fn state_with_group(db: &PgPool, group: &str, claim: &str) -> AppState {
+        state_with(db, ISSUER, Some(group), claim)
+    }
+
+    fn state_with(
+        db: &PgPool,
+        issuer: &str,
+        authorized_group: Option<&str>,
+        group_claim: &str,
+    ) -> AppState {
         let settings = crate::oidc::Settings {
             issuer: Some(issuer.to_owned()),
             client_id: Some("hd-core".to_owned()),
@@ -164,6 +182,8 @@ mod tests {
             client_secret_file: None,
             label: Some("Northgate".to_owned()),
             session_hours: 12,
+            authorized_group: authorized_group.map(str::to_owned),
+            group_claim: group_claim.to_owned(),
         };
         let config = crate::oidc::Config::from_settings(settings, Some("http://127.0.0.1:8080"))
             .unwrap()
@@ -504,6 +524,121 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(agents, 3);
+        let still_deactivated: bool =
+            sqlx::query_scalar("SELECT deactivated_at IS NOT NULL FROM agents WHERE id = $1")
+                .bind(piet)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert!(still_deactivated);
+    }
+
+    /// The agent with the address, as stored: name, role, whether they have a local password,
+    /// and the Keycloak identity they are linked to.
+    async fn stored_agent(db: &PgPool, email: &str) -> (String, String, bool, Option<String>) {
+        sqlx::query_as(
+            "SELECT a.name, r.name, a.password_hash IS NOT NULL, i.subject
+             FROM agents a JOIN roles r ON r.id = a.role_id
+                 LEFT JOIN agent_identities i ON i.agent_id = a.id AND i.issuer = $2
+             WHERE a.email = $1",
+        )
+        .bind(email)
+        .bind(ISSUER)
+        .fetch_one(db)
+        .await
+        .unwrap()
+    }
+
+    async fn agent_count(db: &PgPool) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM agents")
+            .fetch_one(db)
+            .await
+            .unwrap()
+    }
+
+    #[sqlx::test]
+    #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
+    async fn a_first_sign_in_in_the_keycloak_group_makes_an_agent(db: PgPool) {
+        let state = state_with_group(&db, GROUP, "groups");
+        agent(&db, "ada@helpdesk.test", "Ada").await;
+
+        let answer = sign_in_as(&state, "lena").await;
+        assert_eq!(answer.location, "/");
+        let token = answer.cookie("hd_session").expect("a session");
+        let lena = crate::auth::agent_for(&db, token.trim_start_matches("hd_session="))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lena.email, "lena.marsh@example.com");
+        assert_eq!(
+            stored_agent(&db, "lena.marsh@example.com").await,
+            (
+                "Lena Marsh".to_owned(),
+                "Agent".to_owned(),
+                false,
+                Some(LENA.to_owned())
+            )
+        );
+
+        // Otto's address is not verified at Keycloak; nobody has it, so it is his new agent's.
+        assert_eq!(sign_in_as(&state, "otto").await.location, "/");
+        assert_eq!(
+            stored_agent(&db, "otto.vale@example.com").await,
+            (
+                "Otto Vale".to_owned(),
+                "Agent".to_owned(),
+                false,
+                Some(OTTO.to_owned())
+            )
+        );
+
+        // Signing in again finds the same agents.
+        assert_eq!(sign_in_as(&state, "lena").await.location, "/");
+        assert_eq!(agent_count(&db).await, 3);
+    }
+
+    #[sqlx::test]
+    #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
+    async fn keycloak_sign_ins_outside_the_authorized_group_are_refused(db: PgPool) {
+        // Nadia is an agent, but not in the group at Keycloak.
+        agent(&db, "nadia.quist@example.com", "Nadia").await;
+        let not_in_group = "/?sign_in_error=not_in_authorized_group";
+        let answer = sign_in_as(&state_with_group(&db, GROUP, "groups"), "nadia").await;
+        assert_eq!(answer.location, not_in_group);
+        assert!(answer.cookie("hd_session").is_none());
+
+        // Keycloak sends no `roles` claim: looked for there, nobody is in the group, not even an
+        // agent who is in it under `groups`.
+        agent(&db, "lena.marsh@example.com", "Lena").await;
+        let roles = state_with_group(&db, GROUP, "roles");
+        assert_eq!(sign_in_as(&roles, "lena").await.location, not_in_group);
+        // Another group's name: Lena is not in it.
+        let other = state_with_group(&db, "helpdesk-admins", "groups");
+        assert_eq!(sign_in_as(&other, "lena").await.location, not_in_group);
+
+        assert_eq!(agent_count(&db).await, 2);
+        let (linked, sessions): (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM agent_identities), (SELECT count(*) FROM agent_sessions)",
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!((linked, sessions), (0, 0));
+    }
+
+    #[sqlx::test]
+    #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
+    async fn a_deactivated_agent_in_the_keycloak_group_is_refused_and_not_recreated(db: PgPool) {
+        let state = state_with_group(&db, GROUP, "groups");
+        agent(&db, "ada@helpdesk.test", "Ada").await;
+        let piet = agent(&db, "piet.oak@example.com", "Piet").await;
+        crate::agents::deactivate(&db, &Grant::command_line(), piet)
+            .await
+            .unwrap();
+        let answer = sign_in_as(&state, "piet").await;
+        assert_eq!(answer.location, "/?sign_in_error=deactivated");
+        assert!(answer.cookie("hd_session").is_none());
+        assert_eq!(agent_count(&db).await, 2);
         let still_deactivated: bool =
             sqlx::query_scalar("SELECT deactivated_at IS NOT NULL FROM agents WHERE id = $1")
                 .bind(piet)
