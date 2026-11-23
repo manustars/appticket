@@ -34,13 +34,31 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v5
+      # The test identity provider, as in compose.yaml. Not a service: it needs a start command
+      # and the realm file from the checkout. It starts while the code builds.
+      - name: Start Keycloak
+        run: >-
+          docker run -d --name keycloak -p 127.0.0.1:55080:8080
+          -e KC_HOSTNAME=http://127.0.0.1:55080
+          -v "$GITHUB_WORKSPACE/dev/keycloak:/opt/keycloak/data/import:ro"
+          quay.io/keycloak/keycloak:26.8.2 start-dev --import-realm
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
-      # Includes the tests that need the test mail server.
+      - name: Wait for Keycloak
+        run: |
+          for _ in $(seq 90); do
+            if curl -sf http://127.0.0.1:55080/realms/helpdesk/.well-known/openid-configuration > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs keycloak
+          exit 1
+      # Includes the tests that need the test mail server and Keycloak.
       - run: cargo test --locked -- --include-ignored
       - name: The UI's copy of the API specification is current
         run: cargo run -q --locked -p hd-core -- openapi | diff -u web/openapi.json -
