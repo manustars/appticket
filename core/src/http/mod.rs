@@ -393,13 +393,19 @@ async fn sign_in(
         Guarded::Failed => return Err(ApiError::Unauthorized),
         Guarded::Refused { retry_after } => return Err(ApiError::TooManySignIns { retry_after }),
     };
-    let cookie = Cookie::build((SESSION_COOKIE, token))
+    let cookie = session_cookie(token, time::Duration::days(SESSION_DAYS.into()));
+    Ok((jar.add(cookie), StatusCode::NO_CONTENT))
+}
+
+/// The cookie that carries a session's token, for as long as the session lasts.
+fn session_cookie(token: String, lifetime: time::Duration) -> Cookie<'static> {
+    Cookie::build((SESSION_COOKIE, token))
         .path("/")
         .http_only(true)
         .secure(true)
         .same_site(SameSite::Lax)
-        .max_age(time::Duration::days(SESSION_DAYS.into()));
-    Ok((jar.add(cookie), StatusCode::NO_CONTENT))
+        .max_age(lifetime)
+        .build()
 }
 
 /// Signs the agent out.
