@@ -103,12 +103,18 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
 - Agents created through an identity provider have no local password; existing agents keep
   theirs. Local sign-in can be switched off for the installation, which ends every session opened
   with a local password; the command line can always switch it back on and set a password.
+  Whether local sign-in is on is kept by the product, not in the deployment, and changed with the
+  command line, so that switching it back on needs nothing but the command line. It cannot be
+  switched off while no identity provider is configured.
 - A password is checked by one system only: a linked agent's against the directory, an agent
   without a link against the local password, an unknown name against the directory.
 - A session opened through an identity provider lasts 12 hours by default; one opened with a
   local password lasts 14 days. Signing out ends only the product's session.
 - Repeated failed sign-ins, local or LDAP, are slowed and then refused for a while, per account
-  and per address, before a directory's own lockout would trigger.
+  and per address, before a directory's own lockout would trigger. The address is that of the
+  connection; behind a reverse proxy it is taken from the forwarded headers only when the
+  connection comes from a proxy the installation lists as trusted, so that a client cannot
+  choose the address it is counted under.
 - Unlinking an agent's identity or removing their local password follows the rules for acting on
   an agent above.
 
