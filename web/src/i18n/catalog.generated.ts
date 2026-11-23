@@ -16,6 +16,7 @@ export interface Messages {
   "signIn.orPassword": { plural: false; placeholders: never; tags: never }
   "signIn.localSignInOff": { plural: false; placeholders: never; tags: never }
   "signIn.noWayIn": { plural: false; placeholders: never; tags: never }
+  "signIn.refused.notInAuthorizedGroup": { plural: false; placeholders: never; tags: never }
   "signIn.refused.emailOfAnotherAgent": { plural: false; placeholders: never; tags: never }
   "signIn.refused.emailNotVerified": { plural: false; placeholders: never; tags: never }
   "signIn.refused.notAnAgent": { plural: false; placeholders: never; tags: never }
@@ -493,6 +494,7 @@ export interface Messages {
   "account.wrongCurrent": { plural: false; placeholders: never; tags: never }
   "account.changed": { plural: false; placeholders: never; tags: never }
   "account.submit": { plural: false; placeholders: never; tags: never }
+  "account.noLocalPassword": { plural: false; placeholders: never; tags: never }
   "admin.title": { plural: false; placeholders: never; tags: never }
   "admin.agents": { plural: false; placeholders: never; tags: never }
   "admin.roles": { plural: false; placeholders: never; tags: never }

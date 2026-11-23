@@ -1191,7 +1191,8 @@ export interface paths {
         /**
          * Where the identity provider sends the browser back: opens the product's session and goes to
          *     the help desk, or back to the sign-in page with `sign_in_error` saying why not:
-         *     `email_of_another_agent`, `email_not_verified`, `not_an_agent`, `deactivated` or `failed`.
+         *     `not_in_authorized_group`, `email_of_another_agent`, `email_not_verified`, `not_an_agent`,
+         *     `deactivated` or `failed`. Someone in the authorized group who is not an agent yet becomes one.
          */
         get: operations["callback"];
         put?: never;
@@ -1227,7 +1228,10 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Changes the signed-in agent's password; their other sessions end. */
+        /**
+         * Changes the signed-in agent's password; their other sessions end. Refused (409) for an agent
+         *     without a local password.
+         */
         put: operations["change_password"];
         post?: never;
         delete?: never;
@@ -1646,6 +1650,11 @@ export interface components {
             email: string;
             /** Format: uuid */
             id: string;
+            /**
+             * @description Whether the agent has a local password to sign in and change; agents created by signing
+             *     in through the identity provider have none.
+             */
+            local_password: boolean;
             name: string;
             /** @description Everything the agent's role allows beyond reading; every permission for an Administrator. */
             permissions: components["schemas"]["Permission"][];

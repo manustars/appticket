@@ -4100,7 +4100,7 @@
         "tags": [
           "session"
         ],
-        "summary": "Where the identity provider sends the browser back: opens the product's session and goes to\nthe help desk, or back to the sign-in page with `sign_in_error` saying why not:\n`email_of_another_agent`, `email_not_verified`, `not_an_agent`, `deactivated` or `failed`.",
+        "summary": "Where the identity provider sends the browser back: opens the product's session and goes to\nthe help desk, or back to the sign-in page with `sign_in_error` saying why not:\n`not_in_authorized_group`, `email_of_another_agent`, `email_not_verified`, `not_an_agent`,\n`deactivated` or `failed`. Someone in the authorized group who is not an agent yet becomes one.",
         "operationId": "callback",
         "parameters": [
           {
@@ -4171,7 +4171,7 @@
         "tags": [
           "session"
         ],
-        "summary": "Changes the signed-in agent's password; their other sessions end.",
+        "summary": "Changes the signed-in agent's password; their other sessions end. Refused (409) for an agent\nwithout a local password.",
         "operationId": "change_password",
         "requestBody": {
           "content": {
@@ -5805,6 +5805,7 @@
           "id",
           "email",
           "name",
+          "local_password",
           "role_name",
           "administrator",
           "permissions"
@@ -5820,6 +5821,10 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "local_password": {
+            "type": "boolean",
+            "description": "Whether the agent has a local password to sign in and change; agents created by signing\nin through the identity provider have none."
           },
           "name": {
             "type": "string"
