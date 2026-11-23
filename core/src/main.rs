@@ -126,7 +126,7 @@ enum Command {
     /// Manage add-ons.
     #[command(subcommand)]
     Addon(cli::AddonCommand),
-    /// How agents sign in: switch local sign-in off and on.
+    /// How agents sign in: switch local sign-in off and on, and check the identity provider.
     #[command(subcommand)]
     SignIn(cli::SignInCommand),
     /// Import customers, sites, requesters and assets from CSV files: shows what it would do,
@@ -149,10 +149,21 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    if let Command::Openapi = cli.command {
-        println!("{}", http::openapi().to_pretty_json()?);
-        return Ok(());
-    }
+    // The commands that need no database, so that they work before anything else is set up.
+    let command = match cli.command {
+        Command::Openapi => {
+            println!("{}", http::openapi().to_pretty_json()?);
+            return Ok(());
+        }
+        Command::SignIn(cli::SignInCommand::Check {
+            identity_provider,
+            public_url,
+        }) => {
+            return cli::sign_in_check(*identity_provider, public_url, &mut std::io::stdout())
+                .await;
+        }
+        command => command,
+    };
     let database_url = cli
         .database_url
         .context("set HD_DATABASE_URL or pass --database-url")?;
@@ -166,7 +177,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("applying database migrations")?;
 
-    match cli.command {
+    match command {
         Command::Migrate | Command::Openapi => Ok(()),
         Command::Customer(command) => cli::customer(&db, command).await,
         Command::Agent(command) => cli::agent(&db, command, cli::password_from_env()).await,

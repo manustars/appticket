@@ -29,6 +29,8 @@ use crate::auth;
 use crate::identities::{AuthorizedGroup, Identity};
 use crate::sign_in_limits::AddressKey;
 
+mod check;
+
 /// Where the provider sends the browser back to, under the core's public URL.
 pub const CALLBACK_PATH: &str = "/api/session/identity-provider/callback";
 
