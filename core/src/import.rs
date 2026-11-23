@@ -391,12 +391,17 @@ pub async fn run(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -
             let (outcome, changes, reason) = match left_out(done)? {
                 Ok(done) => {
                     savepoint.commit().await?;
+                    if *kind == Kind::Customers {
+                        so_far
+                            .customers_imported
+                            .push(Keys::of_customer(table, row));
+                    }
                     (done.outcome, done.changes, None)
                 }
                 Err(why) => {
                     savepoint.rollback().await?;
                     if *kind == Kind::Customers {
-                        let keys = Keys::of(table, row, "name", "external_system", "external_name");
+                        let keys = Keys::of_customer(table, row);
                         so_far.customers_left_out.push((row.line, keys));
                     }
                     (Outcome::LeftOut, Vec::new(), Some(why))
@@ -449,6 +454,8 @@ struct SoFar {
     sites: HashMap<Uuid, u64>,
     /// The customer rows left out, with the line of each, for the rows that name them.
     customers_left_out: Vec<(u64, Keys)>,
+    /// The customer rows imported.
+    customers_imported: Vec<Keys>,
 }
 
 /// How a row names a customer: its name and an external reference, ignoring case.
@@ -466,6 +473,11 @@ impl Keys {
         }
     }
 
+    /// How a row of a customers file names its customer.
+    fn of_customer(table: &Table, row: &Line) -> Keys {
+        Keys::of(table, row, "name", "external_system", "external_name")
+    }
+
     /// Whether both name the same customer, by name or by external reference.
     fn meet(&self, other: &Keys) -> bool {
         fn same<T: PartialEq>(a: &Option<T>, b: &Option<T>) -> bool {
@@ -476,7 +488,8 @@ impl Keys {
 }
 
 impl SoFar {
-    /// The line of the customer row left out that a site row names.
+    /// The line of the customer row left out that a site row names, unless another row imported
+    /// that customer, as when a second row of a customer is left out.
     fn customer_left_out(&self, table: &Table, row: &Line) -> Option<u64> {
         let keys = Keys::of(
             table,
@@ -485,6 +498,9 @@ impl SoFar {
             "customer_external_system",
             "customer_external_name",
         );
+        if self.customers_imported.iter().any(|k| k.meet(&keys)) {
+            return None;
+        }
         self.customers_left_out
             .iter()
             .find(|(_, left_out)| left_out.meet(&keys))
@@ -1212,6 +1228,31 @@ mod tests {
             Some(
                 "name,error,website\r\nNinefold,a website starts with http:// or https://,ftp://ninefold.test\r\n"
             )
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_second_row_of_a_customer_does_not_hold_back_its_sites(db: PgPool) {
+        // One row per external reference: the second is left out, the customer is imported.
+        let customers_file = "name,external_system,external_name\n\
+            Brightfield,Watchtower,BF-01\n\
+            Brightfield,Watchtower,BF-02\n";
+        let sites_file = "customer,name,address\nBrightfield,Head office,Via dei Tigli 1\n";
+        let report = import(
+            &db,
+            vec![customers(customers_file), sites(sites_file)],
+            Mode::Apply,
+        )
+        .await;
+        assert_eq!(report.files[0].rows[1].outcome, Outcome::LeftOut);
+        assert_eq!(
+            outcomes(&report)[1],
+            [(2, Outcome::Create, "Brightfield / Head office")]
+        );
+        let brightfield = id_of(&db, "Brightfield").await;
+        assert_eq!(
+            sites_of(&db, brightfield).await,
+            [site("Head office", "Via dei Tigli 1")]
         );
     }
 
