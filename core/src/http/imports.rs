@@ -1,5 +1,5 @@
-//! Importing customers, sites and requesters from CSV files: a preview first, then the import
-//! itself.
+//! Importing customers, sites, requesters and assets from CSV files: a preview first, then the
+//! import itself.
 
 use axum::{Json, extract::DefaultBodyLimit, extract::State};
 use serde::Deserialize;
@@ -22,7 +22,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
 }
 
 /// CSV files to import, at most one of each kind; they are taken customers first, then sites,
-/// then requesters.
+/// then requesters, then assets. Importing needs managing customers, and managing the catalog
+/// too for an assets file.
 #[derive(Deserialize, ToSchema)]
 pub struct ImportRequest {
     files: Vec<ImportFile>,
@@ -43,6 +44,9 @@ async fn import(
     mode: Mode,
 ) -> Result<Json<Report>, ApiError> {
     agent.grant.require(Permission::ManageCustomers)?;
+    if request.files.iter().any(|file| file.kind == Kind::Assets) {
+        agent.grant.require(Permission::ManageCatalog)?;
+    }
     let files = request
         .files
         .into_iter()
