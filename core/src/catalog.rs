@@ -68,8 +68,9 @@ struct AssetRow {
 
 impl From<AssetRow> for Asset {
     fn from(row: AssetRow) -> Asset {
-        let site =
-            |id: Option<Uuid>, name: Option<String>| id.zip(name).map(|(id, name)| SiteRef { id, name });
+        let site = |id: Option<Uuid>, name: Option<String>| {
+            id.zip(name).map(|(id, name)| SiteRef { id, name })
+        };
         Asset {
             id: row.id,
             customer_id: row.customer_id,
@@ -871,7 +872,13 @@ mod tests {
         update_asset(
             &db,
             id,
-            &fields(printer, "Printer 2F", Some(" SN-0042 "), Some(head), Some(ada)),
+            &fields(
+                printer,
+                "Printer 2F",
+                Some(" SN-0042 "),
+                Some(head),
+                Some(ada),
+            ),
         )
         .await
         .unwrap();
@@ -887,9 +894,13 @@ mod tests {
             (ada, Some("ada@brightfield.test"))
         );
 
-        update_asset(&db, id, &fields(printer, "Printer 2F", Some(" "), None, None))
-            .await
-            .unwrap();
+        update_asset(
+            &db,
+            id,
+            &fields(printer, "Printer 2F", Some(" "), None, None),
+        )
+        .await
+        .unwrap();
         let asset = &assets_of(&db, brightfield).await.unwrap()[0];
         assert_eq!(
             (
@@ -904,7 +915,13 @@ mod tests {
         let set = create_asset(
             &db,
             brightfield,
-            &fields(printer, "Printer 3F", Some("SN-0043"), Some(head), Some(ada)),
+            &fields(
+                printer,
+                "Printer 3F",
+                Some("SN-0043"),
+                Some(head),
+                Some(ada),
+            ),
         )
         .await
         .unwrap();
@@ -940,10 +957,18 @@ mod tests {
 
         for (site, holder, why) in [
             (Some(quay), None, "not one of the asset's customer"),
-            (Some(Uuid::new_v4()), None, "not one of the asset's customer"),
+            (
+                Some(Uuid::new_v4()),
+                None,
+                "not one of the asset's customer",
+            ),
             (Some(old), None, "retired"),
             (None, Some(ivo), "not a requester of the asset's customer"),
-            (None, Some(Uuid::new_v4()), "not a requester of the asset's customer"),
+            (
+                None,
+                Some(Uuid::new_v4()),
+                "not a requester of the asset's customer",
+            ),
             (None, Some(lena), "departed"),
         ] {
             for result in [
@@ -990,9 +1015,13 @@ mod tests {
         let add = |kind: Uuid, name: &'static str, holder: Option<Uuid>| {
             let db = db.clone();
             async move {
-                create_asset(&db, brightfield, &fields(kind, name, None, Some(head), holder))
-                    .await
-                    .unwrap()
+                create_asset(
+                    &db,
+                    brightfield,
+                    &fields(kind, name, None, Some(head), holder),
+                )
+                .await
+                .unwrap()
             }
         };
         let with_ada = add(laptop, "PC-0042", Some(ada)).await;
@@ -1187,10 +1216,19 @@ mod tests {
         assert!(serial("SN-0042").await.is_ok());
         assert!(serial(" SN-0042").await.is_err(), "an untrimmed serial");
         assert!(serial("").await.is_err(), "a blank serial rather than none");
-        assert!(set("site_id", Some(quay)).await.is_err(), "another customer's site");
+        assert!(
+            set("site_id", Some(quay)).await.is_err(),
+            "another customer's site"
+        );
         assert!(set("site_id", Some(old)).await.is_err(), "a retired site");
-        assert!(set("holder_id", Some(ivo)).await.is_err(), "another customer's requester");
-        assert!(set("holder_id", Some(lena)).await.is_err(), "a departed holder");
+        assert!(
+            set("holder_id", Some(ivo)).await.is_err(),
+            "another customer's requester"
+        );
+        assert!(
+            set("holder_id", Some(lena)).await.is_err(),
+            "a departed holder"
+        );
         assert!(set("site_id", Some(head)).await.is_ok());
         assert!(set("holder_id", Some(ada)).await.is_ok());
         let retire = sqlx::query("UPDATE assets SET retired_at = now() WHERE id = $1")
@@ -1211,9 +1249,12 @@ mod tests {
             "a site retired with an asset at it"
         );
         assert!(
-            run("UPDATE requesters SET departed_at = now() WHERE id = $1", ada)
-                .await
-                .is_err(),
+            run(
+                "UPDATE requesters SET departed_at = now() WHERE id = $1",
+                ada
+            )
+            .await
+            .is_err(),
             "a holder departed"
         );
         let to_harbor = sqlx::query("UPDATE requesters SET customer_id = $2 WHERE id = $1")

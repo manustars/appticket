@@ -1197,7 +1197,10 @@ mod tests {
         assert_eq!(assets.len(), 2, "the assets stay with the customer");
         assert_eq!(held(&db, lena).await, ["PC-0043"], "others keep theirs");
         bring_back(&db, ada).await.unwrap();
-        assert!(held(&db, ada).await.is_empty(), "coming back gives none back");
+        assert!(
+            held(&db, ada).await.is_empty(),
+            "coming back gives none back"
+        );
     }
 
     #[sqlx::test]

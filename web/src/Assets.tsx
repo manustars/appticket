@@ -147,7 +147,7 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
       {assets.data?.length === 0 && <p className="empty">{t('assets.empty')}</p>}
       {assets.data && assets.data.length > 0 && (
         // The row being edited submits the form below by its id, so that the table sits in no form.
-        <table className="data">
+        <table className="data assets">
           <thead>
             <tr>
               <th>{t('assets.kind')}</th><th>{t('assets.name')}</th><th>{t('assets.serialNumber')}</th>
