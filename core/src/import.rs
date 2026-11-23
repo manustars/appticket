@@ -175,7 +175,12 @@ impl Table {
             for (row, why) in rows {
                 let mut cells = row.cells.clone();
                 cells.resize(header.len(), String::new());
-                cells[error_at] = (*why).to_owned();
+                // A spreadsheet would take a reason starting with a name like =1+1 for a formula.
+                cells[error_at] = if why.starts_with(['=', '+', '-', '@']) {
+                    format!("'{why}")
+                } else {
+                    (*why).to_owned()
+                };
                 writer.write_record(&cells)?;
             }
             writer.flush()?;
@@ -1616,6 +1621,32 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(names(&db).await, ["Brightfield"]);
+    }
+
+    /// A spreadsheet takes a cell starting with = + - or @ for a formula: a reason that starts
+    /// with a name could run one. The file's own cells come back as they were.
+    #[sqlx::test]
+    async fn a_reason_is_never_a_formula(db: PgPool) {
+        for name in [
+            "=Harbor Lane",
+            "+Harbor Lane",
+            "-Harbor Lane",
+            "@Harbor Lane",
+        ] {
+            let harbor = crate::customers::create(&db, name, &[]).await.unwrap();
+            crate::customers::offboard(&db, harbor).await.unwrap();
+            let report = import(
+                &db,
+                vec![customers(&format!("name\n{name}\n"))],
+                Mode::Apply,
+            )
+            .await;
+            let left_out = report.files[0].left_out.clone().unwrap();
+            assert!(
+                left_out.contains(&format!("\r\n{name},\"'{name} is offboarded")),
+                "{left_out}"
+            );
+        }
     }
 
     #[sqlx::test]
