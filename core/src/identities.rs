@@ -36,8 +36,8 @@ pub enum Refusal {
     NotAnAgent,
     /// The agent was deactivated: signing in never reactivates them.
     Deactivated,
-    /// The e-mail address belongs to another agent than the one the identity is linked to, or
-    /// to an agent linked to another identity of the provider.
+    /// The verified e-mail address belongs to another agent than the one the identity is linked
+    /// to, or to an agent linked to another identity of the provider.
     EmailOfAnotherAgent,
 }
 
@@ -52,9 +52,10 @@ pub async fn sign_in(
     let email = identity
         .email
         .as_deref()
-        .map(|email| email.trim().to_lowercase())
+        .map(crate::agents::normalized_email)
         .filter(|email| !email.is_empty());
-    let verified_email = email.clone().filter(|_| identity.email_verified);
+    // Only an address the provider verified is linked by or taken over.
+    let verified_email = email.filter(|_| identity.email_verified);
     // The agent, and whether they are active.
     let linked: Option<(Uuid, bool)> = sqlx::query_as(
         "SELECT a.id, a.deactivated_at IS NULL
@@ -113,17 +114,10 @@ pub async fn sign_in(
             agent
         }
     };
-    if let Some(email) = &email {
-        let other: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM agents WHERE email = $1 AND id <> $2)",
-        )
-        .bind(email)
-        .bind(agent)
-        .fetch_one(&mut *tx)
-        .await?;
-        if other {
-            return Ok(Err(Refusal::EmailOfAnotherAgent));
-        }
+    if let Some(email) = &verified_email
+        && crate::agents::email_taken(&mut *tx, email, Some(agent)).await?
+    {
+        return Ok(Err(Refusal::EmailOfAnotherAgent));
     }
     // The name and a verified e-mail address follow the provider.
     let name = identity
@@ -339,20 +333,33 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let before = sessions(&db).await;
 
-        // Lena's address at the provider became Sam's, verified or not.
-        for verified in [true, false] {
-            let taken = identity("sub-lena", "Sam.Reed@example.com", verified, "Lena Reed");
-            assert_eq!(
-                sign_in(&db, &taken, HOURS_12).await.unwrap().unwrap_err(),
-                Refusal::EmailOfAnotherAgent
-            );
-        }
+        // Lena's verified address at the provider became Sam's.
+        let taken = identity("sub-lena", "Sam.Reed@example.com", true, "Lena Reed");
+        assert_eq!(
+            sign_in(&db, &taken, HOURS_12).await.unwrap().unwrap_err(),
+            Refusal::EmailOfAnotherAgent
+        );
         assert_eq!(
             name_and_email(&db, lena).await,
             ("Lena Marsh".to_owned(), "lena.marsh@example.com".to_owned())
         );
+        let before = sessions(&db).await;
+
+        // An unverified address is not taken over, so it is no reason to refuse: Lena signs in
+        // and keeps hers.
+        let unverified = identity("sub-lena", "Sam.Reed@example.com", false, "Lena Marsh");
+        assert_eq!(
+            sign_in(&db, &unverified, HOURS_12)
+                .await
+                .unwrap()
+                .unwrap()
+                .agent,
+            lena
+        );
+        assert_eq!(name_and_email(&db, lena).await.1, "lena.marsh@example.com");
+        assert_eq!(sessions(&db).await, before + 1);
+        let before = sessions(&db).await;
 
         // Another identity of the same provider with Lena's address: she is linked already, to
         // another identity, so it is not linked again.
