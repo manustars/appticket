@@ -56,7 +56,18 @@ impl SignInLimits {
         if !delay.is_zero() {
             self.clock.sleep(delay).await;
         }
-        match check.await? {
+        let checked = match check.await {
+            Ok(checked) => checked,
+            Err(error) => {
+                // The password could not be checked: that was no guess.
+                sqlx::query("DELETE FROM sign_in_failures WHERE id = $1")
+                    .bind(attempt)
+                    .execute(db)
+                    .await?;
+                return Err(error);
+            }
+        };
+        match checked {
             Some(value) => {
                 // The account's earlier failures were the person's own: the account forgets
                 // them. The address keeps them, as they may be someone else's guesses.
@@ -334,6 +345,41 @@ mod tests {
             .guard(db, account, address(from), async { Ok(Some(())) })
             .await
             .unwrap()
+    }
+
+    /// Guesses sent all at once cannot pass before the ones ahead of them are counted.
+    #[sqlx::test]
+    async fn attempts_sent_at_once_check_no_more_passwords_than_the_limits_allow(db: PgPool) {
+        let limits = SignInLimits::for_tests(5, 15 * MINUTE);
+        let checked = std::sync::atomic::AtomicUsize::new(0);
+        let attempts = (0..20).map(|_| {
+            limits.guard(&db, "ada@example.com", address("203.0.113.7"), async {
+                checked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(None::<()>)
+            })
+        });
+        let outcomes = futures_util::future::join_all(attempts).await;
+        let refused = outcomes
+            .iter()
+            .filter(|o| matches!(o.as_ref().unwrap(), Guarded::Refused { .. }))
+            .count();
+        assert_eq!(checked.load(std::sync::atomic::Ordering::SeqCst), 9);
+        assert_eq!(refused, 11);
+    }
+
+    /// A check that could not be made, such as a directory that does not answer, is no guess.
+    #[sqlx::test]
+    async fn a_check_that_fails_with_an_error_is_not_counted(db: PgPool) {
+        let limits = SignInLimits::for_tests(1, 15 * MINUTE);
+        let broken = limits
+            .guard(&db, "ada@example.com", address("203.0.113.7"), async {
+                Err::<Option<()>, _>(anyhow::anyhow!("the directory does not answer"))
+            })
+            .await;
+        assert!(broken.is_err());
+        wrong(&db, &limits, "ada@example.com", "203.0.113.7").await;
+        // That was the first failure: only the attempt after it waits.
+        assert_eq!(limits.clock().sleeps(), secs(&[]));
     }
 
     /// Signing in proves the person knows the account's password, not that nobody at their
