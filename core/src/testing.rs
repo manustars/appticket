@@ -33,9 +33,20 @@ pub async fn asset_kind(db: &PgPool, name: &str) -> Uuid {
 /// An asset of the customer, of the named kind.
 pub async fn asset(db: &PgPool, customer: Uuid, kind: &str, name: &str) -> Uuid {
     let kind = asset_kind(db, kind).await;
-    crate::catalog::create_asset(db, customer, kind, name)
+    crate::catalog::create_asset(db, customer, &asset_fields(kind, name))
         .await
         .unwrap()
+}
+
+/// An asset of `kind` called `name`, with no serial number, site or holder.
+pub fn asset_fields(kind: Uuid, name: &str) -> crate::catalog::AssetFields {
+    crate::catalog::AssetFields {
+        kind_id: kind,
+        name: name.to_owned(),
+        serial_number: None,
+        site_id: None,
+        holder_id: None,
+    }
 }
 
 /// A requester with one address.
