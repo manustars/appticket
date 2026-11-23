@@ -540,21 +540,55 @@ async fn import(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) ->
                 Err(why) => {
                     savepoint.rollback().await?;
                     if *kind == Kind::Customers {
+                        // A row left out before it was recognised is still about the customers
+                        // it names.
+                        let customers = if candidates.is_empty() {
+                            customers_named(
+                                &mut tx,
+                                table.cell(row, "name"),
+                                table.cell(row, "external_system"),
+                                table.cell(row, "external_name"),
+                            )
+                            .await?
+                        } else {
+                            candidates
+                        };
                         so_far.customers_left_out.push(CustomerLeftOut {
                             line: row.line,
-                            customers: candidates,
+                            customers,
                             keys: Keys::of_customer(table, row),
                         });
                     }
                     if *kind == Kind::Sites {
+                        // A row left out before its customer was known is still about the
+                        // customers it names.
+                        let customers = match site_customer {
+                            Some(customer) => vec![customer],
+                            None => {
+                                customers_named(
+                                    &mut tx,
+                                    table.cell(row, "customer"),
+                                    table.cell(row, "customer_external_system"),
+                                    table.cell(row, "customer_external_name"),
+                                )
+                                .await?
+                            }
+                        };
                         so_far.sites_left_out.push(SiteLeftOut {
                             line: row.line,
-                            customer: site_customer,
+                            customers,
                             keys: Keys::of_its_customer(table, row),
                             name: table.cell(row, "name").map(str::to_lowercase),
                         });
                     }
                     if *kind == Kind::Requesters {
+                        // A row left out before its addresses were looked up is still about the
+                        // requesters they belong to.
+                        let requesters = if requesters.is_empty() {
+                            requesters_named(&mut tx, table.cell(row, "email_addresses")).await?
+                        } else {
+                            requesters
+                        };
                         so_far.requesters_left_out.push(RequesterLeftOut {
                             line: row.line,
                             requesters,
@@ -684,8 +718,9 @@ struct RequesterLeftOut {
 /// A site row left out.
 struct SiteLeftOut {
     line: u64,
-    /// The customer the row was found to be about, when it got that far.
-    customer: Option<Uuid>,
+    /// The customer the row was found to be about or, when it did not get that far, the existing
+    /// customers it names.
+    customers: Vec<Uuid>,
     /// How the row names its customer.
     keys: Keys,
     /// The site's name, ignoring case.
@@ -792,7 +827,7 @@ impl SoFar {
             .iter()
             .find(|left_out| {
                 left_out.name.as_ref() == Some(&name)
-                    && (left_out.customer == Some(customer) || left_out.keys.meet(&keys))
+                    && (left_out.customers.contains(&customer) || left_out.keys.meet(&keys))
             })
             .map(|left_out| left_out.line)
     }
@@ -870,6 +905,45 @@ async fn with_name(tx: &mut Transaction<'_, Postgres>, name: &str) -> Result<Vec
     .bind(name)
     .fetch_all(&mut **tx)
     .await?)
+}
+
+/// The existing customers a name and an external reference name, without the rules a row must
+/// follow: a half reference names no one, nor does a cell the database cannot hold.
+async fn customers_named(
+    tx: &mut Transaction<'_, Postgres>,
+    name: Option<&str>,
+    system: Option<&str>,
+    reference: Option<&str>,
+) -> Result<Vec<Uuid>> {
+    fn storable(cell: Option<&str>) -> Option<&str> {
+        cell.filter(|cell| !cell.contains('\0'))
+    }
+    let mut found = Vec::new();
+    if let Some(name) = storable(name) {
+        found.extend(with_name(tx, name).await?.into_iter().map(|(id, _)| id));
+    }
+    if let (Some(system), Some(name)) = (storable(system), storable(reference)) {
+        found.extend(named_by(tx, &Reference { system, name }).await?);
+    }
+    Ok(found)
+}
+
+/// The existing requesters the addresses of a cell belong to, without the rules a row must
+/// follow: an address that is not one names no one, nor does one the database cannot hold.
+async fn requesters_named(
+    tx: &mut Transaction<'_, Postgres>,
+    cell: Option<&str>,
+) -> Result<Vec<Uuid>> {
+    let addresses: Vec<String> = addresses_in(cell)
+        .into_iter()
+        .filter(|written| !written.contains('\0'))
+        .filter_map(|written| crate::requesters::clean_address(written).ok())
+        .collect();
+    if addresses.is_empty() {
+        return Ok(Vec::new());
+    }
+    let owners = crate::requesters::owners(&mut **tx, &addresses).await?;
+    Ok(owners.into_iter().map(|owner| owner.requester_id).collect())
 }
 
 async fn name_of(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<String> {
@@ -2600,6 +2674,124 @@ mod tests {
         assert!(requesters_of(&db, brightfield).await.is_empty());
     }
 
+    /// A requesters file with one row left out, about Amberline's Ivo by one of his addresses, and
+    /// an asset held by Ivo's other address: the reason the asset row gets.
+    async fn asset_after_a_requester_row_left_out(
+        db: &PgPool,
+        requester_row: &str,
+    ) -> Option<String> {
+        let amberline = crate::customers::create(db, "Amberline", &[])
+            .await
+            .unwrap();
+        let ivo = crate::testing::requester(db, amberline, "ivo@amberline.test").await;
+        crate::requesters::add_address(db, ivo, "ivo.r@amberline.test")
+            .await
+            .unwrap();
+        crate::testing::asset_kind(db, "Laptop").await;
+        let requesters_file = format!(
+            "customer,customer_external_system,customer_external_name,email_addresses,name\n\
+             {requester_row}\n"
+        );
+        let assets_file = "customer,name,kind,holder\n\
+            Amberline,PC-0006,laptop,ivo.r@amberline.test\n";
+        let report = import(
+            db,
+            vec![requesters(&requesters_file), assets(assets_file)],
+            Mode::Apply,
+        )
+        .await;
+        assert_eq!(report.files[0].rows[0].outcome, Outcome::LeftOut);
+        assert!(assets_of(db, amberline).await.is_empty());
+        report.files[1].rows[0].reason.clone()
+    }
+
+    #[sqlx::test]
+    async fn an_asset_waits_for_a_requester_row_left_out_for_half_a_reference(db: PgPool) {
+        let why = asset_after_a_requester_row_left_out(
+            &db,
+            "Amberline,Watchtower,,ivo@amberline.test,Ivo",
+        )
+        .await;
+        assert!(
+            why.as_deref()
+                .unwrap_or_default()
+                .contains("line 2 of the requesters file"),
+            "{why:?}"
+        );
+    }
+
+    #[sqlx::test]
+    async fn an_asset_waits_for_a_requester_row_left_out_for_a_cell_the_database_cannot_hold(
+        db: PgPool,
+    ) {
+        let why =
+            asset_after_a_requester_row_left_out(&db, "Amberline,,,ivo@amberline.test,Iv\0o").await;
+        assert!(
+            why.as_deref()
+                .unwrap_or_default()
+                .contains("line 2 of the requesters file"),
+            "{why:?}"
+        );
+    }
+
+    /// A sites file with one row left out, about Brightfield's Head office, and a requester at that
+    /// site naming Brightfield by its external reference: the reason the requester row gets.
+    async fn requester_after_a_site_row_left_out(db: &PgPool, site_row: &str) -> Option<String> {
+        let brightfield = crate::customers::create(db, "Brightfield", &[])
+            .await
+            .unwrap();
+        crate::external_references::add(db, brightfield, "Watchtower", "BF-01")
+            .await
+            .unwrap();
+        crate::sites::create(db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let sites_file = format!(
+            "customer,customer_external_system,customer_external_name,name,address\n{site_row}\n"
+        );
+        let requesters_file = "customer,customer_external_system,customer_external_name,email_addresses,site\n\
+            ,Watchtower,BF-01,ada@brightfield.test,Head office\n";
+        let report = import(
+            db,
+            vec![sites(&sites_file), requesters(requesters_file)],
+            Mode::Apply,
+        )
+        .await;
+        assert_eq!(report.files[0].rows[0].outcome, Outcome::LeftOut);
+        assert!(requesters_of(db, brightfield).await.is_empty());
+        report.files[1].rows[0].reason.clone()
+    }
+
+    #[sqlx::test]
+    async fn a_requester_waits_for_a_site_row_left_out_for_half_a_reference(db: PgPool) {
+        let why = requester_after_a_site_row_left_out(
+            &db,
+            "Brightfield,Watchtower,,Head office,Via dei Tigli 2",
+        )
+        .await;
+        assert!(
+            why.as_deref()
+                .unwrap_or_default()
+                .contains("line 2 of the sites file"),
+            "{why:?}"
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_requester_waits_for_a_site_row_left_out_for_a_cell_the_database_cannot_hold(
+        db: PgPool,
+    ) {
+        let why =
+            requester_after_a_site_row_left_out(&db, "Brightfield,,,Head office,Via dei Tigli\0 2")
+                .await;
+        assert!(
+            why.as_deref()
+                .unwrap_or_default()
+                .contains("line 2 of the sites file"),
+            "{why:?}"
+        );
+    }
+
     /// The customer's sites: name, address and whether retired.
     async fn sites_of(db: &PgPool, customer: Uuid) -> Vec<(String, String, bool)> {
         crate::sites::of(db, customer)
@@ -3042,6 +3234,40 @@ mod tests {
         let why = site_after_a_customer_row_left_out(
             &db,
             "Brightfield,,,ITA",
+            ",Watchtower,BF-01,Head office,Via dei Tigli 1",
+        )
+        .await;
+        assert!(
+            why.as_deref()
+                .unwrap_or_default()
+                .contains("line 2 of the customers file"),
+            "{why:?}"
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_site_waits_for_a_customer_row_left_out_for_half_a_reference(db: PgPool) {
+        let why = site_after_a_customer_row_left_out(
+            &db,
+            "Brightfield,Watchtower,,ITA",
+            ",Watchtower,BF-01,Head office,Via dei Tigli 1",
+        )
+        .await;
+        assert!(
+            why.as_deref()
+                .unwrap_or_default()
+                .contains("line 2 of the customers file"),
+            "{why:?}"
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_site_waits_for_a_customer_row_left_out_for_a_cell_the_database_cannot_hold(
+        db: PgPool,
+    ) {
+        let why = site_after_a_customer_row_left_out(
+            &db,
+            "Brightfield,,,IT\0A",
             ",Watchtower,BF-01,Head office,Via dei Tigli 1",
         )
         .await;
