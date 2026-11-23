@@ -305,6 +305,7 @@ pub struct Begun {
 
 /// What the provider sends the browser back with.
 #[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct Return {
     pub code: Option<String>,
     pub state: Option<String>,

@@ -5929,14 +5929,14 @@ export interface operations {
     };
     callback: {
         parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                code: string | null;
-                state: string | null;
+            query?: {
+                code?: string;
+                state?: string;
                 /** @description The provider's refusal, such as `access_denied`. */
-                error: string | null;
+                error?: string;
             };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
