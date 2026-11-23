@@ -16,6 +16,7 @@ mod cli;
 mod customers;
 mod drafts;
 mod error;
+mod external_references;
 mod http;
 mod imap;
 mod mail;

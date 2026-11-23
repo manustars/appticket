@@ -47,7 +47,9 @@ async fn fake_core() -> (String, Posted) {
             "/api/addon/customers",
             get(|| async {
                 Json(json!([{"id": CUSTOMER, "name": "Brightfield", "is_help_desk": false,
-                    "domains": ["brightfield.test"], "added_later": 1}]))
+                    "domains": ["brightfield.test"],
+                    "external_references": [{"system": "Watchtower", "name": "Brightfield/Offices"}],
+                    "added_later": 1}]))
             }),
         )
         .route(
@@ -152,6 +154,11 @@ async fn reads_what_an_addon_needs_and_ignores_the_rest() {
     );
     let customers = client.customers().await.unwrap();
     assert_eq!(customers[0].domains, ["brightfield.test"]);
+    let reference = &customers[0].external_references[0];
+    assert_eq!(
+        (reference.system.as_str(), reference.name.as_str()),
+        ("Watchtower", "Brightfield/Offices")
+    );
     let customer = customers[0].id;
     assert_eq!(
         client.customer_assets(customer).await.unwrap()[0].name,

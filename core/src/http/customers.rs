@@ -1,5 +1,5 @@
-//! Managing customers, their mail domains, their sites and their requesters with their
-//! addresses.
+//! Managing customers, their mail domains, their sites, their external references and their
+//! requesters with their addresses.
 
 use axum::{
     Json,
@@ -14,6 +14,7 @@ use uuid::Uuid;
 use super::{ApiError, AppState, Problem};
 use crate::auth::SignedIn;
 use crate::customers::{self, CustomerDetail, CustomerDetails, CustomerSummary};
+use crate::external_references;
 use crate::requesters;
 use crate::roles::Permission;
 use crate::sites;
@@ -33,6 +34,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(add_site))
         .routes(routes!(update_site))
         .routes(routes!(retire_site))
+        .routes(routes!(add_external_reference))
+        .routes(routes!(remove_external_reference))
         .routes(routes!(offboard))
         .routes(routes!(bring_back))
 }
@@ -329,6 +332,55 @@ async fn retire_site(
 ) -> Result<StatusCode, ApiError> {
     agent.grant.require(Permission::ManageCustomers)?;
     sites::retire(&state.db, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct NewExternalReference {
+    /// The other system, such as a monitoring tool.
+    system: String,
+    /// The name that system uses for the customer.
+    name: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct CreatedExternalReference {
+    id: Uuid,
+}
+
+/// Gives the customer an external reference: a name another system uses for it. A name names
+/// exactly one customer within its system, ignoring case: one already in use is refused.
+#[utoipa::path(post, path = "/api/customers/{id}/external-references", tag = "customers",
+    params(("id" = Uuid, Path, description = "The customer")), request_body = NewExternalReference,
+    responses((status = CREATED, body = CreatedExternalReference),
+        (status = NOT_FOUND, body = Problem), (status = CONFLICT, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn add_external_reference(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+    Json(new): Json<NewExternalReference>,
+) -> Result<(StatusCode, Json<CreatedExternalReference>), ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
+    let reference = external_references::add(&state.db, id, &new.system, &new.name).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatedExternalReference { id: reference }),
+    ))
+}
+
+/// Takes an external reference from its customer; its name is free again in its system.
+#[utoipa::path(delete, path = "/api/external-references/{id}", tag = "customers",
+    params(("id" = Uuid, Path, description = "The external reference")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn remove_external_reference(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
+    external_references::remove(&state.db, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

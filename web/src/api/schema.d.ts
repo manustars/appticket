@@ -11,7 +11,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Customers that can get tickets, with their mail domains. Scope `directory:read`. */
+        /**
+         * Customers that can get tickets, with their mail domains and external references. Scope
+         *     `directory:read`.
+         */
         get: operations["customers"];
         put?: never;
         post?: never;
@@ -550,6 +553,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/customers/{id}/external-references": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Gives the customer an external reference: a name another system uses for it. A name names
+         *     exactly one customer within its system, ignoring case: one already in use is refused.
+         */
+        post: operations["add_external_reference"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/customers/{id}/offboard": {
         parameters: {
             query?: never;
@@ -616,6 +639,23 @@ export interface paths {
         /** Adds a site to the customer; the customer's active sites have different names. */
         post: operations["add_site"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/external-references/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Takes an external reference from its customer; its name is free again in its system. */
+        delete: operations["remove_external_reference"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1263,10 +1303,20 @@ export interface components {
         AddonCustomer: {
             /** @description Mail domains that identify the customer's requesters. */
             domains: string[];
+            /**
+             * @description The names other systems use for the customer, by system and name. A name names exactly
+             *     one customer within its system; systems and names are compared ignoring case.
+             */
+            external_references: components["schemas"]["AddonExternalReference"][];
             /** Format: uuid */
             id: string;
             is_help_desk: boolean;
             name: string;
+        };
+        /** @description A name another system uses for a customer, such as a group in a monitoring tool. */
+        AddonExternalReference: {
+            name: string;
+            system: string;
         };
         AddonIdentity: {
             /** @description The languages of the agents' UI: write each rationale in all of them. */
@@ -1428,6 +1478,10 @@ export interface components {
             /** Format: uuid */
             id: string;
         };
+        CreatedExternalReference: {
+            /** Format: uuid */
+            id: string;
+        };
         CreatedRequester: {
             /** Format: uuid */
             id: string;
@@ -1448,6 +1502,8 @@ export interface components {
         CustomerDetail: components["schemas"]["CustomerSummary"] & {
             /** @description The customer's postal address; it can span several lines. */
             address?: string | null;
+            /** @description The names other systems use for the customer, by system and name. */
+            external_references: components["schemas"]["ExternalReference"][];
             legal_name?: string | null;
             /** @description Internal notes, seen only by agents. */
             notes: string;
@@ -1539,6 +1595,15 @@ export interface components {
          * @enum {string}
          */
         DraftMode: "reply" | "note";
+        /** @description A name another system uses for a customer, such as a group in a monitoring tool. */
+        ExternalReference: {
+            /** Format: uuid */
+            id: string;
+            /** @description The name the system uses for the customer; it names no other customer in that system. */
+            name: string;
+            /** @description The other system, such as a monitoring tool. */
+            system: string;
+        };
         /** @description A reply the outbox has not managed to send yet. */
         FailingReply: {
             /** Format: int32 */
@@ -1650,6 +1715,12 @@ export interface components {
         };
         NewDomain: {
             domain: string;
+        };
+        NewExternalReference: {
+            /** @description The name that system uses for the customer. */
+            name: string;
+            /** @description The other system, such as a monitoring tool. */
+            system: string;
         };
         NewNote: {
             body: string;
@@ -3657,6 +3728,56 @@ export interface operations {
             };
         };
     };
+    add_external_reference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewExternalReference"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedExternalReference"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     offboard: {
         parameters: {
             query?: never;
@@ -3804,6 +3925,50 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CreatedSite"];
                 };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    remove_external_reference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The external reference */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             401: {
                 headers: {

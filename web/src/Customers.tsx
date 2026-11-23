@@ -1,6 +1,7 @@
 import { useCallback, useId, useMemo, useState, type FormEvent } from 'react'
 import {
   addDomain,
+  addExternalReference,
   addRequester,
   addSite,
   bringBackCustomer,
@@ -14,6 +15,7 @@ import {
   listServices,
   offboardCustomer,
   removeDomain,
+  removeExternalReference,
   retireAsset,
   retireSite,
   startUsingService,
@@ -172,6 +174,7 @@ export function CustomerPage({ id, onChanged, onSignedOut }: PageProps) {
       <CustomerDetails customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       <Domains customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       <Sites customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
+      <ExternalReferences customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       <Requesters customer={c} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       <CustomerAssets customer={c} readOnly={catalogReadOnly} onSignedOut={onSignedOut} />
       <CustomerServices customer={c} readOnly={catalogReadOnly} onSignedOut={onSignedOut} />
@@ -381,6 +384,83 @@ function Domains({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
             <input value={domain} placeholder={t('customer.domainPlaceholder')} onChange={(e) => setDomain(e.target.value)} />
           </label>
           <button type="submit" disabled={action.busy || !domain.trim()}>{t('customer.addDomain')}</button>
+        </form>
+      )}
+      <Problem error={action.error} />
+    </section>
+  )
+}
+
+function ExternalReferences({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
+  const { t } = useI18n()
+  const action = useAction(onSignedOut)
+  const [system, setSystem] = useState('')
+  const [name, setName] = useState('')
+  const id = useId()
+  // The systems this customer already names, offered so that the same one is spelled alike.
+  const systems = useMemo(() => [...new Set(c.external_references.map((r) => r.system))], [c.external_references])
+
+  function add(event: FormEvent) {
+    event.preventDefault()
+    if (!system.trim() || !name.trim()) return
+    void action.run(() => addExternalReference(c.id, system.trim(), name.trim())).then(async (ok) => {
+      if (!ok) return
+      setName('')
+      await onChanged()
+    })
+  }
+
+  function remove(referenceId: string) {
+    void action.run(() => removeExternalReference(referenceId)).then(async (ok) => { if (ok) await onChanged() })
+  }
+
+  return (
+    <section className="panel" aria-labelledby={`${id}-title`}>
+      <h2 id={`${id}-title`}>{t('externalReferences.title')}</h2>
+      <p className="hint">{t('externalReferences.hint')}</p>
+      {c.external_references.length === 0 ? (
+        <p className="empty">{t('externalReferences.empty')}</p>
+      ) : (
+        <table className="data">
+          <thead>
+            <tr>
+              <th>{t('externalReferences.system')}</th><th>{t('externalReferences.name')}</th>
+              <th><span className="visually-hidden">{t('table.actions')}</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {c.external_references.map((r) => (
+              <tr key={r.id}>
+                <td>{r.system}</td>
+                <td>{r.name}</td>
+                <td className="row-actions">
+                  {!readOnly && (
+                    <button type="button" className="link danger" disabled={action.busy}
+                      aria-label={t('externalReferences.removeNamed', { name: r.name, system: r.system })}
+                      onClick={() => remove(r.id)}>
+                      {t('action.remove')}
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {!readOnly && (
+        <form className="inline-form" onSubmit={add}>
+          <label>
+            {t('externalReferences.system')}
+            <input required value={system} list={`${id}-systems`} onChange={(e) => setSystem(e.target.value)} />
+          </label>
+          <datalist id={`${id}-systems`}>
+            {systems.map((s) => <option key={s} value={s} />)}
+          </datalist>
+          <label>
+            {t('externalReferences.name')}
+            <input required value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <button type="submit" disabled={action.busy || !system.trim() || !name.trim()}>{t('externalReferences.add')}</button>
         </form>
       )}
       <Problem error={action.error} />

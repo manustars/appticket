@@ -15,7 +15,7 @@
         "tags": [
           "add-ons"
         ],
-        "summary": "Customers that can get tickets, with their mail domains. Scope `directory:read`.",
+        "summary": "Customers that can get tickets, with their mail domains and external references. Scope\n`directory:read`.",
         "operationId": "customers",
         "responses": {
           "200": {
@@ -1948,6 +1948,75 @@
         }
       }
     },
+    "/api/customers/{id}/external-references": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Gives the customer an external reference: a name another system uses for it. A name names\nexactly one customer within its system, ignoring case: one already in use is refused.",
+        "operationId": "add_external_reference",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewExternalReference"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedExternalReference"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/customers/{id}/offboard": {
       "post": {
         "tags": [
@@ -2151,6 +2220,57 @@
               }
             }
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/external-references/{id}": {
+      "delete": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Takes an external reference from its customer; its name is free again in its system.",
+        "operationId": "remove_external_reference",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The external reference",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
           "401": {
             "content": {
               "application/json": {
@@ -4729,7 +4849,8 @@
           "id",
           "name",
           "is_help_desk",
-          "domains"
+          "domains",
+          "external_references"
         ],
         "properties": {
           "domains": {
@@ -4739,6 +4860,13 @@
             },
             "description": "Mail domains that identify the customer's requesters."
           },
+          "external_references": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddonExternalReference"
+            },
+            "description": "The names other systems use for the customer, by system and name. A name names exactly\none customer within its system; systems and names are compared ignoring case."
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -4747,6 +4875,22 @@
             "type": "boolean"
           },
           "name": {
+            "type": "string"
+          }
+        }
+      },
+      "AddonExternalReference": {
+        "type": "object",
+        "description": "A name another system uses for a customer, such as a group in a monitoring tool.",
+        "required": [
+          "system",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "system": {
             "type": "string"
           }
         }
@@ -5247,6 +5391,18 @@
           }
         }
       },
+      "CreatedExternalReference": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "CreatedRequester": {
         "type": "object",
         "required": [
@@ -5298,7 +5454,8 @@
             "required": [
               "notes",
               "requester_list",
-              "sites"
+              "sites",
+              "external_references"
             ],
             "properties": {
               "address": {
@@ -5307,6 +5464,13 @@
                   "null"
                 ],
                 "description": "The customer's postal address; it can span several lines."
+              },
+              "external_references": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ExternalReference"
+                },
+                "description": "The names other systems use for the customer, by system and name."
               },
               "legal_name": {
                 "type": [
@@ -5570,6 +5734,29 @@
           "reply",
           "note"
         ]
+      },
+      "ExternalReference": {
+        "type": "object",
+        "description": "A name another system uses for a customer, such as a group in a monitoring tool.",
+        "required": [
+          "id",
+          "system",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "The name the system uses for the customer; it names no other customer in that system."
+          },
+          "system": {
+            "type": "string",
+            "description": "The other system, such as a monitoring tool."
+          }
+        }
       },
       "FailingReply": {
         "type": "object",
@@ -5924,6 +6111,23 @@
         "properties": {
           "domain": {
             "type": "string"
+          }
+        }
+      },
+      "NewExternalReference": {
+        "type": "object",
+        "required": [
+          "system",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name that system uses for the customer."
+          },
+          "system": {
+            "type": "string",
+            "description": "The other system, such as a monitoring tool."
           }
         }
       },

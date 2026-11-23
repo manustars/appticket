@@ -77,7 +77,7 @@ sentence saying which scope is missing.
 | Call | Scope | What it does |
 |---|---|---|
 | `GET /api/addon/whoami` | none | The add-on's name, scopes and the languages of the agents' UI. |
-| `GET /api/addon/customers` | `directory:read` | Customers that can get tickets, with their mail domains. |
+| `GET /api/addon/customers` | `directory:read` | Customers that can get tickets, with their mail domains and external references. |
 | `GET /api/addon/customers/{id}/assets` | `directory:read` | A customer's active assets. |
 | `GET /api/addon/customers/{id}/services` | `directory:read` | The active services a customer uses. |
 | `GET /api/addon/tickets?requester_email=…` or `?customer=…` | `tickets:read` | Tickets that are not closed, of the requester the address belongs to (any of their addresses) or of a customer. |
@@ -90,6 +90,13 @@ the requester last wrote from on that ticket, where a reply goes, and is empty w
 written on it; `last_picked` is then the address an agent picked for the last reply there.
 `email`, there and in `requester_email` of the ticket lists, is the address a reply goes to:
 `reply_to` when there is one, else `last_picked`, else the first address.
+
+A customer's `external_references` are the names other systems use for it, each a `system` and a
+`name` in it, such as a group in a monitoring tool: `[{"system": "Watchtower", "name":
+"Brightfield/Offices"}]`. A customer can have several in the same system, and a name names exactly
+one customer within its system. The core compares systems and names ignoring case, so an add-on
+looking up a name of its own system should too. Agents who manage customers set them; add-ons only
+read them. Offboarded customers are not listed, and neither are their references.
 
 The full request and response shapes are in the core's OpenAPI specification
 (`hd openapi`, or `/api/openapi.json` on a running core).

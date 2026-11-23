@@ -281,6 +281,13 @@ export interface Messages {
   "sites.retired": { plural: false; placeholders: "date"; tags: never }
   "sites.confirmRetire": { plural: false; placeholders: "name"; tags: never }
   "sites.confirmRetireWithRequesters": { plural: true; placeholders: "count" | "name" | "requesters"; tags: never }
+  "externalReferences.title": { plural: false; placeholders: never; tags: never }
+  "externalReferences.hint": { plural: false; placeholders: never; tags: never }
+  "externalReferences.empty": { plural: false; placeholders: never; tags: never }
+  "externalReferences.system": { plural: false; placeholders: never; tags: never }
+  "externalReferences.name": { plural: false; placeholders: never; tags: never }
+  "externalReferences.add": { plural: false; placeholders: never; tags: never }
+  "externalReferences.removeNamed": { plural: false; placeholders: "name" | "system"; tags: never }
   "assets.title": { plural: false; placeholders: never; tags: never }
   "assets.empty": { plural: false; placeholders: never; tags: never }
   "assets.kind": { plural: false; placeholders: never; tags: never }
