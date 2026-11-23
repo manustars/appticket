@@ -150,10 +150,15 @@ pub async fn add(
     })
 }
 
+/// Whether a (normalized) address can be an agent's: something on both sides of an `@`.
+pub fn is_address(email: &str) -> bool {
+    email.contains('@') && !email.starts_with('@') && !email.ends_with('@')
+}
+
 /// The e-mail address, in lower case, and the name, trimmed, of an agent.
 fn email_and_name<'a>(email: &str, name: &'a str) -> Result<(String, &'a str)> {
     let email = normalized_email(email);
-    if !email.contains('@') || email.starts_with('@') || email.ends_with('@') {
+    if !is_address(&email) {
         return rule("an agent needs an e-mail address");
     }
     let name = name.trim();
@@ -683,6 +688,7 @@ mod tests {
             email: Some("lena.marsh@example.com".to_owned()),
             email_verified: true,
             name: Some("Lena Marsh".to_owned()),
+            authorized_group: crate::identities::AuthorizedGroup::NotConfigured,
         };
         crate::identities::sign_in(&db, &at_provider, time::Duration::hours(12))
             .await
