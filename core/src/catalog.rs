@@ -1,15 +1,16 @@
 //! What tickets refer to: assets customers own and services the help desk provides (ADR 0002,
 //! ADR 0003). Rules are in docs/domain-rules.md ("Customers, assets and services").
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{Error, Result, rule};
+use crate::requesters::SiteRef;
 
-#[derive(Serialize, ToSchema, sqlx::FromRow)]
+#[derive(Serialize, ToSchema)]
 pub struct Asset {
     pub id: Uuid,
     pub customer_id: Uuid,
@@ -17,11 +18,122 @@ pub struct Asset {
     pub kind_id: Uuid,
     /// The name of its asset kind: laptop, printer, application, licence…
     pub kind: String,
+    /// Whether its kind moves with its holder; otherwise it stays at its own site.
+    pub moves_with_holder: bool,
     pub name: String,
+    pub serial_number: Option<String>,
+    /// Its own site, one of its customer's.
+    pub site: Option<SiteRef>,
+    /// The requester it has been given to, of its customer and not departed.
+    pub holder: Option<Holder>,
+    /// Where it is: its holder's site while it has a holder, when its kind moves with its holder;
+    /// its own site otherwise.
+    pub at_site: Option<SiteRef>,
     /// The add-on it came from, when an add-on supplies it.
     pub source_addon: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub retired_at: Option<OffsetDateTime>,
+}
+
+/// The requester an asset has been given to.
+#[derive(Serialize, ToSchema)]
+pub struct Holder {
+    pub id: Uuid,
+    pub name: Option<String>,
+    /// The first of their addresses.
+    pub address: Option<String>,
+}
+
+/// An asset as the database gives it, before its sites and holder are put together.
+#[derive(sqlx::FromRow)]
+struct AssetRow {
+    id: Uuid,
+    customer_id: Uuid,
+    customer_name: String,
+    kind_id: Uuid,
+    kind: String,
+    moves_with_holder: bool,
+    name: String,
+    serial_number: Option<String>,
+    site_id: Option<Uuid>,
+    site_name: Option<String>,
+    holder_id: Option<Uuid>,
+    holder_name: Option<String>,
+    holder_address: Option<String>,
+    at_site_id: Option<Uuid>,
+    at_site_name: Option<String>,
+    source_addon: Option<String>,
+    retired_at: Option<OffsetDateTime>,
+}
+
+impl From<AssetRow> for Asset {
+    fn from(row: AssetRow) -> Asset {
+        let site =
+            |id: Option<Uuid>, name: Option<String>| id.zip(name).map(|(id, name)| SiteRef { id, name });
+        Asset {
+            id: row.id,
+            customer_id: row.customer_id,
+            customer_name: row.customer_name,
+            kind_id: row.kind_id,
+            kind: row.kind,
+            moves_with_holder: row.moves_with_holder,
+            name: row.name,
+            serial_number: row.serial_number,
+            site: site(row.site_id, row.site_name),
+            holder: row.holder_id.map(|id| Holder {
+                id,
+                name: row.holder_name,
+                address: row.holder_address,
+            }),
+            at_site: site(row.at_site_id, row.at_site_name),
+            source_addon: row.source_addon,
+            retired_at: row.retired_at,
+        }
+    }
+}
+
+/// The assets picked by the end of the query (`WHERE`, `ORDER BY`, on `assets a` and `asset_kinds
+/// k`), with their site and holder, and the site each is at (the `asset_sites` view follows its
+/// kind).
+macro_rules! assets_where {
+    ($rest:literal) => {
+        concat!(
+            "SELECT a.id, a.customer_id, c.name AS customer_name, a.kind_id, k.name AS kind,
+                    k.moves_with_holder, a.name, a.serial_number,
+                    a.site_id, s.name AS site_name,
+                    a.holder_id, h.name AS holder_name,
+                    (SELECT ha.address FROM requester_addresses ha WHERE ha.requester_id = h.id
+                     ORDER BY ha.created_at, ha.address LIMIT 1) AS holder_address,
+                    w.site_id AS at_site_id, ws.name AS at_site_name,
+                    a.source_addon, a.retired_at
+             FROM assets a
+             JOIN customers c ON c.id = a.customer_id
+             JOIN asset_kinds k ON k.id = a.kind_id
+             LEFT JOIN sites s ON s.id = a.site_id
+             LEFT JOIN requesters h ON h.id = a.holder_id
+             JOIN asset_sites w ON w.asset_id = a.id
+             LEFT JOIN sites ws ON ws.id = w.site_id
+             ",
+            $rest
+        )
+    };
+}
+
+/// What agents who manage the catalog set on an asset.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct AssetFields {
+    /// Its asset kind, one of the list the help desk manages.
+    pub kind_id: Uuid,
+    pub name: String,
+    /// Empty or left out for none.
+    #[serde(default)]
+    pub serial_number: Option<String>,
+    /// One of the asset's customer's sites that is not retired.
+    #[serde(default)]
+    pub site_id: Option<Uuid>,
+    /// A requester of the asset's customer who has not departed.
+    #[serde(default)]
+    pub holder_id: Option<Uuid>,
 }
 
 #[derive(Serialize, ToSchema, sqlx::FromRow)]
@@ -61,61 +173,137 @@ fn text(value: &str, what: &str) -> Result<String> {
 
 /// The customer's assets, active ones first.
 pub async fn assets_of(db: &PgPool, customer: Uuid) -> Result<Vec<Asset>> {
-    Ok(sqlx::query_as(
-        "SELECT a.id, a.customer_id, c.name AS customer_name, a.kind_id, k.name AS kind, a.name,
-                a.source_addon, a.retired_at
-         FROM assets a JOIN customers c ON c.id = a.customer_id
-         JOIN asset_kinds k ON k.id = a.kind_id
-         WHERE a.customer_id = $1
-         ORDER BY a.retired_at IS NOT NULL, lower(k.name), a.name",
-    )
+    let rows: Vec<AssetRow> = sqlx::query_as(assets_where!(
+        "WHERE a.customer_id = $1
+         ORDER BY a.retired_at IS NOT NULL, lower(k.name), a.name"
+    ))
     .bind(customer)
     .fetch_all(db)
-    .await?)
+    .await?;
+    Ok(rows.into_iter().map(Asset::from).collect())
 }
 
-pub async fn create_asset(db: &PgPool, customer: Uuid, kind: Uuid, name: &str) -> Result<Uuid> {
-    let name = text(name, "name")?;
-    kind_exists(db, kind).await?;
-    let offboarded: Option<bool> =
-        sqlx::query_scalar("SELECT offboarded_at IS NOT NULL FROM customers WHERE id = $1")
-            .bind(customer)
-            .fetch_optional(db)
-            .await?;
-    match offboarded {
-        None => return Err(Error::NotFound("customer")),
-        Some(true) => return rule("the customer is offboarded"),
-        Some(false) => {}
-    }
+/// Adds an asset the customer owns, with its details (see [`update_asset`]).
+pub async fn create_asset(db: &PgPool, customer: Uuid, fields: &AssetFields) -> Result<Uuid> {
+    let mut tx = db.begin().await?;
+    crate::customers::lock_active(&mut tx, customer).await?;
+    let details = checked(&mut tx, customer, fields).await?;
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO assets (id, customer_id, kind_id, name) VALUES ($1, $2, $3, $4)")
-        .bind(id)
-        .bind(customer)
-        .bind(kind)
-        .bind(name)
-        .execute(db)
-        .await?;
+    sqlx::query(
+        "INSERT INTO assets (id, customer_id, kind_id, name, serial_number, site_id, holder_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(id)
+    .bind(customer)
+    .bind(fields.kind_id)
+    .bind(details.name)
+    .bind(details.serial_number)
+    .bind(fields.site_id)
+    .bind(fields.holder_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok(id)
 }
 
-pub async fn update_asset(db: &PgPool, id: Uuid, kind: Uuid, name: &str) -> Result<()> {
-    let name = text(name, "name")?;
-    kind_exists(db, kind).await?;
-    let updated = sqlx::query("UPDATE assets SET kind_id = $2, name = $3 WHERE id = $1")
+/// Changes an asset's kind, name, serial number, site and holder. The site is one of the asset's
+/// customer's that is not retired; the holder is a requester of that customer who has not departed,
+/// and a retired asset has none. An offboarded customer's assets do not change.
+pub async fn update_asset(db: &PgPool, id: Uuid, fields: &AssetFields) -> Result<()> {
+    let mut tx = db.begin().await?;
+    // An asset never changes customer, so its customer can be read before it is locked. Locks are
+    // taken customers first, then requesters, then sites, then assets.
+    let customer: Uuid = sqlx::query_scalar("SELECT customer_id FROM assets WHERE id = $1")
         .bind(id)
-        .bind(kind)
-        .bind(name)
-        .execute(db)
+        .fetch_optional(&mut *tx)
         .await?
-        .rows_affected();
-    if updated == 0 {
-        return Err(Error::NotFound("asset"));
+        .ok_or(Error::NotFound("asset"))?;
+    crate::customers::lock_active(&mut tx, customer).await?;
+    let details = checked(&mut tx, customer, fields).await?;
+    let retired: bool =
+        sqlx::query_scalar("SELECT retired_at IS NOT NULL FROM assets WHERE id = $1 FOR UPDATE")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if retired && fields.holder_id.is_some() {
+        return rule("a retired asset has no holder");
     }
+    sqlx::query(
+        "UPDATE assets SET kind_id = $2, name = $3, serial_number = $4, site_id = $5,
+                holder_id = $6
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(fields.kind_id)
+    .bind(details.name)
+    .bind(details.serial_number)
+    .bind(fields.site_id)
+    .bind(fields.holder_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok(())
 }
 
+/// An asset's name and serial number as they are stored.
+struct Checked {
+    name: String,
+    serial_number: Option<String>,
+}
+
+/// Refuses details that break a rule for an asset of `customer`, which the caller has locked; the
+/// site and the holder are locked too, so that one retired or departing at the same time is seen.
+async fn checked(
+    tx: &mut Transaction<'_, Postgres>,
+    customer: Uuid,
+    fields: &AssetFields,
+) -> Result<Checked> {
+    let name = text(&fields.name, "name")?;
+    kind_exists(&mut **tx, fields.kind_id).await?;
+    if let Some(holder) = fields.holder_id {
+        let departed: Option<bool> = sqlx::query_scalar(
+            "SELECT departed_at IS NOT NULL FROM requesters WHERE id = $1 AND customer_id = $2
+             FOR SHARE",
+        )
+        .bind(holder)
+        .bind(customer)
+        .fetch_optional(&mut **tx)
+        .await?;
+        match departed {
+            None => return rule("the holder is not a requester of the asset's customer"),
+            Some(true) => return rule("the holder has departed"),
+            Some(false) => {}
+        }
+    }
+    if let Some(site) = fields.site_id {
+        let retired: Option<bool> = sqlx::query_scalar(
+            "SELECT retired_at IS NOT NULL FROM sites WHERE id = $1 AND customer_id = $2
+             FOR SHARE",
+        )
+        .bind(site)
+        .bind(customer)
+        .fetch_optional(&mut **tx)
+        .await?;
+        match retired {
+            None => return rule("the site is not one of the asset's customer"),
+            Some(true) => return rule("the site is retired"),
+            Some(false) => {}
+        }
+    }
+    let serial_number = fields
+        .serial_number
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    Ok(Checked {
+        name,
+        serial_number,
+    })
+}
+
 /// Refuses a kind that is not on the list; kinds are never removed, so the check holds.
-async fn kind_exists(db: &PgPool, kind: Uuid) -> Result<()> {
+async fn kind_exists<'e>(db: impl sqlx::PgExecutor<'e>, kind: Uuid) -> Result<()> {
     let exists: bool =
         sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM asset_kinds WHERE id = $1)")
             .bind(kind)
@@ -127,23 +315,27 @@ async fn kind_exists(db: &PgPool, kind: Uuid) -> Result<()> {
     Ok(())
 }
 
-/// Retires an asset: it stays on the tickets that refer to it but gets no new links.
+/// Retires an asset: it stays on the tickets that refer to it but gets no new links, and it loses
+/// its holder.
 pub async fn retire_asset(db: &PgPool, id: Uuid) -> Result<()> {
-    let retired: Option<bool> =
-        sqlx::query_scalar("SELECT retired_at IS NOT NULL FROM assets WHERE id = $1")
-            .bind(id)
-            .fetch_optional(db)
-            .await?;
-    match retired {
-        None => Err(Error::NotFound("asset")),
-        Some(true) => rule("the asset is already retired"),
-        Some(false) => {
-            sqlx::query("UPDATE assets SET retired_at = now() WHERE id = $1")
-                .bind(id)
-                .execute(db)
-                .await?;
-            Ok(())
-        }
+    let retired = sqlx::query(
+        "UPDATE assets SET retired_at = now(), holder_id = NULL
+         WHERE id = $1 AND retired_at IS NULL",
+    )
+    .bind(id)
+    .execute(db)
+    .await?;
+    if retired.rows_affected() == 1 {
+        return Ok(());
+    }
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM assets WHERE id = $1)")
+        .bind(id)
+        .fetch_one(db)
+        .await?;
+    if exists {
+        rule("the asset is already retired")
+    } else {
+        Err(Error::NotFound("asset"))
     }
 }
 
@@ -188,21 +380,17 @@ pub async fn service_detail(db: &PgPool, id: Uuid) -> Result<ServiceDetail> {
     .bind(id)
     .fetch_all(db)
     .await?;
-    let runs_on = sqlx::query_as(
-        "SELECT a.id, a.customer_id, c.name AS customer_name, a.kind_id, k.name AS kind, a.name,
-                a.source_addon, a.retired_at
-         FROM assets a JOIN customers c ON c.id = a.customer_id
-         JOIN asset_kinds k ON k.id = a.kind_id
-         JOIN service_assets sa ON sa.asset_id = a.id
-         WHERE sa.service_id = $1 ORDER BY a.name",
-    )
+    let runs_on: Vec<AssetRow> = sqlx::query_as(assets_where!(
+        "WHERE a.id IN (SELECT asset_id FROM service_assets WHERE service_id = $1)
+         ORDER BY a.name"
+    ))
     .bind(id)
     .fetch_all(db)
     .await?;
     Ok(ServiceDetail {
         service,
         used_by,
-        runs_on,
+        runs_on: runs_on.into_iter().map(Asset::from).collect(),
     })
 }
 
@@ -618,6 +806,253 @@ mod tests {
         .await
         .unwrap();
         id
+    }
+
+    /// What an agent who manages the catalog sets on an asset of `kind` called `name`.
+    fn fields(
+        kind: Uuid,
+        name: &str,
+        serial_number: Option<&str>,
+        site_id: Option<Uuid>,
+        holder_id: Option<Uuid>,
+    ) -> AssetFields {
+        AssetFields {
+            kind_id: kind,
+            name: name.to_owned(),
+            serial_number: serial_number.map(str::to_owned),
+            site_id,
+            holder_id,
+        }
+    }
+
+    #[sqlx::test]
+    async fn an_asset_has_a_serial_number_a_site_and_a_holder(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let printer = testing::asset_kind(&db, "Printer").await;
+        let id = create_asset(
+            &db,
+            brightfield,
+            &fields(printer, "Printer 2F", None, None, None),
+        )
+        .await
+        .unwrap();
+
+        update_asset(
+            &db,
+            id,
+            &fields(printer, "Printer 2F", Some(" SN-0042 "), Some(head), Some(ada)),
+        )
+        .await
+        .unwrap();
+        let asset = &assets_of(&db, brightfield).await.unwrap()[0];
+        assert_eq!(asset.serial_number.as_deref(), Some("SN-0042"));
+        assert_eq!(
+            asset.site.as_ref().map(|s| (s.id, s.name.as_str())),
+            Some((head, "Head office"))
+        );
+        let holder = asset.holder.as_ref().unwrap();
+        assert_eq!(
+            (holder.id, holder.address.as_deref()),
+            (ada, Some("ada@brightfield.test"))
+        );
+
+        update_asset(&db, id, &fields(printer, "Printer 2F", Some(" "), None, None))
+            .await
+            .unwrap();
+        let asset = &assets_of(&db, brightfield).await.unwrap()[0];
+        assert_eq!(
+            (
+                asset.serial_number.as_deref(),
+                asset.site.is_none(),
+                asset.holder.is_none()
+            ),
+            (None, true, true),
+            "all three cleared"
+        );
+
+        let set = create_asset(
+            &db,
+            brightfield,
+            &fields(printer, "Printer 3F", Some("SN-0043"), Some(head), Some(ada)),
+        )
+        .await
+        .unwrap();
+        let assets = assets_of(&db, brightfield).await.unwrap();
+        let created = assets.iter().find(|a| a.id == set).unwrap();
+        assert_eq!(
+            (
+                created.serial_number.as_deref(),
+                created.site.as_ref().map(|s| s.id),
+                created.holder.as_ref().map(|h| h.id)
+            ),
+            (Some("SN-0043"), Some(head), Some(ada)),
+            "set when the asset is added"
+        );
+    }
+
+    #[sqlx::test]
+    async fn an_asset_s_site_and_holder_are_its_customer_s_and_active(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let quay = crate::sites::create(&db, harbor, "Quay office", "Molo delle Reti 2")
+            .await
+            .unwrap();
+        let old = crate::sites::create(&db, brightfield, "Old office", "Via del Glicine 3")
+            .await
+            .unwrap();
+        crate::sites::retire(&db, old).await.unwrap();
+        let ivo = testing::requester(&db, harbor, "ivo@harbor.test").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        crate::requesters::depart(&db, lena).await.unwrap();
+        let laptop = testing::asset_kind(&db, "Laptop").await;
+        let pc = testing::asset(&db, brightfield, "Laptop", "PC-0042").await;
+
+        for (site, holder, why) in [
+            (Some(quay), None, "not one of the asset's customer"),
+            (Some(Uuid::new_v4()), None, "not one of the asset's customer"),
+            (Some(old), None, "retired"),
+            (None, Some(ivo), "not a requester of the asset's customer"),
+            (None, Some(Uuid::new_v4()), "not a requester of the asset's customer"),
+            (None, Some(lena), "departed"),
+        ] {
+            for result in [
+                update_asset(&db, pc, &fields(laptop, "PC-0042", None, site, holder)).await,
+                create_asset(
+                    &db,
+                    brightfield,
+                    &fields(laptop, "PC-0043", None, site, holder),
+                )
+                .await
+                .map(|_| ()),
+            ] {
+                let Err(Error::Rule(refused)) = result else {
+                    panic!("{site:?} and {holder:?} accepted");
+                };
+                assert!(refused.contains(why), "{refused}");
+            }
+        }
+        assert_eq!(assets_of(&db, brightfield).await.unwrap().len(), 1);
+    }
+
+    #[sqlx::test]
+    async fn an_asset_is_where_its_kind_says(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let lab = crate::sites::create(&db, brightfield, "Lab", "Via del Glicine 3")
+            .await
+            .unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        let at_lab = crate::requesters::RequesterDetails {
+            site_id: Some(lab),
+            ..Default::default()
+        };
+        crate::requesters::update(&db, ada, &at_lab).await.unwrap();
+        let laptop = crate::asset_kinds::create(&db, "Laptop", true)
+            .await
+            .unwrap();
+        let printer = crate::asset_kinds::create(&db, "Printer", false)
+            .await
+            .unwrap();
+        let add = |kind: Uuid, name: &'static str, holder: Option<Uuid>| {
+            let db = db.clone();
+            async move {
+                create_asset(&db, brightfield, &fields(kind, name, None, Some(head), holder))
+                    .await
+                    .unwrap()
+            }
+        };
+        let with_ada = add(laptop, "PC-0042", Some(ada)).await;
+        let with_lena = add(laptop, "PC-0043", Some(lena)).await;
+        let spare = add(laptop, "PC-0044", None).await;
+        let printer_2f = add(printer, "Printer 2F", Some(ada)).await;
+
+        let at = |assets: &[Asset], id: Uuid| {
+            assets
+                .iter()
+                .find(|a| a.id == id)
+                .unwrap()
+                .at_site
+                .as_ref()
+                .map(|s| s.name.clone())
+        };
+        let assets = assets_of(&db, brightfield).await.unwrap();
+        assert_eq!(
+            at(&assets, with_ada).as_deref(),
+            Some("Lab"),
+            "with its holder"
+        );
+        assert_eq!(
+            at(&assets, with_lena),
+            None,
+            "with a holder at no site, it is at none"
+        );
+        assert_eq!(
+            at(&assets, spare).as_deref(),
+            Some("Head office"),
+            "at its own site without a holder"
+        );
+        assert_eq!(
+            at(&assets, printer_2f).as_deref(),
+            Some("Head office"),
+            "a kind that stays at its site"
+        );
+
+        // Where it is follows the kind and the holder.
+        crate::asset_kinds::update(&db, laptop, "Laptop", false)
+            .await
+            .unwrap();
+        crate::asset_kinds::update(&db, printer, "Printer", true)
+            .await
+            .unwrap();
+        let assets = assets_of(&db, brightfield).await.unwrap();
+        assert_eq!(at(&assets, with_ada).as_deref(), Some("Head office"));
+        assert_eq!(at(&assets, printer_2f).as_deref(), Some("Lab"));
+    }
+
+    #[sqlx::test]
+    async fn a_retired_asset_loses_its_holder(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let laptop = testing::asset_kind(&db, "Laptop").await;
+        let pc = create_asset(
+            &db,
+            brightfield,
+            &fields(laptop, "PC-0042", Some("SN-0042"), Some(head), Some(ada)),
+        )
+        .await
+        .unwrap();
+
+        retire_asset(&db, pc).await.unwrap();
+        let asset = &assets_of(&db, brightfield).await.unwrap()[0];
+        assert!(asset.holder.is_none(), "it lost its holder");
+        assert_eq!(
+            (
+                asset.serial_number.as_deref(),
+                asset.site.as_ref().map(|s| s.id)
+            ),
+            (Some("SN-0042"), Some(head)),
+            "it keeps the rest"
+        );
+        let Err(Error::Rule(why)) = update_asset(
+            &db,
+            pc,
+            &fields(laptop, "PC-0042", Some("SN-0042"), Some(head), Some(ada)),
+        )
+        .await
+        else {
+            panic!("a retired asset was given a holder");
+        };
+        assert!(why.contains("retired"), "{why}");
     }
 
     #[sqlx::test]

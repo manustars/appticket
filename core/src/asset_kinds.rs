@@ -147,18 +147,20 @@ mod tests {
         let laptop = create(&db, "Laptop", true).await.unwrap();
         let printer = create(&db, "Printer", false).await.unwrap();
 
-        let pc = crate::catalog::create_asset(&db, brightfield, laptop, "PC-0042")
+        let fields = crate::testing::asset_fields;
+        let pc = crate::catalog::create_asset(&db, brightfield, &fields(laptop, "PC-0042"))
             .await
             .unwrap();
         assert!(matches!(
-            crate::catalog::create_asset(&db, brightfield, Uuid::new_v4(), "PC-0043").await,
+            crate::catalog::create_asset(&db, brightfield, &fields(Uuid::new_v4(), "PC-0043"))
+                .await,
             Err(Error::NotFound(_))
         ));
-        crate::catalog::update_asset(&db, pc, printer, "Printer 2F")
+        crate::catalog::update_asset(&db, pc, &fields(printer, "Printer 2F"))
             .await
             .unwrap();
         assert!(matches!(
-            crate::catalog::update_asset(&db, pc, Uuid::new_v4(), "Printer 2F").await,
+            crate::catalog::update_asset(&db, pc, &fields(Uuid::new_v4(), "Printer 2F")).await,
             Err(Error::NotFound(_))
         ));
         let asset = &crate::catalog::assets_of(&db, brightfield).await.unwrap()[0];

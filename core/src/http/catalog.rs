@@ -13,7 +13,7 @@ use uuid::Uuid;
 use super::{ApiError, AppState, Problem};
 use crate::asset_kinds::{self, AssetKind};
 use crate::auth::SignedIn;
-use crate::catalog::{self, Asset, Service, ServiceDetail};
+use crate::catalog::{self, Asset, AssetFields, Service, ServiceDetail};
 use crate::roles::Permission;
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -97,14 +97,7 @@ async fn customer_assets(
     Ok(Json(catalog::assets_of(&state.db, id).await?))
 }
 
-#[derive(Deserialize, ToSchema)]
-pub struct AssetFields {
-    /// Its asset kind, one of the list the help desk manages.
-    kind_id: Uuid,
-    name: String,
-}
-
-/// Adds an asset the customer owns.
+/// Adds an asset the customer owns, with its serial number, site and holder if given.
 #[utoipa::path(post, path = "/api/customers/{id}/assets", tag = "catalog",
     params(("id" = Uuid, Path, description = "The customer")), request_body = AssetFields,
     responses((status = CREATED, body = Created), (status = NOT_FOUND, body = Problem),
@@ -116,7 +109,7 @@ async fn create_asset(
     Json(fields): Json<AssetFields>,
 ) -> Result<(StatusCode, Json<Created>), ApiError> {
     agent.grant.require(Permission::ManageCatalog)?;
-    let id = catalog::create_asset(&state.db, id, fields.kind_id, &fields.name).await?;
+    let id = catalog::create_asset(&state.db, id, &fields).await?;
     Ok((StatusCode::CREATED, Json(Created { id })))
 }
 
@@ -132,7 +125,9 @@ async fn customer_services(
     Ok(Json(catalog::services_of(&state.db, id).await?))
 }
 
-/// Changes an asset's kind and name.
+/// Changes an asset's kind, name, serial number, site and holder; those left out are cleared. The
+/// site and the holder belong to the asset's customer; the site is not retired, the holder has not
+/// departed, and a retired asset has no holder.
 #[utoipa::path(put, path = "/api/assets/{id}", tag = "catalog",
     params(("id" = Uuid, Path, description = "The asset")), request_body = AssetFields,
     responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
@@ -144,7 +139,7 @@ async fn update_asset(
     Json(fields): Json<AssetFields>,
 ) -> Result<StatusCode, ApiError> {
     agent.grant.require(Permission::ManageCatalog)?;
-    catalog::update_asset(&state.db, id, fields.kind_id, &fields.name).await?;
+    catalog::update_asset(&state.db, id, &fields).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
