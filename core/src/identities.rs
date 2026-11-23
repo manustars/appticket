@@ -36,8 +36,8 @@ pub enum Refusal {
     NotAnAgent,
     /// The agent was deactivated: signing in never reactivates them.
     Deactivated,
-    /// The verified e-mail address belongs to another agent than the one the identity is linked
-    /// to, or to an agent linked to another identity of the provider.
+    /// The e-mail address, verified or not, belongs to another agent than the one the identity is
+    /// linked to, or to an agent linked to another identity of the provider.
     EmailOfAnotherAgent,
 }
 
@@ -55,7 +55,7 @@ pub async fn sign_in(
         .map(crate::agents::normalized_email)
         .filter(|email| !email.is_empty());
     // Only an address the provider verified is linked by or taken over.
-    let verified_email = email.filter(|_| identity.email_verified);
+    let verified_email = email.as_ref().filter(|_| identity.email_verified);
     // The agent, and whether they are active.
     let linked: Option<(Uuid, bool)> = sqlx::query_as(
         "SELECT a.id, a.deactivated_at IS NULL
@@ -114,7 +114,7 @@ pub async fn sign_in(
             agent
         }
     };
-    if let Some(email) = &verified_email
+    if let Some(email) = &email
         && crate::agents::email_taken(&mut *tx, email, Some(agent)).await?
     {
         return Ok(Err(Refusal::EmailOfAnotherAgent));
@@ -346,20 +346,20 @@ mod tests {
         );
         let before = sessions(&db).await;
 
-        // An unverified address is not taken over, so it is no reason to refuse: Lena signs in
-        // and keeps hers.
-        let unverified = identity("sub-lena", "Sam.Reed@example.com", false, "Lena Marsh");
+        // An unverified address is taken over all the same, so it is refused too.
+        let unverified = identity("sub-lena", "Sam.Reed@example.com", false, "Lena Reed");
         assert_eq!(
             sign_in(&db, &unverified, HOURS_12)
                 .await
                 .unwrap()
-                .unwrap()
-                .agent,
-            lena
+                .unwrap_err(),
+            Refusal::EmailOfAnotherAgent
         );
-        assert_eq!(name_and_email(&db, lena).await.1, "lena.marsh@example.com");
-        assert_eq!(sessions(&db).await, before + 1);
-        let before = sessions(&db).await;
+        assert_eq!(
+            name_and_email(&db, lena).await,
+            ("Lena Marsh".to_owned(), "lena.marsh@example.com".to_owned())
+        );
+        assert_eq!(sessions(&db).await, before);
 
         // Another identity of the same provider with Lena's address: she is linked already, to
         // another identity, so it is not linked again.
