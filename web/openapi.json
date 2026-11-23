@@ -6273,6 +6273,17 @@
             },
             "description": "The services linked to their tickets that the new customer does not use: unlinked too."
           },
+          "site": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SiteRef",
+                "description": "The site the requester is at, which they would leave: it is one of the old customer's."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "tickets": {
             "type": "integer",
             "format": "int64",

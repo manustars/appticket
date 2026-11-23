@@ -9,12 +9,10 @@ import {
   listTickets,
   mergeRequester,
   moveRequester,
-  previewRequesterMove,
   removeRequesterAddress,
   updateRequester,
   type CustomerDetail,
   type Moved,
-  type MovePreview,
   type RequesterDetail,
 } from './api/client'
 import { useI18n } from './i18n/context'
@@ -23,7 +21,8 @@ import { Problem } from './Problem'
 import { customerHref, customersHref } from './route'
 import { useSession } from './session'
 import { TicketTable } from './Tickets'
-import { UnlinkWarning } from './UnlinkWarning'
+import { RequesterMoveWarnings } from './MoveWarnings'
+import { useMovePreview } from './movePreview'
 import { useAction, useLoad } from './useAction'
 
 interface PageProps {
@@ -79,7 +78,7 @@ export function RequesterPage({ id, onChanged, onSignedOut }: PageProps) {
       <Details requester={r} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       <Addresses requester={r} readOnly={readOnly} onChanged={changed} onSignedOut={onSignedOut} />
       {!readOnly && <Departure requester={r} onChanged={changed} onSignedOut={onSignedOut} />}
-      {/* A departed requester is not merged: they come back first. */}
+      {/* A departed requester does not remain from a merge: they come back first, or are merged into another. */}
       {!readOnly && !r.departed_at && <Merge requester={r} onChanged={changedWithTickets} onSignedOut={onSignedOut} />}
       {!r.customer.offboarded && can('tickets.move') && (
         <MoveRequester requester={r} onChanged={changedWithTickets}
@@ -296,10 +295,12 @@ function Merge({ requester: r, onChanged, onSignedOut }: Omit<PartProps, 'readOn
   // Who was last merged into this requester, to say so.
   const [merged, setMerged] = useState<string | null>(null)
   const name = requesterLabel(t, r.name, r.addresses[0])
-  // Only requesters of the same customer who have not departed can be merged into this one.
-  const candidates = customer.data?.requester_list.filter((q) => q.id !== r.id && !q.departed) ?? []
-  const label = (q: (typeof candidates)[number]) =>
-    q.name && q.addresses[0] ? `${q.name} <${q.addresses[0]}>` : requesterLabel(t, q.name, q.addresses[0])
+  // Any other requester of the same customer can be merged into this one, a departed one too.
+  const candidates = customer.data?.requester_list.filter((q) => q.id !== r.id) ?? []
+  const label = (q: (typeof candidates)[number]) => {
+    const who = q.name && q.addresses[0] ? `${q.name} <${q.addresses[0]}>` : requesterLabel(t, q.name, q.addresses[0])
+    return q.departed ? `${who} (${t('marker.departed')})` : who
+  }
 
   function merge(event: FormEvent) {
     event.preventDefault()
@@ -348,16 +349,11 @@ function MoveRequester({ requester: r, onChanged, onSignedOut }: Omit<PartProps,
   const id = useId()
   const customers = useLoad(listCustomers, onSignedOut)
   const [customerId, setCustomerId] = useState('')
-  const requesterId = r.id
-  const loadPreview = useCallback(
-    (): Promise<MovePreview | null> => (customerId ? previewRequesterMove(requesterId, customerId) : Promise.resolve(null)),
-    [requesterId, customerId])
-  const preview = useLoad(loadPreview, onSignedOut)
+  const preview = useMovePreview(r.id, customerId, onSignedOut)
   // What the last move did, to say so.
   const [moved, setMoved] = useState<Moved | null>(null)
   const target = customers.data?.find((c) => c.id === customerId)
   const plan = preview.data
-  const ready = target && plan
 
   function move(event: FormEvent) {
     event.preventDefault()
@@ -385,21 +381,14 @@ function MoveRequester({ requester: r, onChanged, onSignedOut }: Omit<PartProps,
           ))}
         </select>
         {target && plan && (
-          <div className="warning" role="note">
-            <p>
-              {plan.tickets === 0
-                ? t('requester.moveNoTickets')
-                : t('requester.moveTakesTickets', { count: plan.tickets })}
-            </p>
-            {r.site && <p>{t('requester.moveLeavesSite', { site: r.site.name, customer: r.customer.name })}</p>}
-          </div>
-        )}
-        {target && plan && (
-          <UnlinkWarning from={r.customer.name} to={target.name} assets={plan.assets}
-            services={plan.services} heading={t('requester.moveWillUnlink')} />
+          <RequesterMoveWarnings preview={plan} from={r.customer.name} to={target.name}
+            heading={t('requester.moveWillUnlink')}
+            lead={plan.tickets === 0
+              ? t('requester.moveNoTickets')
+              : t('requester.moveTakesTickets', { count: plan.tickets })} />
         )}
         <div className="move-foot">
-          <button type="submit" disabled={action.busy || !ready}>{t('requester.moveSubmit')}</button>
+          <button type="submit" disabled={action.busy || !target || !plan}>{t('requester.moveSubmit')}</button>
         </div>
       </form>
       {moved !== null && (

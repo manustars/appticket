@@ -2,7 +2,7 @@
 //! ADR 0003). Rules are in docs/domain-rules.md ("Customers, assets and services").
 
 use serde::Serialize;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -507,26 +507,58 @@ pub async fn link_service(db: &PgPool, number: i64, service: Uuid, linked: bool)
     Ok(())
 }
 
-/// Before `tickets` move to `customer`: removes their links that would not fit there (every
-/// asset, since assets belong to the old customer, and services the new customer does not use).
-/// Returns how many links were removed.
+/// The links of `tickets` that would not fit `customer` if they moved there, each listed once:
+/// every linked asset, since assets belong to the old customer, and the linked services the new
+/// customer does not use. Moving removes exactly these ([`unlink_for_move`]).
+pub async fn unfit_for_move(
+    conn: &mut PgConnection,
+    tickets: &[Uuid],
+    customer: Uuid,
+) -> Result<(Vec<LinkedAsset>, Vec<LinkedService>)> {
+    let assets = sqlx::query_as(
+        "SELECT a.id, k.name AS kind, a.name FROM assets a JOIN asset_kinds k ON k.id = a.kind_id
+         WHERE a.id IN (SELECT asset_id FROM ticket_assets WHERE ticket_id = ANY($1))
+         ORDER BY lower(k.name), a.name",
+    )
+    .bind(tickets)
+    .fetch_all(&mut *conn)
+    .await?;
+    let services = sqlx::query_as(
+        "SELECT s.id, s.name FROM services s
+         WHERE s.id IN (SELECT service_id FROM ticket_services WHERE ticket_id = ANY($1))
+           AND NOT EXISTS (SELECT 1 FROM customer_services cs
+                           WHERE cs.customer_id = $2 AND cs.service_id = s.id)
+         ORDER BY s.name",
+    )
+    .bind(tickets)
+    .bind(customer)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok((assets, services))
+}
+
+/// Before `tickets` move to `customer`: removes their links that would not fit there (see
+/// [`unfit_for_move`]). Returns how many links were removed.
 pub async fn unlink_for_move(
     tx: &mut Transaction<'_, Postgres>,
     tickets: &[Uuid],
     customer: Uuid,
 ) -> Result<i64> {
-    let assets = sqlx::query("DELETE FROM ticket_assets WHERE ticket_id = ANY($1)")
-        .bind(tickets)
-        .execute(&mut **tx)
-        .await?
-        .rows_affected();
+    let (assets, services) = unfit_for_move(tx, tickets, customer).await?;
+    let assets: Vec<Uuid> = assets.into_iter().map(|a| a.id).collect();
+    let services: Vec<Uuid> = services.into_iter().map(|s| s.id).collect();
+    let assets =
+        sqlx::query("DELETE FROM ticket_assets WHERE ticket_id = ANY($1) AND asset_id = ANY($2)")
+            .bind(tickets)
+            .bind(&assets)
+            .execute(&mut **tx)
+            .await?
+            .rows_affected();
     let services = sqlx::query(
-        "DELETE FROM ticket_services ts WHERE ts.ticket_id = ANY($1)
-           AND NOT EXISTS (SELECT 1 FROM customer_services cs
-                           WHERE cs.customer_id = $2 AND cs.service_id = ts.service_id)",
+        "DELETE FROM ticket_services WHERE ticket_id = ANY($1) AND service_id = ANY($2)",
     )
     .bind(tickets)
-    .bind(customer)
+    .bind(&services)
     .execute(&mut **tx)
     .await?
     .rows_affected();

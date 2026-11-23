@@ -347,42 +347,42 @@ pub async fn bring_back(db: &PgPool, id: Uuid) -> Result<()> {
 /// Merges `merged` into `kept`: two requesters of the same customer who are one person. The
 /// addresses and tickets of `merged` pass to `kept`, which remains, and `merged` is removed; the
 /// details `kept` lacks are taken from `merged`, so that nothing about the person is lost. A merge
-/// cannot be undone. Requesters of different customers are never merged, nor departed ones, nor
-/// those of an offboarded customer.
+/// cannot be undone. Requesters of different customers are never merged, nor those of an
+/// offboarded customer. `merged` may have departed; `kept` may not, since tickets are not given to
+/// a departed requester.
 pub async fn merge(db: &PgPool, kept: Uuid, merged: Uuid) -> Result<()> {
     if kept == merged {
         return rule("a requester cannot be merged with themselves");
     }
     let mut tx = db.begin().await?;
     let customer = lock_with_customer(&mut tx, kept).await?;
-    // The customer's lock keeps the other one where it is; one of another customer is not locked.
-    let other: (Uuid, bool) =
-        sqlx::query_as("SELECT customer_id, departed_at IS NOT NULL FROM requesters WHERE id = $1")
-            .bind(merged)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(Error::NotFound("requester"))?;
-    if other.0 != customer {
+    let kept_departed: bool =
+        sqlx::query_scalar("SELECT departed_at IS NOT NULL FROM requesters WHERE id = $1")
+            .bind(kept)
+            .fetch_one(&mut *tx)
+            .await?;
+    if kept_departed {
+        return rule(
+            "the requester that remains cannot be departed: bring them back first, or merge them into the other one",
+        );
+    }
+    // One of another customer is refused before it is locked; one of this customer stays where it
+    // is under the customer's lock, unless it moved just before.
+    let other: Uuid = sqlx::query_scalar("SELECT customer_id FROM requesters WHERE id = $1")
+        .bind(merged)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(Error::NotFound("requester"))?;
+    if other != customer {
         return rule("requesters of different customers are never merged");
     }
-    // Locked in a fixed order; the other one may have moved before it was locked.
-    let (departed, together): (bool, bool) = sqlx::query_as(
-        "SELECT bool_or(departed_at IS NOT NULL), bool_and(customer_id = $3) FROM
-             (SELECT departed_at, customer_id FROM requesters WHERE id IN ($1, $2)
-              ORDER BY id FOR UPDATE) r",
-    )
-    .bind(kept)
-    .bind(merged)
-    .bind(customer)
-    .fetch_one(&mut *tx)
-    .await?;
-    if !together {
+    let other: Option<Uuid> =
+        sqlx::query_scalar("SELECT customer_id FROM requesters WHERE id = $1 FOR UPDATE")
+            .bind(merged)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if other != Some(customer) {
         return rule("the requester has just moved to another customer; reload and try again");
-    }
-    if departed {
-        return rule(
-            "a departed requester is not merged: bring them back first, or leave them departed",
-        );
     }
     sqlx::query("INSERT INTO requester_merges (merged_id, kept_id) VALUES ($1, $2)")
         .bind(merged)
@@ -447,10 +447,78 @@ pub async fn move_to_customer(
     customer: Uuid,
 ) -> Result<crate::tickets::Moved> {
     let mut tx = db.begin().await?;
-    lock_with_customer(&mut tx, id).await?;
-    let moved = crate::tickets::move_requester(&mut tx, id, customer).await?;
+    lock_for_move(&mut tx, id, customer).await?;
+    let moved = move_requester(&mut tx, id, customer).await?;
     tx.commit().await?;
     Ok(moved)
+}
+
+/// Locks what moving `requester` to `customer` changes, in the order every change to requesters
+/// and tickets follows (customers, then requesters, then tickets): both customers, by id, which
+/// must exist and not be offboarded, then the requester. Returns the requester's customer.
+pub(crate) async fn lock_for_move(
+    tx: &mut Transaction<'_, Postgres>,
+    requester: Uuid,
+    customer: Uuid,
+) -> Result<Uuid> {
+    let current: Uuid = sqlx::query_scalar("SELECT customer_id FROM requesters WHERE id = $1")
+        .bind(requester)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(Error::NotFound("requester"))?;
+    if current == customer {
+        return rule("the requester already belongs to this customer");
+    }
+    for c in [current.min(customer), current.max(customer)] {
+        crate::customers::lock_active(tx, c).await?;
+    }
+    let now: Option<Uuid> =
+        sqlx::query_scalar("SELECT customer_id FROM requesters WHERE id = $1 FOR UPDATE")
+            .bind(requester)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if now != Some(current) {
+        return rule("the requester has just changed; reload and try again");
+    }
+    Ok(current)
+}
+
+/// Moves a requester identified with the wrong customer to `customer`, with all of their tickets,
+/// closed ones included; links that do not fit the new customer are removed. Their site is one of
+/// the old customer's, so they leave it. Called with [`lock_for_move`] held. A parent ticket stays
+/// with the help desk's own organization, so a requester of one does not move.
+pub(crate) async fn move_requester(
+    tx: &mut Transaction<'_, Postgres>,
+    requester: Uuid,
+    customer: Uuid,
+) -> Result<crate::tickets::Moved> {
+    let tickets: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM tickets WHERE requester_id = $1")
+        .bind(requester)
+        .fetch_all(&mut **tx)
+        .await?;
+    let parent: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM tickets WHERE parent_id = ANY($1))")
+            .bind(&tickets)
+            .fetch_one(&mut **tx)
+            .await?;
+    if parent {
+        return rule("a parent ticket stays with the help desk's own organization");
+    }
+    let unlinked = crate::catalog::unlink_for_move(tx, &tickets, customer).await?;
+    // The foreign key cascades the new customer to every ticket of the requester.
+    sqlx::query("UPDATE requesters SET customer_id = $2, site_id = NULL WHERE id = $1")
+        .bind(requester)
+        .bind(customer)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("UPDATE tickets SET updated_at = now() WHERE requester_id = $1")
+        .bind(requester)
+        .execute(&mut **tx)
+        .await?;
+    Ok(crate::tickets::Moved {
+        moved: tickets.len() as i64,
+        unlinked,
+    })
 }
 
 /// What moving a requester to another customer would do, for the agent to see before confirming.
@@ -458,53 +526,41 @@ pub async fn move_to_customer(
 pub struct MovePreview {
     /// How many tickets would move with the requester, closed ones included.
     pub tickets: i64,
+    /// The site the requester is at, which they would leave: it is one of the old customer's.
+    pub site: Option<SiteRef>,
     /// The assets linked to their tickets: they belong to the old customer, so they are unlinked.
     pub assets: Vec<crate::catalog::LinkedAsset>,
     /// The services linked to their tickets that the new customer does not use: unlinked too.
     pub services: Vec<crate::catalog::LinkedService>,
 }
 
-/// What [`move_to_customer`] would move and unlink, across all the requester's tickets.
+/// What [`move_to_customer`] would move, leave and unlink, across all the requester's tickets.
 pub async fn move_preview(db: &PgPool, id: Uuid, customer: Uuid) -> Result<MovePreview> {
-    let tickets: Option<i64> = sqlx::query_scalar(
-        "SELECT (SELECT count(*) FROM tickets t WHERE t.requester_id = r.id)
-         FROM requesters r WHERE r.id = $1",
+    let mut conn = db.acquire().await?;
+    let site: Option<Option<SiteRef>> = sqlx::query_as::<_, (Option<Uuid>, Option<String>)>(
+        "SELECT s.id, s.name FROM requesters r LEFT JOIN sites s ON s.id = r.site_id
+         WHERE r.id = $1",
     )
     .bind(id)
-    .fetch_optional(db)
-    .await?;
-    let tickets = tickets.ok_or(Error::NotFound("requester"))?;
+    .fetch_optional(&mut *conn)
+    .await?
+    .map(|(id, name)| id.zip(name).map(|(id, name)| SiteRef { id, name }));
+    let site = site.ok_or(Error::NotFound("requester"))?;
     let known: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM customers WHERE id = $1)")
         .bind(customer)
-        .fetch_one(db)
+        .fetch_one(&mut *conn)
         .await?;
     if !known {
         return Err(Error::NotFound("customer"));
     }
-    let assets = sqlx::query_as(
-        "SELECT a.id, k.name AS kind, a.name FROM assets a JOIN asset_kinds k ON k.id = a.kind_id
-         WHERE a.id IN (SELECT ta.asset_id FROM ticket_assets ta
-                        JOIN tickets t ON t.id = ta.ticket_id WHERE t.requester_id = $1)
-         ORDER BY lower(k.name), a.name",
-    )
-    .bind(id)
-    .fetch_all(db)
-    .await?;
-    // The same predicate as the move's (crate::catalog::unlink_for_move).
-    let services = sqlx::query_as(
-        "SELECT s.id, s.name FROM services s
-         WHERE s.id IN (SELECT ts.service_id FROM ticket_services ts
-                        JOIN tickets t ON t.id = ts.ticket_id WHERE t.requester_id = $1)
-           AND NOT EXISTS (SELECT 1 FROM customer_services cs
-                           WHERE cs.customer_id = $2 AND cs.service_id = s.id)
-         ORDER BY s.name",
-    )
-    .bind(id)
-    .bind(customer)
-    .fetch_all(db)
-    .await?;
+    let tickets: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM tickets WHERE requester_id = $1")
+        .bind(id)
+        .fetch_all(&mut *conn)
+        .await?;
+    let (assets, services) = crate::catalog::unfit_for_move(&mut conn, &tickets, customer).await?;
     Ok(MovePreview {
-        tickets,
+        tickets: tickets.len() as i64,
+        site,
         assets,
         services,
     })
@@ -560,10 +616,7 @@ pub async fn update(db: &PgPool, id: Uuid, details: &RequesterDetails) -> Result
 
 /// Locks the requester's customer, which must not be offboarded, then the requester, for any
 /// change to the requester; retiring a site locks the customer first too. Returns the customer.
-pub(crate) async fn lock_with_customer(
-    tx: &mut Transaction<'_, Postgres>,
-    requester: Uuid,
-) -> Result<Uuid> {
+async fn lock_with_customer(tx: &mut Transaction<'_, Postgres>, requester: Uuid) -> Result<Uuid> {
     let customer: Uuid = sqlx::query_scalar("SELECT customer_id FROM requesters WHERE id = $1")
         .bind(requester)
         .fetch_optional(&mut **tx)
@@ -1270,6 +1323,22 @@ mod tests {
             .unwrap();
 
         let preview = move_preview(&db, ada, harbor).await.unwrap();
+        assert!(preview.site.is_none());
+        let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let at_head = RequesterDetails {
+            site_id: Some(head),
+            ..RequesterDetails::default()
+        };
+        update(&db, ada, &at_head).await.unwrap();
+
+        let preview = move_preview(&db, ada, harbor).await.unwrap();
+        assert_eq!(
+            preview.site.map(|s| s.name).as_deref(),
+            Some("Head office"),
+            "the site they leave"
+        );
         assert_eq!(preview.tickets, 2);
         let names = |names: Vec<&str>| names.into_iter().map(str::to_owned).collect::<Vec<_>>();
         assert_eq!(
@@ -1363,8 +1432,87 @@ mod tests {
         };
         assert!(why.contains("parent"), "{why}");
 
+        // An offboarded customer's requesters do not change: neither from the page nor by moving
+        // one of their tickets with them.
+        let hers = testing::ticket(&db, brightfield, Some(ada), "a1@brightfield.test").await;
         crate::customers::offboard(&db, brightfield).await.unwrap();
         assert!(refused(ada, harbor).await.contains("offboarded"));
+        let Err(Error::Rule(why)) =
+            tickets::move_to_customer(&db, hers, harbor, RequesterMove::Move).await
+        else {
+            panic!("an offboarded customer's requester moved with their ticket");
+        };
+        assert!(why.contains("offboarded"), "{why}");
+    }
+
+    /// The database keeps the moving rules even when the code is bypassed: a requester's customer
+    /// does not change while the old or the new one is offboarded, and a parent ticket stays with
+    /// the help desk's own organization, also when its requester moves.
+    #[sqlx::test]
+    async fn the_database_keeps_the_moving_rules(db: PgPool) {
+        let northgate = testing::customer(&db, "Northgate Studio").await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let marco = testing::requester(&db, northgate, "marco@northgate.test").await;
+        let parent = testing::ticket(&db, northgate, Some(marco), "p1@northgate.test").await;
+        let child = testing::ticket(&db, brightfield, None, "c1@brightfield.test").await;
+        sqlx::query(
+            "UPDATE tickets SET parent_id = (SELECT id FROM tickets WHERE number = $1)
+             WHERE number = $2",
+        )
+        .bind(parent)
+        .bind(child)
+        .execute(&db)
+        .await
+        .unwrap();
+        let move_to = |requester: Uuid, customer: Uuid| {
+            let db = db.clone();
+            async move {
+                sqlx::query("UPDATE requesters SET customer_id = $2, site_id = NULL WHERE id = $1")
+                    .bind(requester)
+                    .bind(customer)
+                    .execute(&db)
+                    .await
+            }
+        };
+        let offboarded = |customer: Uuid, yes: bool| {
+            let db = db.clone();
+            async move {
+                sqlx::query(
+                    "UPDATE customers SET offboarded_at = CASE WHEN $2 THEN now() END WHERE id = $1",
+                )
+                .bind(customer)
+                .bind(yes)
+                .execute(&db)
+                .await
+                .unwrap();
+            }
+        };
+
+        assert!(
+            move_to(marco, harbor).await.is_err(),
+            "a parent ticket moved"
+        );
+        let parent_moved = sqlx::query("UPDATE tickets SET customer_id = $2 WHERE number = $1")
+            .bind(parent)
+            .bind(harbor)
+            .execute(&db)
+            .await;
+        assert!(parent_moved.is_err(), "a parent ticket moved by itself");
+        offboarded(harbor, true).await;
+        assert!(
+            move_to(ada, harbor).await.is_err(),
+            "to an offboarded customer"
+        );
+        offboarded(harbor, false).await;
+        offboarded(brightfield, true).await;
+        assert!(
+            move_to(ada, harbor).await.is_err(),
+            "from an offboarded customer"
+        );
+        offboarded(brightfield, false).await;
+        assert!(move_to(ada, harbor).await.is_ok());
     }
 
     /// A requester that remained from one merge can be merged in turn: everything ends with the
@@ -1453,6 +1601,31 @@ Prefers phone calls."
         assert_eq!(seen.site.map(|s| s.id), Some(head));
     }
 
+    /// A departed requester who is the same person as a present one is merged into them: their
+    /// addresses and tickets pass to the one who remains, who is not departed.
+    #[sqlx::test]
+    async fn a_departed_requester_is_merged_into_a_present_one(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let twin = testing::requester(&db, brightfield, "a.ferrini@home.test").await;
+        let n = testing::ticket(&db, brightfield, Some(twin), "t1@home.test").await;
+        depart(&db, twin).await.unwrap();
+
+        merge(&db, ada, twin).await.unwrap();
+        let seen = detail(&db, ada).await.unwrap();
+        assert!(seen.departed_at.is_none());
+        assert_eq!(
+            seen.addresses,
+            ["ada@brightfield.test", "a.ferrini@home.test"]
+        );
+        let requester = crate::tickets::detail(&db, n)
+            .await
+            .unwrap()
+            .requester
+            .unwrap();
+        assert_eq!((requester.id, requester.departed), (ada, false));
+    }
+
     /// Requesters of different customers are never merged, nor a requester with themselves; a
     /// departed requester and an offboarded customer's requesters are not merged either.
     #[sqlx::test]
@@ -1480,8 +1653,10 @@ Prefers phone calls."
             Err(Error::NotFound(_))
         ));
         depart(&db, twin).await.unwrap();
-        assert!(refused(ada, twin).await.contains("departed"));
-        assert!(refused(twin, ada).await.contains("departed"));
+        assert!(
+            refused(twin, ada).await.contains("departed"),
+            "kept a departed requester"
+        );
         bring_back(&db, twin).await.unwrap();
         crate::customers::offboard(&db, brightfield).await.unwrap();
         assert!(refused(ada, twin).await.contains("offboarded"));
@@ -1491,7 +1666,8 @@ Prefers phone calls."
     }
 
     /// The database keeps the merge rules even when the code is bypassed: a merge joins two
-    /// present requesters of one customer that is not offboarded, and the merged one is gone.
+    /// requesters of one customer that is not offboarded, the one that remains has not departed,
+    /// and the merged one is gone.
     #[sqlx::test]
     async fn the_database_keeps_the_merge_rules(db: PgPool) {
         let brightfield = testing::customer(&db, "Brightfield").await;
@@ -1550,10 +1726,9 @@ Prefers phone calls."
         );
         depart(&db, twin).await.unwrap();
         assert!(
-            by_hand(ada, twin, true).await.is_err(),
-            "a departed requester"
+            by_hand(twin, ada, true).await.is_err(),
+            "kept a departed requester"
         );
-        bring_back(&db, twin).await.unwrap();
         crate::customers::offboard(&db, brightfield).await.unwrap();
         assert!(
             by_hand(ada, twin, true).await.is_err(),
@@ -1563,7 +1738,7 @@ Prefers phone calls."
             .await
             .unwrap();
         let merged = by_hand(ada, twin, true).await;
-        assert!(merged.is_ok(), "{merged:?}");
+        assert!(merged.is_ok(), "a departed one merged: {merged:?}");
     }
 
     /// The database keeps the departed requesters' rules even when the code is bypassed.
