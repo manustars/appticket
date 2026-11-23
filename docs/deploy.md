@@ -36,6 +36,7 @@ The chart never holds secrets; it refers to Secrets you create in the release's 
 | database | `uri`: `postgres://user:password@host:5432/db` | only with `postgresql.enabled=false`; set `core.database.existingSecret` (and `secretKey`) |
 | mail | `imap-url`, `smtp-url` | real mail: `core.mail.imap.existingSecret`, `core.mail.smtp.existingSecret` (may be the same Secret) |
 | mail CA | `ca.crt` | mail servers with a private certificate authority: `core.mail.ca.existingSecret` |
+| identity provider | `client-secret` | signing in through OpenID Connect: `core.oidc.existingSecret` (see [Signing in through an identity provider](#signing-in-through-an-identity-provider)) |
 | Assistant | `token`, `event-secret`, and `api-key` for a hosted model | `assistant.secret.existingSecret`, after registering the add-on |
 | backup storage | `ACCESS_KEY_ID`, `ACCESS_SECRET_KEY` | object-store backups: `postgresql.backup.objectStore.credentialsSecret` |
 
@@ -76,6 +77,7 @@ small staging install with the test mail server. The most common settings:
 |---|---|
 | `core.image.tag` | The version to run (default: the chart's `appVersion`). |
 | `core.mail.from`, `core.mail.fromName` | The help desk's own address and display name, for replies. |
+| `core.publicUrl`, `core.oidc.*` | Signing in through an OpenID Connect identity provider (see [Signing in through an identity provider](#signing-in-through-an-identity-provider)). |
 | `core.mail.imap/smtp.existingSecret` | The mail Secrets above. |
 | `ingress.*` | Host, class, annotations and TLS (see [HTTPS](#https)). |
 | `core.signIn.*` | Failed sign-in limits and trusted proxies (see [Failed sign-ins](#failed-sign-ins)). |
@@ -178,6 +180,62 @@ The core always keeps one active agent with the Administrator role. If nobody wh
 in has it, `hd agent set-role <e-mail> Administrator` gives it back; the command line is not
 limited by roles. Upgrading from a version without roles makes every existing agent an
 Administrator.
+
+### Signing in through an identity provider
+
+Agents can sign in through the organization's OpenID Connect identity provider (Keycloak, Entra
+ID, Google, Authentik…) next to their local password
+([ADR 0008](adr/0008-identity-providers-authenticate-the-product-authorizes.md)). The sign-in
+page then shows a "Sign in with …" button. Only existing agents sign in this way: someone the
+provider knows who is not an agent of the help desk is refused.
+
+At the provider, register a confidential client for the help desk (authorization code flow; the
+core uses PKCE with S256) with the redirect URI `<public URL>/api/session/identity-provider/callback`,
+such as `https://helpdesk.example.com/api/session/identity-provider/callback`. Put its secret in a
+Secret:
+
+```sh
+kubectl -n helpdesk create secret generic hd-oidc --from-literal=client-secret='…'
+```
+
+and set the values:
+
+```yaml
+core:
+  publicUrl: https://helpdesk.example.com   # empty: https:// and ingress.host
+  oidc:
+    issuer: https://login.example.com/realms/staff
+    clientId: helpdesk
+    existingSecret: hd-oidc
+    label: Northgate                        # the button reads "Sign in with Northgate"
+    sessionHours: 12
+```
+
+Outside the chart the same settings are environment variables: `HD_OIDC_ISSUER`,
+`HD_OIDC_CLIENT_ID`, `HD_OIDC_CLIENT_SECRET` or `HD_OIDC_CLIENT_SECRET_FILE` (a file holding
+the secret, such as a mounted Secret), `HD_PUBLIC_URL`, `HD_OIDC_LABEL` (default `OpenID
+Connect`) and `HD_OIDC_SESSION_HOURS` (default 12, at most 24). The issuer and the public URL
+must be `https://` addresses. Without an issuer, client id and secret nothing changes; with only
+some of them the core does not start, and says which are missing. The core reads the provider's
+configuration and keys when an agent signs in, not at startup, so a provider that is down does
+not keep the core or local passwords from working.
+
+How the provider's sign-in finds the agent:
+
+- The first time, by e-mail, and only when the provider says the address is verified (the
+  `email_verified` claim of the ID token; the core asks for the `openid`, `email` and `profile`
+  scopes). The identity is then linked to that agent.
+- From then on, by the provider's stable identifier (`sub`), even after the address changed
+  there. The agent's name and verified e-mail follow the provider at every sign-in, and cannot be
+  edited in the help desk.
+- Refused, with the reason on the sign-in page: an unverified e-mail with no link yet, someone who
+  is not an agent, a deactivated agent (signing in never reactivates one), and an e-mail that
+  belongs to another agent, including an agent already linked to another identity of the
+  provider.
+
+A session opened through the provider lasts `sessionHours`, so that an account disabled there
+loses access within hours; one opened with a local password lasts 14 days. Signing out ends the
+help desk's session only, not the one at the provider. Linked agents keep their local password.
 
 ### Importing customers, sites, requesters and assets
 
