@@ -5,7 +5,7 @@ use std::future::Future;
 use std::net::IpAddr;
 use std::time::Duration;
 
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgExecutor, PgPool};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -65,10 +65,7 @@ impl SignInLimits {
             Ok(checked) => checked,
             Err(error) => {
                 // The password could not be checked: that was no guess.
-                sqlx::query("DELETE FROM sign_in_failures WHERE id = $1")
-                    .bind(attempt)
-                    .execute(db)
-                    .await?;
+                withdraw(db, attempt).await?;
                 return Err(error);
             }
         };
@@ -77,10 +74,7 @@ impl SignInLimits {
                 // The account's earlier failures were the person's own: the account forgets
                 // them. The address keeps them, as they may be someone else's guesses.
                 let mut tx = db.begin().await?;
-                sqlx::query("DELETE FROM sign_in_failures WHERE id = $1")
-                    .bind(attempt)
-                    .execute(&mut *tx)
-                    .await?;
+                withdraw(&mut *tx, attempt).await?;
                 sqlx::query("UPDATE sign_in_failures SET account = NULL WHERE account = $1")
                     .bind(&account.0)
                     .execute(&mut *tx)
@@ -109,30 +103,13 @@ impl SignInLimits {
             .bind(now - 2 * self.window)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(1, hashtext($1))")
-            .bind(&account.0)
-            .execute(&mut *tx)
+        // Always the account before the address, so that two attempts never wait for each other.
+        let by_account = self
+            .newest_failures(&mut tx, CountedFor::Account(account))
             .await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(2, hashtext($1))")
-            .bind(&address.0)
-            .execute(&mut *tx)
+        let by_address = self
+            .newest_failures(&mut tx, CountedFor::Address(address))
             .await?;
-        let by_account: Vec<OffsetDateTime> = sqlx::query_scalar(
-            "SELECT failed_at FROM sign_in_failures WHERE account = $1
-             ORDER BY failed_at DESC LIMIT $2",
-        )
-        .bind(&account.0)
-        .bind(i64::from(self.most_checked()))
-        .fetch_all(&mut *tx)
-        .await?;
-        let by_address: Vec<OffsetDateTime> = sqlx::query_scalar(
-            "SELECT failed_at FROM sign_in_failures WHERE address = $1
-             ORDER BY failed_at DESC LIMIT $2",
-        )
-        .bind(&address.0)
-        .bind(i64::from(self.most_checked()))
-        .fetch_all(&mut *tx)
-        .await?;
         let reserved = match self
             .verdict(&by_account, now)
             .stricter(self.verdict(&by_address, now))
@@ -155,6 +132,39 @@ impl SignInLimits {
         };
         tx.commit().await?;
         Ok(reserved)
+    }
+
+    /// Takes the turn of the account or the address until `tx` ends, and gives its newest
+    /// failures, as many as can refuse an attempt.
+    async fn newest_failures(
+        &self,
+        tx: &mut PgConnection,
+        counted_for: CountedFor<'_>,
+    ) -> anyhow::Result<Vec<OffsetDateTime>> {
+        let (lock_class, key, query) = match counted_for {
+            CountedFor::Account(account) => (
+                1,
+                &account.0,
+                "SELECT failed_at FROM sign_in_failures WHERE account = $1
+                 ORDER BY failed_at DESC LIMIT $2",
+            ),
+            CountedFor::Address(address) => (
+                2,
+                &address.0,
+                "SELECT failed_at FROM sign_in_failures WHERE address = $1
+                 ORDER BY failed_at DESC LIMIT $2",
+            ),
+        };
+        sqlx::query("SELECT pg_advisory_xact_lock($1, hashtext($2))")
+            .bind(lock_class)
+            .bind(key)
+            .execute(&mut *tx)
+            .await?;
+        Ok(sqlx::query_scalar(query)
+            .bind(key)
+            .bind(i64::from(self.most_checked()))
+            .fetch_all(&mut *tx)
+            .await?)
     }
 
     /// The most failures within a window: those answered at once, then the slowed ones.
@@ -254,6 +264,21 @@ impl AccountKey {
 
 /// The address an attempt counts for, as stored.
 struct AddressKey(String);
+
+/// What failures are counted for.
+enum CountedFor<'a> {
+    Account(&'a AccountKey),
+    Address(&'a AddressKey),
+}
+
+/// Forgets the attempt recorded as `attempt`.
+async fn withdraw(db: impl PgExecutor<'_>, attempt: Uuid) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM sign_in_failures WHERE id = $1")
+        .bind(attempt)
+        .execute(db)
+        .await?;
+    Ok(())
+}
 
 impl AddressKey {
     /// An IPv4 address (also when mapped into IPv6), or the /64 network of an IPv6 address, as
