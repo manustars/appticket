@@ -52,12 +52,23 @@ pub async fn held_asset(db: &PgPool, customer: Uuid, kind: &str, name: &str, hol
 
 /// An asset of `kind` called `name`, with no serial number, site or holder.
 pub fn asset_fields(kind: Uuid, name: &str) -> crate::catalog::AssetFields {
+    asset_details(kind, name, None, None, None)
+}
+
+/// An asset of `kind` called `name`, with the serial number, site and holder given.
+pub fn asset_details(
+    kind: Uuid,
+    name: &str,
+    serial_number: Option<&str>,
+    site_id: Option<Uuid>,
+    holder_id: Option<Uuid>,
+) -> crate::catalog::AssetFields {
     crate::catalog::AssetFields {
         kind_id: kind,
         name: name.to_owned(),
-        serial_number: None,
-        site_id: None,
-        holder_id: None,
+        serial_number: serial_number.map(str::to_owned),
+        site_id,
+        holder_id,
     }
 }
 

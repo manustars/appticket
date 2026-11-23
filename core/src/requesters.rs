@@ -460,10 +460,10 @@ pub async fn bring_back(db: &PgPool, id: Uuid) -> Result<()> {
 }
 
 /// Merges `merged` into `kept`: two requesters of the same customer who are one person. The
-/// addresses, tickets and held assets of `merged` pass to `kept`, which remains, and `merged` is removed; the
-/// details `kept` lacks are taken from `merged`, so that nothing about the person is lost, and
-/// `kept` is a key requester when either was, written to where `merged` was if not already. A merge
-/// cannot be undone. Requesters of different customers are never merged, nor those of an
+/// addresses, tickets and held assets of `merged` pass to `kept`, which remains, and `merged` is
+/// removed; the details `kept` lacks are taken from `merged`, so that nothing about the person is
+/// lost, and `kept` is a key requester when either was, written to where `merged` was if not
+/// already. A merge cannot be undone. Requesters of different customers are never merged, nor those of an
 /// offboarded customer. `merged` may have departed; `kept` may not, since tickets are not given to
 /// a departed requester.
 pub async fn merge(db: &PgPool, kept: Uuid, merged: Uuid) -> Result<()> {
@@ -683,7 +683,7 @@ pub struct MovePreview {
     /// The services linked to their tickets that the new customer does not use: unlinked too.
     pub services: Vec<crate::catalog::LinkedService>,
     /// The assets they hold: these stay with the old customer, without a holder.
-    pub held_assets: Vec<crate::catalog::LinkedAsset>,
+    pub held_assets: Vec<crate::catalog::Asset>,
 }
 
 /// What [`move_to_customer`] would move, leave and unlink, across all the requester's tickets.
@@ -715,13 +715,7 @@ pub async fn move_preview(db: &PgPool, id: Uuid, customer: Uuid) -> Result<MoveP
             .bind(id)
             .fetch_one(&mut *conn)
             .await?;
-    let held_assets = sqlx::query_as(
-        "SELECT a.id, k.name AS kind, a.name FROM assets a JOIN asset_kinds k ON k.id = a.kind_id
-         WHERE a.holder_id = $1 ORDER BY lower(k.name), a.name",
-    )
-    .bind(id)
-    .fetch_all(&mut *conn)
-    .await?;
+    let held_assets = crate::catalog::held_by(&mut *conn, id).await?;
     Ok(MovePreview {
         tickets: tickets.len() as i64,
         site,

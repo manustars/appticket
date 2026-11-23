@@ -96,7 +96,7 @@ impl From<AssetRow> for Asset {
 /// The assets picked by the end of the query (`WHERE`, `ORDER BY`, on `assets a` and `asset_kinds
 /// k`), with their site and holder, and the site each is at (the `asset_sites` view follows its
 /// kind).
-macro_rules! assets_where {
+macro_rules! select_assets {
     ($rest:literal) => {
         concat!(
             "SELECT a.id, a.customer_id, c.name AS customer_name, a.kind_id, k.name AS kind,
@@ -174,7 +174,7 @@ fn text(value: &str, what: &str) -> Result<String> {
 
 /// The customer's assets, active ones first.
 pub async fn assets_of(db: &PgPool, customer: Uuid) -> Result<Vec<Asset>> {
-    let rows: Vec<AssetRow> = sqlx::query_as(assets_where!(
+    let rows: Vec<AssetRow> = sqlx::query_as(select_assets!(
         "WHERE a.customer_id = $1
          ORDER BY a.retired_at IS NOT NULL, lower(k.name), a.name"
     ))
@@ -185,8 +185,8 @@ pub async fn assets_of(db: &PgPool, customer: Uuid) -> Result<Vec<Asset>> {
 }
 
 /// The assets the requester holds, by kind.
-pub async fn held_by(db: &PgPool, requester: Uuid) -> Result<Vec<Asset>> {
-    let rows: Vec<AssetRow> = sqlx::query_as(assets_where!(
+pub async fn held_by<'e>(db: impl sqlx::PgExecutor<'e>, requester: Uuid) -> Result<Vec<Asset>> {
+    let rows: Vec<AssetRow> = sqlx::query_as(select_assets!(
         "WHERE a.holder_id = $1 ORDER BY lower(k.name), a.name"
     ))
     .bind(requester)
@@ -415,7 +415,7 @@ pub async fn service_detail(db: &PgPool, id: Uuid) -> Result<ServiceDetail> {
     .bind(id)
     .fetch_all(db)
     .await?;
-    let runs_on: Vec<AssetRow> = sqlx::query_as(assets_where!(
+    let runs_on: Vec<AssetRow> = sqlx::query_as(select_assets!(
         "WHERE a.id IN (SELECT asset_id FROM service_assets WHERE service_id = $1)
          ORDER BY a.name"
     ))
@@ -843,22 +843,7 @@ mod tests {
         id
     }
 
-    /// What an agent who manages the catalog sets on an asset of `kind` called `name`.
-    fn fields(
-        kind: Uuid,
-        name: &str,
-        serial_number: Option<&str>,
-        site_id: Option<Uuid>,
-        holder_id: Option<Uuid>,
-    ) -> AssetFields {
-        AssetFields {
-            kind_id: kind,
-            name: name.to_owned(),
-            serial_number: serial_number.map(str::to_owned),
-            site_id,
-            holder_id,
-        }
-    }
+    use crate::testing::asset_details as fields;
 
     #[sqlx::test]
     async fn an_asset_has_a_serial_number_a_site_and_a_holder(db: PgPool) {
