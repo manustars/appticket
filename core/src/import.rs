@@ -1684,6 +1684,15 @@ async fn write_asset(
     let customer = found.customer;
     let Some(asset) = &found.asset else {
         crate::customers::lock_active(tx, customer).await?;
+        // Assets are added under their customer's lock: one added since the row was recognised
+        // is seen now, and the row is about it.
+        let (name, serial_number) = (table.cell(row, "name"), table.cell(row, "serial_number"));
+        if !matches!(
+            recognised_asset(tx, customer, name, serial_number).await,
+            Ok(None)
+        ) {
+            return Err(Error::Internal(Overtaken.into()));
+        }
         // A new asset has a kind and a name: a row without them was refused.
         let fields = crate::catalog::AssetFields {
             kind_id: found.kind.unwrap_or_default(),
@@ -1700,10 +1709,27 @@ async fn write_asset(
     let before = asset.fields();
     let mut changes = asset_changes(&before, &found.merged(&before, table, row));
     // Only an asset that changes is written, and locked; it is read again under the lock, so
-    // that a change made meanwhile is kept and the report says what is written.
+    // that a change made meanwhile is kept and the report says what is written. Under its
+    // customer's lock, which every change to the customer's sites, requesters and assets takes
+    // first, the asset is locked before its site and holder: retiring an asset, the one change
+    // that does not take the customer, locks the asset alone.
     if !changes.is_empty() {
         crate::customers::lock_active(tx, customer).await?;
         let stored = crate::catalog::lock_stored(tx, asset.id).await?;
+        if let Some(addon) = &stored.source_addon {
+            return rule(format!(
+                "{} has just come from the add-on {addon}: only its source changes it, an \
+                 import does not",
+                stored.name
+            ));
+        }
+        if stored.retired {
+            return rule(format!(
+                "{} has just been retired: an import neither changes a retired asset nor brings \
+                 it back",
+                stored.name
+            ));
+        }
         let before = stored.fields();
         let after = found.merged(&before, table, row);
         changes = asset_changes(&before, &after);
@@ -3598,6 +3624,185 @@ mod tests {
             Err(other) => panic!("{other:?}"),
             Ok(_) => panic!("written"),
         }
+    }
+
+    /// An asset row that changes nothing locks neither the asset nor its customer, nor does a
+    /// row left out for matching an add-on's asset.
+    #[sqlx::test]
+    async fn asset_rows_that_change_nothing_wait_for_no_one(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let office = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let ada = crate::testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let laptop = crate::testing::asset_kind(&db, "Laptop").await;
+        let details = crate::testing::asset_details;
+        let pc = crate::catalog::create_asset(
+            &db,
+            brightfield,
+            &details(laptop, "PC-0042", Some("SN-0042"), Some(office), Some(ada)),
+        )
+        .await
+        .unwrap();
+        let nas = crate::testing::asset(&db, brightfield, "Laptop", "NAS-01").await;
+        sqlx::query(
+            "UPDATE assets SET source_addon = 'watchtower', source_ref = 'n' WHERE id = $1",
+        )
+        .bind(nas)
+        .execute(&db)
+        .await
+        .unwrap();
+
+        // An agent is changing the customer and its assets meanwhile.
+        let mut agent = db.begin().await.unwrap();
+        crate::customers::lock_active(&mut agent, brightfield)
+            .await
+            .unwrap();
+        sqlx::query("SELECT 1 FROM assets WHERE id = ANY($1) FOR UPDATE")
+            .bind([pc, nas])
+            .execute(&mut *agent)
+            .await
+            .unwrap();
+
+        let file = "customer,name,serial_number,kind,site,holder\n\
+            Brightfield,PC-0042,SN-0042,laptop,head office,ADA@brightfield.test\n\
+            Brightfield,NAS-01,,,,\n";
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            import(&db, vec![assets(file)], Mode::Apply),
+        )
+        .await
+        .expect("the import waited for a row it does not change");
+        let outcomes: Vec<Outcome> = report.files[0].rows.iter().map(|r| r.outcome).collect();
+        assert_eq!(outcomes, [Outcome::Unchanged, Outcome::LeftOut]);
+        agent.rollback().await.unwrap();
+    }
+
+    /// An assets file of one row, recognised in a transaction of its own; nothing is locked yet.
+    async fn recognised_asset_row(
+        db: &PgPool,
+        file: &str,
+    ) -> (Transaction<'static, Postgres>, Table, SoFar, AssetFound) {
+        let table = read(Kind::Assets, file.as_bytes()).unwrap();
+        let mut tx = db.begin().await.unwrap();
+        let so_far = SoFar::default();
+        let found = recognise_asset(&mut tx, &table, &table.rows[0], &so_far)
+            .await
+            .unwrap();
+        (tx, table, so_far, found)
+    }
+
+    /// An asset an agent retires, or an add-on becomes the source of, after the row was
+    /// recognised: the row is left out, and the asset stays as it is.
+    #[sqlx::test]
+    async fn an_asset_retired_or_taken_by_an_add_on_after_being_recognised_is_left_out(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        for (change, why) in [
+            (
+                "UPDATE assets SET retired_at = now() WHERE id = $1",
+                "retired",
+            ),
+            (
+                "UPDATE assets SET source_addon = 'watchtower', source_ref = 'pc' WHERE id = $1",
+                "from the add-on watchtower",
+            ),
+        ] {
+            let pc = crate::testing::asset(&db, brightfield, "Laptop", "PC-0042").await;
+            let (mut tx, table, mut so_far, found) = recognised_asset_row(
+                &db,
+                "customer,name,serial_number,kind\nBrightfield,PC-0042,SN-0042,\n",
+            )
+            .await;
+
+            sqlx::query(change).bind(pc).execute(&db).await.unwrap();
+            match write_asset(&mut tx, &table, &table.rows[0], &mut so_far, found).await {
+                Err(Error::Rule(refused)) => assert!(refused.contains(why), "{refused}"),
+                Err(other) => panic!("{other:?}"),
+                Ok(_) => panic!("written"),
+            }
+            tx.commit().await.unwrap();
+            let shown = crate::catalog::assets_of(&db, brightfield).await.unwrap();
+            assert_eq!(shown[0].serial_number, None, "{why}");
+            sqlx::query("DELETE FROM assets")
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+    }
+
+    /// An asset an agent adds after a row was recognised as a new asset with its serial number:
+    /// the import asks to be run again on the data as it is now, rather than add it twice.
+    #[sqlx::test]
+    async fn an_asset_added_after_being_recognised_as_new_asks_to_try_again(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let laptop = crate::testing::asset_kind(&db, "Laptop").await;
+        let (mut tx, table, mut so_far, found) = recognised_asset_row(
+            &db,
+            "customer,name,serial_number,kind\nBrightfield,PC-0042,SN-0042,Laptop\n",
+        )
+        .await;
+
+        crate::catalog::create_asset(
+            &db,
+            brightfield,
+            &crate::testing::asset_details(laptop, "Laptop 7", Some("SN-0042"), None, None),
+        )
+        .await
+        .unwrap();
+        let written = write_asset(&mut tx, &table, &table.rows[0], &mut so_far, found).await;
+        match written.map_err(changed_meanwhile) {
+            Err(Error::Rule(why)) => assert!(why.contains("try again"), "{why}"),
+            Err(other) => panic!("{other:?}"),
+            Ok(_) => panic!("written"),
+        }
+    }
+
+    /// A holder an agent marks departed while the import gives them an asset: the import waits
+    /// for the customer, then finds them departed and leaves the row out.
+    #[sqlx::test]
+    async fn a_holder_departing_during_the_import_is_left_out(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let ada = crate::testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        crate::testing::asset(&db, brightfield, "Laptop", "PC-0042").await;
+        let mut agent = db.begin().await.unwrap();
+        crate::requesters::lock_with_customer(&mut agent, ada)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE requesters SET departed_at = now() WHERE id = $1")
+            .bind(ada)
+            .execute(&mut *agent)
+            .await
+            .unwrap();
+
+        let file = assets(
+            "customer,name,kind,holder\n\
+             Brightfield,PC-0042,,ada@brightfield.test\n\
+             Brightfield,PC-0043,Laptop,ada@brightfield.test\n",
+        );
+        let importing = tokio::spawn({
+            let db = db.clone();
+            async move { run(&db, &Grant::command_line(), vec![file], Mode::Apply).await }
+        });
+        assert!(crate::testing::some_statement_waits_for_a_lock(&db).await);
+        agent.commit().await.unwrap();
+        let report = importing.await.unwrap().unwrap();
+        let reasons = reasons(&report.files[0]);
+        assert!(
+            reasons.len() == 2 && reasons.iter().all(|(_, why)| why.contains("departed")),
+            "{reasons:?}"
+        );
+        assert_eq!(
+            assets_of(&db, brightfield).await,
+            [shown("PC-0042", None, "Laptop", None, None)]
+        );
     }
 
     /// The import and an agent each wait for a customer the other holds: the database stops one
