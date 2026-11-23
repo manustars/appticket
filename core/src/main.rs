@@ -24,6 +24,7 @@ mod identities;
 mod imap;
 mod import;
 mod key_requesters;
+mod local_sign_in;
 mod mail;
 mod mail_status;
 mod oidc;
