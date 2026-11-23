@@ -217,8 +217,12 @@ export interface Messages {
   "import.applied": { plural: false; placeholders: never; tags: never }
   "import.notUtf8": { plural: false; placeholders: "file"; tags: never }
   "import.tooLarge": { plural: false; placeholders: never; tags: never }
-  "import.summary": { plural: false; placeholders: "create" | "leftOut" | "unchanged" | "update"; tags: never }
-  "import.summaryApplied": { plural: false; placeholders: "create" | "leftOut" | "unchanged" | "update"; tags: never }
+  "import.count.create": { plural: true; placeholders: "count"; tags: never }
+  "import.count.created": { plural: true; placeholders: "count"; tags: never }
+  "import.count.update": { plural: true; placeholders: "count"; tags: never }
+  "import.count.updated": { plural: true; placeholders: "count"; tags: never }
+  "import.count.unchanged": { plural: true; placeholders: "count"; tags: never }
+  "import.count.leftOut": { plural: true; placeholders: "count"; tags: never }
   "import.downloadLeftOut": { plural: false; placeholders: never; tags: never }
   "import.leftOutHint": { plural: false; placeholders: never; tags: never }
   "import.line": { plural: false; placeholders: never; tags: never }

@@ -609,3 +609,4 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .import-rows td { white-space: normal; overflow-wrap: anywhere; }
 .import-rows tr.outcome-left_out td:last-child { color: var(--danger); }
 .import-rows tr.outcome-unchanged td { color: var(--muted); }
+.import-counts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.2rem 1.2rem; }

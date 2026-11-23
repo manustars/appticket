@@ -239,8 +239,30 @@
   "import.applied": "Importazione eseguita. Le righe escluse non sono state importate.",
   "import.notUtf8": "{file} non è in UTF-8. Salvarlo come “CSV UTF-8” e sceglierlo di nuovo.",
   "import.tooLarge": "I file sono troppo grandi per un'unica importazione. Suddividerli in più importazioni.",
-  "import.summary": "Righe: {create} da creare, {update} da aggiornare, {unchanged} invariate, {leftOut} escluse.",
-  "import.summaryApplied": "Righe: {create} create, {update} aggiornate, {unchanged} invariate, {leftOut} escluse.",
+  "import.count.create": {
+    "one": "{count} riga da creare",
+    "other": "{count} righe da creare"
+  },
+  "import.count.created": {
+    "one": "{count} riga creata",
+    "other": "{count} righe create"
+  },
+  "import.count.update": {
+    "one": "{count} riga da aggiornare",
+    "other": "{count} righe da aggiornare"
+  },
+  "import.count.updated": {
+    "one": "{count} riga aggiornata",
+    "other": "{count} righe aggiornate"
+  },
+  "import.count.unchanged": {
+    "one": "{count} riga invariata",
+    "other": "{count} righe invariate"
+  },
+  "import.count.leftOut": {
+    "one": "{count} riga esclusa",
+    "other": "{count} righe escluse"
+  },
   "import.downloadLeftOut": "Scarica le righe escluse",
   "import.leftOutHint": "Hanno le stesse colonne e una colonna error con il motivo: correggerle e importare di nuovo il file.",
   "import.line": "Riga",
