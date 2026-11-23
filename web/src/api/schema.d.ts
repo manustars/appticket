@@ -2451,6 +2451,11 @@ export interface components {
              *     one an agent last picked there, else the first they registered.
              */
             requester_email?: string | null;
+            /**
+             * @description The sites the ticket is at: those of the assets it links, else its requester's; a closed
+             *     ticket stays at the sites it was at when it was closed. By name.
+             */
+            sites: components["schemas"]["SiteRef"][];
             state: components["schemas"]["TicketState"];
             title: string;
             /** Format: date-time */
@@ -5827,6 +5832,8 @@ export interface operations {
                 customer?: string;
                 /** @description A requester's id. */
                 requester?: string;
+                /** @description A site's id, retired ones included: the tickets at that site. */
+                site?: string;
                 /**
                  * @description Text found in the title, any of the requester's addresses or the customer's name; `#12` or
                  *     `12` also finds ticket 12.
