@@ -371,7 +371,8 @@ Each file is CSV in UTF-8 (Excel: \"CSV UTF-8\"), separated by commas or semicol
 header row of these column names, in any order; only the required ones must be there. A filled
 cell sets a value, an empty one leaves it as it is. An import never deletes, retires or
 offboards anything, nor brings anything back. A file may also have an `error` column, as the
-rows left out come back with: it is ignored.
+rows left out come back with: it is ignored, as are columns without a name whose cells are all
+empty.
 
 Customers file (--customers); a customer is recognised by its external reference, else by its
 name, ignoring case:
@@ -388,10 +389,11 @@ name, ignoring case:
   notes               Internal notes, seen only by agents; they replace the ones there.
 
 Sites file (--sites); a site is recognised by its name within its customer, ignoring case:
-  customer            The site's customer, by name (required column).
+  customer            The site's customer, by name.
   customer_external_system
   customer_external_name
                       Or by one of its external references, a system and a name in it.
+                      A sites file has the customer column, these two, or all three.
   name                The site's name (required column and value).
   address             The site's address (required column; required to create a site).
 

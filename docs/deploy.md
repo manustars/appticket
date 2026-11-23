@@ -158,9 +158,12 @@ offboards anything, and never brings an offboarded customer or a retired site ba
 breaks a rule is left out with its reason, as is a site whose customer row is left out; the
 other rows are imported. The rows left out come back as a file with the same columns and an
 `error` column giving the reason, ready to correct and import again (an `error` column is
-ignored on import). A file with an unknown or missing column, a file that is not UTF-8, or more
-than 5,000 rows in a file stops the whole import before anything changes. In the UI, the files
-of one import can be up to 10 MiB together.
+ignored on import). A column without a name is ignored when all its cells are empty, as in the
+columns spreadsheets write after the last one. A file with an unknown or missing column, a file
+that is not UTF-8, or more than 5,000 rows in a file stops the whole import before anything
+changes. In the UI, the files of one import travel in one JSON request of at most 10 MiB, so
+their CSV text together must be somewhat smaller: quotes, line ends and non-ASCII characters
+take more room once encoded as JSON.
 
 Customers file. A customer is recognised by its external reference, else by its name, ignoring
 case; a row that could be two customers (two names that differ only in case, or a reference
@@ -184,8 +187,8 @@ retired site has is left out.
 
 | Column | Meaning |
 |---|---|
-| `customer` | The site's customer, by name. The column is required. |
-| `customer_external_system`, `customer_external_name` | Or the customer by one of its external references. |
+| `customer` | The site's customer, by name. |
+| `customer_external_system`, `customer_external_name` | Or the customer by one of its external references. A sites file has the `customer` column, these two, or all three. |
 | `name` | The site's name. Required. |
 | `address` | The site's address. The column is required; a new site needs a value. |
 

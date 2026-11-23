@@ -236,7 +236,7 @@ fn separator(content: &[u8]) -> u8 {
 fn read(kind: Kind, content: &[u8]) -> Result<Table> {
     let (known, required): (&[&str], &[&str]) = match kind {
         Kind::Customers => (CUSTOMER_COLUMNS, &["name"]),
-        Kind::Sites => (SITE_COLUMNS, &["customer", "name", "address"]),
+        Kind::Sites => (SITE_COLUMNS, &["name", "address"]),
     };
     let bom = content.starts_with(BOM);
     let content = content.strip_prefix(BOM).unwrap_or(content);
@@ -273,9 +273,16 @@ fn read(kind: Kind, content: &[u8]) -> Result<Table> {
         .collect();
     let mut columns = HashMap::new();
     let mut error_at = None;
+    // Columns without a name, which must be empty: spreadsheets write them after the last one.
+    let mut blank = Vec::new();
     let mut problems = Vec::new();
-    for (at, name) in header.iter().enumerate() {
-        let name = name.trim().to_lowercase();
+    for (at, written) in header.iter().enumerate() {
+        let written = written.trim();
+        let name = written.to_lowercase();
+        if name.is_empty() {
+            blank.push(at);
+            continue;
+        }
         if name == ERROR_COLUMN {
             error_at = Some(at);
             continue;
@@ -283,16 +290,39 @@ fn read(kind: Kind, content: &[u8]) -> Result<Table> {
         match known.iter().find(|c| **c == name) {
             Some(column) => {
                 if columns.insert(*column, at).is_some() {
-                    problems.push(format!("the column \"{column}\" is there twice"));
+                    problems.push(format!("the column \"{written}\" is there twice"));
                 }
             }
-            None => problems.push(format!("unknown column \"{name}\"")),
+            None => problems.push(format!("unknown column \"{written}\"")),
         }
     }
     for column in required {
         if !columns.contains_key(column) {
             problems.push(format!("missing column \"{column}\""));
         }
+    }
+    // An external reference takes two columns.
+    for (system, name) in [
+        ("external_system", "external_name"),
+        ("customer_external_system", "customer_external_name"),
+    ] {
+        match (columns.contains_key(system), columns.contains_key(name)) {
+            (true, false) => problems.push(format!("missing column \"{name}\"")),
+            (false, true) => problems.push(format!("missing column \"{system}\"")),
+            _ => {}
+        }
+    }
+    // A site's customer, by name or by external reference.
+    if kind == Kind::Sites
+        && !columns.contains_key("customer")
+        && !columns.contains_key("customer_external_system")
+        && !columns.contains_key("customer_external_name")
+    {
+        problems.push(
+            "missing column \"customer\" (or \"customer_external_system\" and \
+             \"customer_external_name\")"
+                .to_owned(),
+        );
     }
     if !problems.is_empty() {
         return rule(format!(
@@ -313,6 +343,16 @@ fn read(kind: Kind, content: &[u8]) -> Result<Table> {
         // Spreadsheets often end with rows of empty cells.
         if record.iter().all(|cell| cell.trim().is_empty()) {
             continue;
+        }
+        if let Some(at) = blank
+            .iter()
+            .find(|at| record.get(**at).is_some_and(|cell| !cell.trim().is_empty()))
+        {
+            return rule(format!(
+                "the {} file: column {} has no name, but line {line} has a value in it",
+                kind.as_str(),
+                at + 1
+            ));
         }
         if rows.len() == MAX_ROWS {
             return rule(format!(
@@ -1642,6 +1682,75 @@ mod tests {
             Err(Error::Rule(why)) => why,
             other => panic!("not refused: {other:?}"),
         }
+    }
+
+    #[sqlx::test]
+    async fn a_header_is_reported_as_written_and_blank_columns_are_ignored(db: PgPool) {
+        let why = refused(
+            &db,
+            vec![customers("Name,Adress\nBrightfield,Via dei Tigli 1\n")],
+        )
+        .await;
+        assert!(
+            why.contains("\"Adress\""),
+            "in the file's own spelling: {why}"
+        );
+        let why = refused(&db, vec![customers("name,NAME\nBrightfield,Harbor Lane\n")]).await;
+        assert!(why.contains("\"NAME\""), "{why}");
+
+        // Excel writes empty columns after the last one: a blank header over blank cells.
+        let why = refused(
+            &db,
+            vec![customers("name;;\nBrightfield;;\nHarbor Lane;x;\n")],
+        )
+        .await;
+        assert!(
+            why.contains("column 2"),
+            "a blank header over a filled cell: {why}"
+        );
+        let report = import(
+            &db,
+            vec![customers(
+                "name;phone;;\r\nBrightfield;000 000 0100;;\r\nHarbor Lane;;; \r\n",
+            )],
+            Mode::Apply,
+        )
+        .await;
+        assert_eq!(
+            outcomes(&report),
+            [[
+                (2, Outcome::Create, "Brightfield"),
+                (3, Outcome::Create, "Harbor Lane")
+            ]]
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_sites_file_names_customers_by_name_or_by_reference(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        crate::external_references::add(&db, brightfield, "Watchtower", "BF-01")
+            .await
+            .unwrap();
+        let file = "customer_external_system,customer_external_name,name,address\n\
+            Watchtower,BF-01,Head office,Via dei Tigli 1\n";
+        let report = import(&db, vec![sites(file)], Mode::Apply).await;
+        assert_eq!(
+            outcomes(&report),
+            [[(2, Outcome::Create, "BF-01 in Watchtower / Head office")]]
+        );
+
+        let why = refused(&db, vec![sites("name,address\nLab,Via del Glicine 3\n")]).await;
+        assert!(why.contains("\"customer\""), "{why}");
+        let why = refused(
+            &db,
+            vec![sites(
+                "customer_external_system,name,address\nWatchtower,Lab,Via del Glicine 3\n",
+            )],
+        )
+        .await;
+        assert!(why.contains("\"customer_external_name\""), "{why}");
     }
 
     #[sqlx::test]
