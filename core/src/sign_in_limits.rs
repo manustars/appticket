@@ -373,6 +373,13 @@ mod tests {
     /// Guesses sent all at once cannot pass before the ones ahead of them are counted.
     #[sqlx::test]
     async fn attempts_sent_at_once_check_no_more_passwords_than_the_limits_allow(db: PgPool) {
+        // Open the pool's connections first, so that the attempts run side by side rather than
+        // one after the other while connections are being opened.
+        let mut open = Vec::new();
+        for _ in 0..db.options().get_max_connections() {
+            open.push(db.acquire().await.unwrap());
+        }
+        drop(open);
         let limits = SignInLimits::for_tests(5, 15 * MINUTE);
         let checked = std::sync::atomic::AtomicUsize::new(0);
         let attempts = (0..20).map(|_| {
