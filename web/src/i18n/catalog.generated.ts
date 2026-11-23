@@ -131,6 +131,7 @@ export interface Messages {
   "composer.note": { plural: false; placeholders: never; tags: never }
   "composer.hintReply": { plural: false; placeholders: "email"; tags: "strong" }
   "composer.hintReplyWroteFrom": { plural: false; placeholders: "email"; tags: "strong" }
+  "composer.hintReplyKeyRequesters": { plural: false; placeholders: "addresses" | "customer"; tags: "strong" }
   "composer.hintPickAddress": { plural: false; placeholders: never; tags: never }
   "composer.hintClosed": { plural: false; placeholders: never; tags: never }
   "composer.hintNote": { plural: false; placeholders: never; tags: "strong" }
@@ -143,6 +144,7 @@ export interface Messages {
   "composer.to": { plural: false; placeholders: never; tags: never }
   "composer.chooseAddress": { plural: false; placeholders: never; tags: never }
   "composer.sendReply": { plural: false; placeholders: "email"; tags: never }
+  "composer.sendToKeyRequesters": { plural: true; placeholders: "count"; tags: never }
   "composer.send": { plural: false; placeholders: never; tags: never }
   "composer.addNote": { plural: false; placeholders: never; tags: never }
   "composer.draftSaving": { plural: false; placeholders: never; tags: never }
@@ -231,6 +233,11 @@ export interface Messages {
   "customer.requesterNameOptional": { plural: false; placeholders: never; tags: never }
   "customer.requesterTickets": { plural: false; placeholders: never; tags: never }
   "customer.requesterSite": { plural: false; placeholders: never; tags: never }
+  "customer.keyRequester": { plural: false; placeholders: never; tags: never }
+  "customer.keyRequestersHint": { plural: false; placeholders: never; tags: never }
+  "customer.keyRequesterOf": { plural: false; placeholders: "requester"; tags: never }
+  "customer.notKeyRequester": { plural: false; placeholders: never; tags: never }
+  "customer.keyRequesterAt": { plural: false; placeholders: "address"; tags: never }
   "customer.addRequester": { plural: false; placeholders: never; tags: never }
   "customer.offboardHint": { plural: false; placeholders: never; tags: never }
   "customer.offboard": { plural: false; placeholders: never; tags: never }
@@ -283,6 +290,7 @@ export interface Messages {
   "requester.moveTakesTickets": { plural: true; placeholders: "count"; tags: never }
   "requester.moveNoTickets": { plural: false; placeholders: never; tags: never }
   "requester.moveLeavesSite": { plural: false; placeholders: "customer" | "site"; tags: never }
+  "requester.moveEndsKeyRequester": { plural: false; placeholders: "customer"; tags: never }
   "requester.moveWillUnlink": { plural: false; placeholders: never; tags: never }
   "requester.moveSubmit": { plural: false; placeholders: never; tags: never }
   "requester.moved": { plural: false; placeholders: never; tags: never }

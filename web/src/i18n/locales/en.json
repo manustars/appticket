@@ -133,10 +133,11 @@
   "composer.note": "Internal note",
   "composer.hintReply": "Sent by e-mail to <strong>{email}</strong>.",
   "composer.hintReplyWroteFrom": "Sent by e-mail to <strong>{email}</strong>, where the requester last wrote from on this ticket.",
+  "composer.hintReplyKeyRequesters": "This ticket has no requester: the reply goes to each key requester of {customer}, in a message of their own, at <strong>{addresses}</strong>. The ticket stays without a requester.",
   "composer.hintPickAddress": "The requester has several addresses and has not written on this ticket: choose the one to write to.",
   "composer.hintClosed": "The ticket is closed, so it gets no more replies. Only agents see a note.",
   "composer.hintNote": "Only agents see a note. It is <strong>never sent</strong> to the requester.",
-  "composer.hintNoRequester": "This ticket has no requester, so there is nobody to reply to. Only agents see a note.",
+  "composer.hintNoRequester": "This ticket has no requester and its customer has no key requesters, so there is nobody to reply to. Only agents see a note.",
   "composer.replyLabel": "Reply to the requester",
   "composer.noteLabel": "Internal note",
   "composer.replyPlaceholder": "Write to the requester…",
@@ -145,6 +146,10 @@
   "composer.to": "To",
   "composer.chooseAddress": "Choose an address…",
   "composer.sendReply": "Send reply to {email}",
+  "composer.sendToKeyRequesters": {
+    "one": "Send reply to {count} key requester",
+    "other": "Send reply to {count} key requesters"
+  },
   "composer.send": "Send reply",
   "composer.addNote": "Add internal note",
   "composer.draftSaving": "Saving the draft…",
@@ -188,22 +193,22 @@
   "parent.children": "Child tickets",
   "parent.noChildren": "No child tickets. When a failure affects several customers, attach each customer's ticket to this one from that ticket's page.",
   "parent.resolveChildren": "Resolve children",
-  "parent.message": "Message to each requester",
+  "parent.message": "Message to the requesters and key requesters",
   "parent.resolveHint": {
-    "one": "The {count} open or waiting child ticket is resolved, and its requester gets this message. This ticket stays as it is.",
-    "other": "The {count} open or waiting child tickets are resolved, and each requester gets this message. This ticket stays as it is."
+    "one": "The {count} open or waiting child ticket is resolved. Its requester and the key requesters of its customer get this message, each in a message of their own. This ticket stays as it is.",
+    "other": "The {count} open or waiting child tickets are resolved. Each child's requester and the key requesters of each child's customer get this message once, each in a message of their own. This ticket stays as it is."
   },
   "parent.confirmResolve": {
-    "one": "Resolve {count} child ticket of #{number} and send the message to its requester?",
-    "other": "Resolve {count} child tickets of #{number} and send the message to each requester?"
+    "one": "Resolve {count} child ticket of #{number} and send the message to its requester and key requesters?",
+    "other": "Resolve {count} child tickets of #{number} and send the message to their requesters and key requesters?"
   },
   "parent.resolved": {
     "one": "Resolved {count} child ticket.",
     "other": "Resolved {count} child tickets."
   },
   "parent.replied": {
-    "one": "Queued a reply to {count} requester.",
-    "other": "Queued replies to {count} requesters."
+    "one": "Queued the message to {count} person.",
+    "other": "Queued the message to {count} people."
   },
   "customers.title": "Customers",
   "customers.name": "Name",
@@ -248,6 +253,11 @@
   "customer.requesterNameOptional": "Name (optional)",
   "customer.requesterTickets": "Tickets",
   "customer.requesterSite": "Site",
+  "customer.keyRequester": "Key requester",
+  "customer.keyRequestersHint": "Key requesters speak for the customer: they get the replies on its tickets that have no requester, and the messages about failures that affect it, at the address chosen here.",
+  "customer.keyRequesterOf": "Key requester: {requester}",
+  "customer.notKeyRequester": "Not a key requester",
+  "customer.keyRequesterAt": "Key requester, at {address}",
   "customer.addRequester": "Register requester",
   "customer.offboardHint": "An offboarded customer keeps its history but gets no new tickets; its mail waits in the inbox.",
   "customer.offboard": "Offboard customer",
@@ -303,6 +313,7 @@
   },
   "requester.moveNoTickets": "They have no tickets to move.",
   "requester.moveLeavesSite": "They leave their site, {site}, which belongs to {customer}.",
+  "requester.moveEndsKeyRequester": "They stop being a key requester of {customer}.",
   "requester.moveWillUnlink": "Moving unlinks from their tickets:",
   "requester.moveSubmit": "Move requester",
   "requester.moved": "Requester moved.",

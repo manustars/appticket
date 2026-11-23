@@ -371,6 +371,21 @@ export async function removeRequesterAddress(id: string, address: string): Promi
   await call('DELETE', `${requesterPath(id)}/addresses/${encodeURIComponent(address)}`)
 }
 
+/**
+ * Makes the requester a key requester of their customer, written to at `contactAddress`, one of
+ * their addresses; for a key requester, it changes where they are written to. Refused for a
+ * departed requester.
+ */
+export async function markKeyRequester(id: string, contactAddress: string): Promise<void> {
+  const request: Schemas['KeyRequesterContact'] = { contact_address: contactAddress }
+  await call('PUT', `${requesterPath(id)}/key`, request)
+}
+
+/** Makes a key requester a plain requester of their customer again. */
+export async function unmarkKeyRequester(id: string): Promise<void> {
+  await call('DELETE', `${requesterPath(id)}/key`)
+}
+
 /** Marks the requester departed: no ticket is opened for them and their messages wait in the inbox. */
 export async function departRequester(id: string): Promise<void> {
   await call('POST', `${requesterPath(id)}/depart`)

@@ -14,6 +14,7 @@ import {
   listCustomerServices,
   listExternalSystems,
   listServices,
+  markKeyRequester,
   offboardCustomer,
   removeDomain,
   removeExternalReference,
@@ -21,6 +22,7 @@ import {
   retireSite,
   startUsingService,
   stopUsingService,
+  unmarkKeyRequester,
   updateAsset,
   updateCustomer,
   updateSite,
@@ -623,6 +625,15 @@ function Requesters({ customer: c, readOnly, onChanged, onSignedOut }: PartProps
     })
   }
 
+  /** Marks the requester a key requester written to at `contact`, or unmarks them when empty. */
+  function setKey(requesterId: string, contact: string) {
+    void action
+      .run(() => (contact ? markKeyRequester(requesterId, contact) : unmarkKeyRequester(requesterId)))
+      .then(async (ok) => {
+        if (ok) await onChanged()
+      })
+  }
+
   return (
     <section className="panel" aria-labelledby={`${id}-title`}>
       <h2 id={`${id}-title`}>{t('customer.requesters')}</h2>
@@ -630,30 +641,54 @@ function Requesters({ customer: c, readOnly, onChanged, onSignedOut }: PartProps
         <p className="empty">{t('customer.noRequesters')}</p>
       ) : (
         // Each requester's page has their addresses and details, and changes them.
-        <table className="data">
-          <thead>
-            <tr>
-              <th>{t('customer.requesterName')}</th><th>{t('customer.requesterAddresses')}</th>
-              <th>{t('customer.requesterSite')}</th>
-              <th className="figure">{t('customer.requesterTickets')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {c.requester_list.map((r) => (
-              <tr key={r.id}>
-                <td>
-                  <a href={requesterHref(r.id)}>{requesterLabel(t, r.name, r.addresses[0])}</a>
-                  {r.departed && <DepartedMarker />}
-                </td>
-                <td>
-                  <ul className="plain">{r.addresses.map((a) => <li key={a}>{a}</li>)}</ul>
-                </td>
-                <td>{siteName(r.site_id) ?? <span className="muted">—</span>}</td>
-                <td className="figure">{formatNumber(r.tickets)}</td>
+        <>
+          <p className="hint">{t('customer.keyRequestersHint')}</p>
+          <table className="data">
+            <thead>
+              <tr>
+                <th>{t('customer.requesterName')}</th><th>{t('customer.requesterAddresses')}</th>
+                <th>{t('customer.requesterSite')}</th>
+                <th>{t('customer.keyRequester')}</th>
+                <th className="figure">{t('customer.requesterTickets')}</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {c.requester_list.map((r) => {
+                const label = requesterLabel(t, r.name, r.addresses[0])
+                return (
+                  <tr key={r.id}>
+                    <td>
+                      <a href={requesterHref(r.id)}>{label}</a>
+                      {r.departed && <DepartedMarker />}
+                    </td>
+                    <td>
+                      <ul className="plain">{r.addresses.map((a) => <li key={a}>{a}</li>)}</ul>
+                    </td>
+                    <td>{siteName(r.site_id) ?? <span className="muted">—</span>}</td>
+                    <td>
+                      {readOnly || r.departed ? (
+                        // A departed requester is not a key requester, and cannot be marked one.
+                        r.contact_address
+                          ? t('customer.keyRequesterAt', { address: r.contact_address })
+                          : <span className="muted">—</span>
+                      ) : (
+                        <select aria-label={t('customer.keyRequesterOf', { requester: label })}
+                          value={r.contact_address ?? ''} disabled={action.busy}
+                          onChange={(e) => setKey(r.id, e.target.value)}>
+                          <option value="">{t('customer.notKeyRequester')}</option>
+                          {r.addresses.map((a) => (
+                            <option key={a} value={a}>{t('customer.keyRequesterAt', { address: a })}</option>
+                          ))}
+                        </select>
+                      )}
+                    </td>
+                    <td className="figure">{formatNumber(r.tickets)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </>
       )}
       {!readOnly && (
         <form className="inline-form" onSubmit={add}>
