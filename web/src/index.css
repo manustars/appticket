@@ -602,3 +602,10 @@ tr.addon-error td { padding-top: 0; white-space: normal; }
 /* Agents: long names, addresses and translated actions wrap instead of widening the panel. */
 .data.agents td { white-space: normal; overflow-wrap: anywhere; }
 .data.agents .row-actions button { white-space: nowrap; }
+
+/* Importing: the preview before the import, and the reason of each row left out. */
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.import-actions, .import-left-out { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 0.75rem; }
+.import-rows td { white-space: normal; overflow-wrap: anywhere; }
+.import-rows tr.outcome-left_out td:last-child { color: var(--danger); }
+.import-rows tr.outcome-unchanged td { color: var(--muted); }

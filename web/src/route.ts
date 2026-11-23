@@ -24,6 +24,7 @@ export type Route =
   | { view: 'inbox' }
   | { view: 'ticket'; number: number }
   | { view: 'customers' }
+  | { view: 'import' }
   | { view: 'customer'; id: string }
   | { view: 'requester'; id: string }
   | { view: 'services' }
@@ -38,6 +39,7 @@ export type AdminTab = (typeof adminTabs)[number]
 export const ticketHref = (number: number) => `#/tickets/${number}`
 export const inboxHref = '#/inbox'
 export const customersHref = '#/customers'
+export const importHref = '#/customers/import'
 export const customerHref = (id: string) => `#/customers/${encodeURIComponent(id)}`
 export const requesterHref = (id: string) => `#/requesters/${encodeURIComponent(id)}`
 export const servicesHref = '#/services'
@@ -88,6 +90,7 @@ function parseFilters(search: string): TicketFilters {
 export function parseRoute(hash: string): Route {
   if (hash === inboxHref) return { view: 'inbox' }
   if (hash === customersHref) return { view: 'customers' }
+  if (hash === importHref) return { view: 'import' }
   if (hash === servicesHref) return { view: 'services' }
   if (hash === accountHref) return { view: 'account' }
   if (hash === adminHref()) return { view: 'admin', tab: null }

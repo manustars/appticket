@@ -203,6 +203,33 @@ export interface Messages {
   "customers.newDomains": { plural: false; placeholders: never; tags: never }
   "customers.newDomainsHint": { plural: false; placeholders: never; tags: never }
   "customers.addSubmit": { plural: false; placeholders: never; tags: never }
+  "customers.import": { plural: false; placeholders: never; tags: never }
+  "import.title": { plural: false; placeholders: never; tags: never }
+  "import.intro": { plural: false; placeholders: never; tags: never }
+  "import.files": { plural: false; placeholders: never; tags: never }
+  "import.file.customers": { plural: false; placeholders: never; tags: never }
+  "import.file.sites": { plural: false; placeholders: never; tags: never }
+  "import.columns": { plural: false; placeholders: "columns"; tags: never }
+  "import.filesHint": { plural: false; placeholders: never; tags: never }
+  "import.preview": { plural: false; placeholders: never; tags: never }
+  "import.apply": { plural: false; placeholders: never; tags: never }
+  "import.previewed": { plural: false; placeholders: never; tags: never }
+  "import.applied": { plural: false; placeholders: never; tags: never }
+  "import.notUtf8": { plural: false; placeholders: "file"; tags: never }
+  "import.tooLarge": { plural: false; placeholders: never; tags: never }
+  "import.summary": { plural: false; placeholders: "create" | "leftOut" | "unchanged" | "update"; tags: never }
+  "import.summaryApplied": { plural: false; placeholders: "create" | "leftOut" | "unchanged" | "update"; tags: never }
+  "import.downloadLeftOut": { plural: false; placeholders: never; tags: never }
+  "import.leftOutHint": { plural: false; placeholders: never; tags: never }
+  "import.line": { plural: false; placeholders: never; tags: never }
+  "import.row": { plural: false; placeholders: never; tags: never }
+  "import.outcome": { plural: false; placeholders: never; tags: never }
+  "import.detail": { plural: false; placeholders: never; tags: never }
+  "import.outcome.create": { plural: false; placeholders: never; tags: never }
+  "import.outcome.update": { plural: false; placeholders: never; tags: never }
+  "import.outcome.unchanged": { plural: false; placeholders: never; tags: never }
+  "import.outcome.left_out": { plural: false; placeholders: never; tags: never }
+  "import.changes": { plural: false; placeholders: "columns"; tags: never }
   "customer.back": { plural: false; placeholders: never; tags: never }
   "customer.details": { plural: false; placeholders: never; tags: never }
   "customer.name": { plural: false; placeholders: never; tags: never }

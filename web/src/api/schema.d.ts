@@ -1768,17 +1768,6 @@ export interface components {
             ticket_number?: number | null;
             to_address?: string | null;
         };
-        FileReport: {
-            kind: components["schemas"]["Kind"];
-            /**
-             * @description The rows left out, as a CSV file with the same columns, separator and byte order mark as
-             *     this one and their reason in an `error` column, ready to correct and import again; none
-             *     when no row is left out.
-             */
-            left_out?: string | null;
-            /** @description Every row of the file, in its order. */
-            rows: components["schemas"]["RowReport"][];
-        };
         /** @description A password made by the core, shown once to the agent who asked for it. */
         GeneratedPassword: {
             password: string;
@@ -1789,11 +1778,50 @@ export interface components {
         ImportFile: {
             /** @description The file's text: CSV with a header of fixed column names, comma or semicolon separated. */
             content: string;
-            kind: components["schemas"]["Kind"];
+            kind: components["schemas"]["ImportKind"];
+        };
+        ImportFileReport: {
+            kind: components["schemas"]["ImportKind"];
+            /**
+             * @description The rows left out, as a CSV file with the same columns, separator and byte order mark as
+             *     this one and their reason in an `error` column, ready to correct and import again; none
+             *     when no row is left out.
+             */
+            left_out?: string | null;
+            /** @description Every row of the file, in its order. */
+            rows: components["schemas"]["ImportRow"][];
+        };
+        /**
+         * @description What a file of an import holds, one kind per file. Files are taken in this order, so that a
+         *     row can refer to something an earlier file creates.
+         * @enum {string}
+         */
+        ImportKind: "customers" | "sites";
+        /** @enum {string} */
+        ImportOutcome: "create" | "update" | "unchanged" | "left_out";
+        /** @description What an import does, or would do, file by file. */
+        ImportReport: {
+            /** @description Whether the import was applied; a preview changes nothing. */
+            applied: boolean;
+            files: components["schemas"]["ImportFileReport"][];
         };
         /** @description CSV files to import, at most one of each kind; they are taken customers first, then sites. */
         ImportRequest: {
             files: components["schemas"]["ImportFile"][];
+        };
+        ImportRow: {
+            /** @description The columns whose values a row that updates changes. */
+            changes: string[];
+            /** @description What the row is about: a customer's name, or a site's customer and name. */
+            label: string;
+            /**
+             * Format: int64
+             * @description The line of the file the row starts on; the header is line 1.
+             */
+            line: number;
+            outcome: components["schemas"]["ImportOutcome"];
+            /** @description Why the row is left out. */
+            reason?: string | null;
         };
         InboxMessage: {
             body_text: string;
@@ -1826,12 +1854,6 @@ export interface components {
              */
             contact_address?: string | null;
         };
-        /**
-         * @description What a file of an import holds, one kind per file. Files are taken in this order, so that a
-         *     row can refer to something an earlier file creates.
-         * @enum {string}
-         */
-        Kind: "customers" | "sites";
         LinkedAsset: {
             /** Format: uuid */
             id: string;
@@ -2024,8 +2046,6 @@ export interface components {
              */
             waiting: number;
         };
-        /** @enum {string} */
-        Outcome: "create" | "update" | "unchanged" | "left_out";
         ParentChange: {
             /**
              * Format: int64
@@ -2101,12 +2121,6 @@ export interface components {
             number: number;
             state: components["schemas"]["TicketState"];
             title: string;
-        };
-        /** @description What an import does, or would do, file by file. */
-        Report: {
-            /** @description Whether the import was applied; a preview changes nothing. */
-            applied: boolean;
-            files: components["schemas"]["FileReport"][];
         };
         Requester: {
             /** @description All the requester's addresses, the first registered first. */
@@ -2261,20 +2275,6 @@ export interface components {
         RoleRequest: {
             name: string;
             permissions: components["schemas"]["Permission"][];
-        };
-        RowReport: {
-            /** @description The columns whose values a row that updates changes. */
-            changes: string[];
-            /** @description What the row is about: a customer's name, or a site's customer and name. */
-            label: string;
-            /**
-             * Format: int64
-             * @description The line of the file the row starts on; the header is line 1.
-             */
-            line: number;
-            outcome: components["schemas"]["Outcome"];
-            /** @description Why the row is left out. */
-            reason?: string | null;
         };
         Service: {
             /**
@@ -4332,7 +4332,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Report"];
+                    "application/json": components["schemas"]["ImportReport"];
                 };
             };
             401: {
@@ -4385,7 +4385,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Report"];
+                    "application/json": components["schemas"]["ImportReport"];
                 };
             };
             401: {

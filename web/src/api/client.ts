@@ -15,6 +15,10 @@ export type CustomerSummary = Schemas['CustomerSummary']
 export type Draft = Schemas['Draft']
 export type DraftMode = Schemas['DraftMode']
 export type FailingReply = Schemas['FailingReply']
+export type ImportFile = Schemas['ImportFile']
+export type ImportKind = Schemas['ImportKind']
+export type ImportReport = Schemas['ImportReport']
+export type ImportRow = Schemas['ImportRow']
 export type InboxMessage = Schemas['InboxMessage']
 export type MailState = Schemas['MailState']
 export type Moved = Schemas['Moved']
@@ -338,6 +342,18 @@ export async function addExternalReference(customer: string, system: string, nam
 /** The systems external references are in, across all customers, one spelling each. */
 export function listExternalSystems(): Promise<string[]> {
   return json('GET', '/api/external-references/systems')
+}
+
+/** What importing `files` would create, update and leave out; nothing changes. */
+export function previewImport(files: ImportFile[]): Promise<ImportReport> {
+  const request: Schemas['ImportRequest'] = { files }
+  return json('POST', '/api/imports/preview', request)
+}
+
+/** Imports `files`, checked again against the help desk's data as it is now. */
+export function applyImport(files: ImportFile[]): Promise<ImportReport> {
+  const request: Schemas['ImportRequest'] = { files }
+  return json('POST', '/api/imports', request)
 }
 
 /** Takes an external reference from its customer; its name is free again in its system. */
