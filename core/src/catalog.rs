@@ -251,7 +251,7 @@ macro_rules! stored_assets {
 
 /// The customer's assets with that serial number, ignoring case, retired ones too: active ones
 /// first, then the most recently retired. Nothing is locked.
-pub(crate) async fn with_serial_number<'e>(
+pub(crate) async fn assets_with_serial_number<'e>(
     db: impl sqlx::PgExecutor<'e>,
     customer: Uuid,
     serial_number: &str,
@@ -268,7 +268,7 @@ pub(crate) async fn with_serial_number<'e>(
 
 /// The customer's assets with that name, ignoring case, retired ones too: active ones first, then
 /// the most recently retired. Nothing is locked.
-pub(crate) async fn with_name<'e>(
+pub(crate) async fn assets_named<'e>(
     db: impl sqlx::PgExecutor<'e>,
     customer: Uuid,
     name: &str,
@@ -293,19 +293,6 @@ pub(crate) async fn lock_stored(
         sqlx::query_as(stored_assets!("WHERE id = $1 FOR NO KEY UPDATE"))
             .bind(id)
             .fetch_one(&mut **tx)
-            .await?,
-    )
-}
-
-/// The asset kind with that name, ignoring case, as kinds are named.
-pub(crate) async fn kind_named<'e>(
-    db: impl sqlx::PgExecutor<'e>,
-    name: &str,
-) -> Result<Option<Uuid>> {
-    Ok(
-        sqlx::query_scalar("SELECT id FROM asset_kinds WHERE lower(name) = lower($1)")
-            .bind(name)
-            .fetch_optional(db)
             .await?,
     )
 }

@@ -721,7 +721,7 @@ impl Keys {
         Keys::of(table, row, "name", "external_system", "external_name")
     }
 
-    /// How a row of a sites or requesters file names its customer.
+    /// How a row of a sites, requesters or assets file names its customer.
     fn of_its_customer(table: &Table, row: &Row) -> Keys {
         Keys::of(
             table,
@@ -742,8 +742,8 @@ impl Keys {
 }
 
 impl SoFar {
-    /// The line of a customer row left out that would have created the customer a site row
-    /// names, unless another row imported that customer.
+    /// The line of a customer row left out that would have created the customer a site,
+    /// requester or asset row names, unless another row imported that customer.
     fn new_customer_left_out(&self, table: &Table, row: &Row) -> Option<u64> {
         let keys = Keys::of_its_customer(table, row);
         if self.customers_imported.iter().any(|k| k.meet(&keys)) {
@@ -924,8 +924,8 @@ async fn recognise(
     }
 }
 
-/// Refuses an offboarded customer: its sites and requesters do not change, and an import does
-/// not bring it back.
+/// Refuses an offboarded customer: its sites, requesters and assets do not change, and an import
+/// does not bring it back.
 async fn not_offboarded(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<()> {
     let (name, offboarded): (String, bool) =
         sqlx::query_as("SELECT name, offboarded_at IS NOT NULL FROM customers WHERE id = $1")
@@ -1036,8 +1036,8 @@ async fn customer_row(
     })
 }
 
-/// The customer a site or requester row names, which must exist and be served: by external
-/// reference, else by name. `needs` says that the row needs one.
+/// The customer a site, requester or asset row names, which must exist and be served: by
+/// external reference, else by name. `needs` says that the row needs one.
 async fn named_customer(
     tx: &mut Transaction<'_, Postgres>,
     table: &Table,
@@ -1078,7 +1078,7 @@ async fn named_customer(
     Ok(id)
 }
 
-/// Refuses a site or requester row whose customer row is left out.
+/// Refuses a site, requester or asset row whose customer row is left out.
 fn waits_for_customer<T>(line: u64) -> Result<T> {
     rule(format!(
         "the row of its customer, line {line} of the customers file, is left out"
@@ -1322,14 +1322,14 @@ async fn requester_row(
     write_requester(tx, table, row, so_far, found).await
 }
 
-/// What a requester row is about, read without locking anything; `found` gets the existing
-/// requesters its addresses belong to.
+/// What a requester row is about, read without locking anything; `found_owners` gets the
+/// existing requesters its addresses belong to.
 async fn recognise_requester(
     tx: &mut Transaction<'_, Postgres>,
     table: &Table,
     row: &Row,
     so_far: &SoFar,
-    found: &mut Vec<Uuid>,
+    found_owners: &mut Vec<Uuid>,
 ) -> Result<RequesterFound> {
     if let Some(line) = so_far.new_customer_left_out(table, row) {
         return waits_for_customer(line);
@@ -1349,7 +1349,7 @@ async fn recognise_requester(
         return rule("a requester needs an e-mail address");
     }
     let owners = crate::requesters::owners(&mut **tx, &addresses).await?;
-    found.extend(owners.iter().map(|o| o.requester_id));
+    found_owners.extend(owners.iter().map(|o| o.requester_id));
     let requester = recognised(customer, &owners, so_far)?;
     let site = named_site(tx, table, row, customer, so_far).await?;
     let to_add = addresses
@@ -1445,7 +1445,8 @@ async fn recognised_asset(
 ) -> Result<Option<crate::catalog::StoredAsset>> {
     let mut found = None;
     if let Some(serial_number) = serial_number {
-        let assets = crate::catalog::with_serial_number(&mut **tx, customer, serial_number).await?;
+        let assets =
+            crate::catalog::assets_with_serial_number(&mut **tx, customer, serial_number).await?;
         found = one_of(
             tx,
             customer,
@@ -1460,33 +1461,65 @@ async fn recognised_asset(
     if found.is_none()
         && let Some(name) = name
     {
-        let assets = crate::catalog::with_name(&mut **tx, customer, name).await?;
+        let assets = crate::catalog::assets_named(&mut **tx, customer, name).await?;
         found = one_of(tx, customer, assets, "are named", name).await?;
         by_name = true;
     }
     let Some(asset) = found else {
         return Ok(None);
     };
+    changeable(&asset, false)?;
+    if by_name {
+        keeps_its_serial_number(&asset, serial_number, false)?;
+    }
+    Ok(Some(asset))
+}
+
+/// Refuses an asset an import does not change: one an add-on is the source of, or a retired
+/// one. `meanwhile` says that it became so after the row was recognised.
+fn changeable(asset: &crate::catalog::StoredAsset, meanwhile: bool) -> Result<()> {
+    let (comes, is) = if meanwhile {
+        ("has just come", "has just been")
+    } else {
+        ("comes", "is")
+    };
     if let Some(addon) = &asset.source_addon {
         return rule(format!(
-            "{} comes from the add-on {addon}: only its source changes it, an import does not",
+            "{} {comes} from the add-on {addon}: only its source changes it, an import does not",
             asset.name
         ));
     }
     if asset.retired {
         return rule(format!(
-            "{} is retired: an import neither changes a retired asset nor brings it back",
+            "{} {is} retired: an import neither changes a retired asset nor brings it back",
             asset.name
         ));
     }
-    if by_name && let (Some(theirs), Some(serial_number)) = (&asset.serial_number, serial_number) {
+    Ok(())
+}
+
+/// Refuses a row whose serial number would replace the one the asset has: an import replaces no
+/// serial number. `meanwhile` says that the asset got its own after the row was recognised.
+fn keeps_its_serial_number(
+    asset: &crate::catalog::StoredAsset,
+    serial_number: Option<&str>,
+    meanwhile: bool,
+) -> Result<()> {
+    if let (Some(theirs), Some(serial_number)) = (&asset.serial_number, serial_number)
+        && theirs.to_lowercase() != serial_number.to_lowercase()
+    {
+        let has = if meanwhile {
+            "has just been given"
+        } else {
+            "has"
+        };
         return rule(format!(
-            "{} has the serial number {theirs}, not {serial_number}: an import does not replace \
-             a serial number; correct it on the asset's page",
+            "{} {has} the serial number {theirs}, not {serial_number}: an import does not \
+             replace a serial number; correct it on the asset's page",
             asset.name
         ));
     }
-    Ok(Some(asset))
+    Ok(())
 }
 
 /// The asset of `assets`, found by `what` (`have the serial number`, `are named`) `value`: the
@@ -1519,7 +1552,7 @@ async fn named_kind(
     let Some(name) = table.cell(row, "kind") else {
         return Ok(None);
     };
-    match crate::catalog::kind_named(&mut **tx, name).await? {
+    match crate::asset_kinds::named(&mut **tx, name).await? {
         Some(kind) => Ok(Some(kind)),
         None => rule(format!("there is no asset kind called {name}")),
     }
@@ -1619,6 +1652,7 @@ fn asset_changes(
     .collect()
 }
 
+/// An asset row: recognised, then written.
 async fn asset_row(
     tx: &mut Transaction<'_, Postgres>,
     table: &Table,
@@ -1716,20 +1750,8 @@ async fn write_asset(
     if !changes.is_empty() {
         crate::customers::lock_active(tx, customer).await?;
         let stored = crate::catalog::lock_stored(tx, asset.id).await?;
-        if let Some(addon) = &stored.source_addon {
-            return rule(format!(
-                "{} has just come from the add-on {addon}: only its source changes it, an \
-                 import does not",
-                stored.name
-            ));
-        }
-        if stored.retired {
-            return rule(format!(
-                "{} has just been retired: an import neither changes a retired asset nor brings \
-                 it back",
-                stored.name
-            ));
-        }
+        changeable(&stored, true)?;
+        keeps_its_serial_number(&stored, table.cell(row, "serial_number"), true)?;
         let before = stored.fields();
         let after = found.merged(&before, table, row);
         changes = asset_changes(&before, &after);
@@ -3738,6 +3760,40 @@ mod tests {
                 .await
                 .unwrap();
         }
+    }
+
+    /// An asset an agent gives another serial number after the row was recognised: the import
+    /// replaces no serial number, and leaves the row out.
+    #[sqlx::test]
+    async fn an_asset_given_a_serial_number_after_being_recognised_is_left_out(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let laptop = crate::testing::asset_kind(&db, "Laptop").await;
+        let pc = crate::testing::asset(&db, brightfield, "Laptop", "PC-0042").await;
+        let (mut tx, table, mut so_far, found) = recognised_asset_row(
+            &db,
+            "customer,name,serial_number,kind\nBrightfield,PC-0042,SN-0042,\n",
+        )
+        .await;
+
+        crate::catalog::update_asset(
+            &db,
+            pc,
+            &crate::testing::asset_details(laptop, "PC-0042", Some("SN-0099"), None, None),
+        )
+        .await
+        .unwrap();
+        match write_asset(&mut tx, &table, &table.rows[0], &mut so_far, found).await {
+            Err(Error::Rule(why)) => assert!(why.contains("serial number SN-0099"), "{why}"),
+            Err(other) => panic!("{other:?}"),
+            Ok(_) => panic!("written"),
+        }
+        tx.commit().await.unwrap();
+        assert_eq!(
+            assets_of(&db, brightfield).await,
+            [shown("PC-0042", Some("SN-0099"), "Laptop", None, None)]
+        );
     }
 
     /// An asset an agent adds after a row was recognised as a new asset with its serial number:
