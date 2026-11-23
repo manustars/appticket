@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::error::{Error, Result, rule};
 use crate::outbound::Sender;
+use crate::requesters::SiteRef;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, sqlx::Type)]
 #[serde(rename_all = "lowercase")]
@@ -494,28 +495,24 @@ async fn ensure_ticket_may_move_to(
     Ok(())
 }
 
-/// The sites each of the tickets numbered `numbers` is at, by number, each list by name.
+/// The sites each of `tickets` is at, by ticket, each list by name.
 pub async fn sites<'e>(
     db: impl sqlx::PgExecutor<'e>,
-    numbers: &[i64],
-) -> Result<HashMap<i64, Vec<crate::requesters::SiteRef>>> {
-    let rows: Vec<(i64, Uuid, String)> = sqlx::query_as(
-        "SELECT t.number, s.id, s.name
-         FROM tickets t
-         JOIN ticket_sites ts ON ts.ticket_id = t.id
+    tickets: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<SiteRef>>> {
+    let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
+        "SELECT ts.ticket_id, s.id, s.name
+         FROM ticket_sites ts
          JOIN sites s ON s.id = ts.site_id
-         WHERE t.number = ANY($1)
-         ORDER BY t.number, lower(s.name), s.name, s.id",
+         WHERE ts.ticket_id = ANY($1)
+         ORDER BY lower(s.name), s.name, s.id",
     )
-    .bind(numbers)
+    .bind(tickets)
     .fetch_all(db)
     .await?;
-    let mut sites: HashMap<i64, Vec<crate::requesters::SiteRef>> = HashMap::new();
-    for (number, id, name) in rows {
-        sites
-            .entry(number)
-            .or_default()
-            .push(crate::requesters::SiteRef { id, name });
+    let mut sites: HashMap<Uuid, Vec<SiteRef>> = HashMap::new();
+    for (ticket, id, name) in rows {
+        sites.entry(ticket).or_default().push(SiteRef { id, name });
     }
     Ok(sites)
 }
@@ -1199,10 +1196,11 @@ mod tests {
 
     /// The names of the sites the ticket is at, in order.
     async fn at(db: &PgPool, number: i64) -> Vec<String> {
-        sites(db, &[number])
+        let ticket = detail(db, number).await.unwrap().id;
+        sites(db, &[ticket])
             .await
             .unwrap()
-            .remove(&number)
+            .remove(&ticket)
             .unwrap_or_default()
             .into_iter()
             .map(|s| s.name)
@@ -1279,7 +1277,7 @@ mod tests {
         let lena = testing::requester(&db, c, "lena@brightfield.test").await;
         put_at(&db, lena, Some(head)).await;
         let hers = testing::ticket(&db, c, Some(lena), "a1@brightfield.test").await;
-        let nobody_s = testing::ticket(&db, c, None, "a2@brightfield.test").await;
+        let nobody = testing::ticket(&db, c, None, "a2@brightfield.test").await;
         let with_asset = testing::ticket(&db, c, Some(lena), "a3@brightfield.test").await;
         let pc = testing::asset(&db, c, "Laptop", "PC-0042").await;
         crate::catalog::link_asset(&db, with_asset, pc, true)
@@ -1287,7 +1285,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(at(&db, hers).await, ["Head office"]);
-        assert_eq!(at(&db, nobody_s).await, Vec::<String>::new());
+        assert_eq!(at(&db, nobody).await, Vec::<String>::new());
         assert_eq!(
             at(&db, with_asset).await,
             Vec::<String>::new(),
@@ -1355,7 +1353,7 @@ mod tests {
         let ada = testing::requester(&db, c, "ada@brightfield.test").await;
         put_at(&db, ada, Some(head)).await;
         let n = testing::ticket(&db, c, Some(ada), "a1@brightfield.test").await;
-        let set_state = |state: &'static str| {
+        let set_state_raw = |state: &'static str| {
             let db = db.clone();
             async move {
                 sqlx::query("UPDATE tickets SET state = $2 WHERE number = $1")
@@ -1367,15 +1365,15 @@ mod tests {
             }
         };
 
-        set_state("closed").await;
+        set_state_raw("closed").await;
         put_at(&db, ada, Some(lab)).await;
         assert_eq!(at(&db, n).await, ["Head office"]);
-        set_state("closed").await;
+        set_state_raw("closed").await;
         assert_eq!(at(&db, n).await, ["Head office"], "closed again");
-        set_state("open").await;
+        set_state_raw("open").await;
         assert_eq!(at(&db, n).await, ["Lab"], "no longer closed");
         put_at(&db, ada, None).await;
-        set_state("closed").await;
+        set_state_raw("closed").await;
         put_at(&db, ada, Some(lab)).await;
         assert_eq!(at(&db, n).await, Vec::<String>::new(), "closed at no site");
     }

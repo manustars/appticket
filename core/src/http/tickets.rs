@@ -107,27 +107,9 @@ async fn list_tickets(
             })?),
         ),
     };
-    let customer = match filter.customer.as_deref().map(str::trim) {
-        None | Some("") => None,
-        Some(id) => Some(
-            Uuid::parse_str(id)
-                .map_err(|_| ApiError::BadRequest("customer must be a customer's id".into()))?,
-        ),
-    };
-    let requester = match filter.requester.as_deref().map(str::trim) {
-        None | Some("") => None,
-        Some(id) => Some(
-            Uuid::parse_str(id)
-                .map_err(|_| ApiError::BadRequest("requester must be a requester's id".into()))?,
-        ),
-    };
-    let site = match filter.site.as_deref().map(str::trim) {
-        None | Some("") => None,
-        Some(id) => Some(
-            Uuid::parse_str(id)
-                .map_err(|_| ApiError::BadRequest("site must be a site's id".into()))?,
-        ),
-    };
+    let customer = optional_id(filter.customer.as_deref(), "customer")?;
+    let requester = optional_id(filter.requester.as_deref(), "requester")?;
+    let site = optional_id(filter.site.as_deref(), "site")?;
     let q = filter.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
     let number: Option<i64> = q.and_then(|q| q.trim_start_matches('#').parse().ok());
     let pattern = q.map(|q| {
@@ -172,12 +154,23 @@ async fn list_tickets(
     .bind(site)
     .fetch_all(&state.db)
     .await?;
-    let numbers: Vec<i64> = tickets.iter().map(|t| t.number).collect();
-    let mut sites = tickets::sites(&state.db, &numbers).await?;
+    let ids: Vec<Uuid> = tickets.iter().map(|t| t.id).collect();
+    let mut sites = tickets::sites(&state.db, &ids).await?;
     for ticket in &mut tickets {
-        ticket.sites = sites.remove(&ticket.number).unwrap_or_default();
+        ticket.sites = sites.remove(&ticket.id).unwrap_or_default();
     }
     Ok(Json(tickets))
+}
+
+/// The id a filter names, or `None` when it is left out or empty; `what` names it in the refusal
+/// ("customer must be a customer's id").
+fn optional_id(value: Option<&str>, what: &str) -> Result<Option<Uuid>, ApiError> {
+    match value.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(id) => Uuid::parse_str(id)
+            .map(Some)
+            .map_err(|_| ApiError::BadRequest(format!("{what} must be a {what}'s id"))),
+    }
 }
 
 /// A ticket with its messages and notes.
