@@ -373,7 +373,7 @@ ul.plain { list-style: none; margin: 0; padding: 0; }
   white-space: nowrap;
   vertical-align: 0.1em;
 }
-.marker.offboarded, .marker.retired { border-style: dashed; color: var(--closed); }
+.marker.offboarded, .marker.retired, .marker.departed { border-style: dashed; color: var(--closed); }
 tr.offboarded td, tr.retired td { color: var(--muted); }
 
 .inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem 0.75rem; }

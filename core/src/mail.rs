@@ -702,7 +702,7 @@ mod tests {
             );
         }
 
-        crate::requesters::come_back(&db, ada).await.unwrap();
+        crate::requesters::bring_back(&db, ada).await.unwrap();
         assert_eq!(
             route_one(
                 &db,

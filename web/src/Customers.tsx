@@ -25,6 +25,7 @@ import {
 } from './api/client'
 import { countries, countryName } from './countries'
 import { useI18n } from './i18n/context'
+import { DepartedMarker } from './DepartedMarker'
 import { Problem } from './Problem'
 import { requesterLabel } from './people'
 import { adminHref, customerHref, customersHref, defaultFilters, go, requesterHref, serviceHref, ticketsHref } from './route'
@@ -558,7 +559,7 @@ function Requesters({ customer: c, readOnly, onChanged, onSignedOut }: PartProps
               <tr key={r.id}>
                 <td>
                   <a href={requesterHref(r.id)}>{requesterLabel(t, r.name, r.addresses[0])}</a>
-                  {r.departed && <> <span className="marker retired">{t('marker.departed')}</span></>}
+                  {r.departed && <DepartedMarker />}
                 </td>
                 <td>
                   <ul className="plain">{r.addresses.map((a) => <li key={a}>{a}</li>)}</ul>

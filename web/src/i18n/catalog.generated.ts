@@ -30,6 +30,7 @@ export interface Messages {
   "marker.offboarded": { plural: false; placeholders: never; tags: never }
   "marker.retired": { plural: false; placeholders: never; tags: never }
   "marker.departed": { plural: false; placeholders: never; tags: never }
+  "marker.departedFrom": { plural: false; placeholders: "customer"; tags: never }
   "state.open": { plural: false; placeholders: never; tags: never }
   "state.waiting": { plural: false; placeholders: never; tags: never }
   "state.resolved": { plural: false; placeholders: never; tags: never }

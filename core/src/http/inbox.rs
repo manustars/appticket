@@ -30,6 +30,9 @@ pub struct InboxMessage {
     proposal: Option<crate::proposals::ProposalView>,
     from_address: String,
     from_name: Option<String>,
+    /// When the sender is a departed requester, the customer they left: their messages wait here
+    /// and no ticket is opened for them there.
+    departed_from: Option<String>,
     subject: String,
     body_text: String,
     #[serde(with = "time::serde::rfc3339")]
@@ -44,10 +47,14 @@ async fn list_inbox(
     _agent: SignedIn,
 ) -> Result<Json<Vec<InboxMessage>>, ApiError> {
     let mut messages: Vec<InboxMessage> = sqlx::query_as(
-        "SELECT id, from_address, from_name, subject, body_text, created_at AS received_at
-         FROM messages
-         WHERE direction = 'inbound' AND ticket_id IS NULL AND discarded_at IS NULL
-         ORDER BY created_at
+        "SELECT m.id, m.from_address, m.from_name, m.subject, m.body_text,
+                m.created_at AS received_at, c.name AS departed_from
+         FROM messages m
+         LEFT JOIN requester_addresses a ON a.address = m.from_address
+         LEFT JOIN requesters r ON r.id = a.requester_id AND r.departed_at IS NOT NULL
+         LEFT JOIN customers c ON c.id = r.customer_id
+         WHERE m.direction = 'inbound' AND m.ticket_id IS NULL AND m.discarded_at IS NULL
+         ORDER BY m.created_at
          LIMIT 200",
     )
     .fetch_all(&state.db)

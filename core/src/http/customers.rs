@@ -27,7 +27,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(add_requester))
         .routes(routes!(get_requester, update_requester))
         .routes(routes!(depart))
-        .routes(routes!(come_back))
+        .routes(routes!(bring_back_requester))
         .routes(routes!(add_address))
         .routes(routes!(remove_address))
         .routes(routes!(add_site))
@@ -220,17 +220,17 @@ async fn depart(
 }
 
 /// Brings a departed requester back to their customer; they need an e-mail address of their own.
-#[utoipa::path(post, path = "/api/requesters/{id}/return", tag = "customers",
+#[utoipa::path(post, path = "/api/requesters/{id}/bring-back", tag = "customers",
     params(("id" = Uuid, Path, description = "The requester")),
     responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
-async fn come_back(
+async fn bring_back_requester(
     State(state): State<AppState>,
     agent: SignedIn,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     agent.grant.require(Permission::ManageCustomers)?;
-    requesters::come_back(&state.db, id).await?;
+    requesters::bring_back(&state.db, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

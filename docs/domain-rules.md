@@ -21,9 +21,9 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
 
 - Every requester belongs to exactly one customer.
 - A requester who has not departed has one or more e-mail addresses, and each address belongs to
-  exactly one requester; a message from any of them identifies the requester. A reply goes to the address the requester
-  last wrote from on that ticket; on a ticket they have not written on, the agent picks one, and
-  later replies there go to it unless the agent picks another.
+  exactly one requester; a message from any of them identifies the requester. A reply goes to the
+  address the requester last wrote from on that ticket; on a ticket they have not written on, the
+  agent picks one, and later replies there go to it unless the agent picks another.
 - A requester also has a name, phone numbers, a job title and internal notes; agents who manage
   customers correct them.
 - A requester who leaves their customer is departed: their history stays, no ticket is opened for

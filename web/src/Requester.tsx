@@ -57,7 +57,7 @@ export function RequesterPage({ id, onChanged, onSignedOut }: PageProps) {
       <div className="title-row">
         <h1>{requesterLabel(t, r.name, r.addresses[0])}</h1>
         {r.departed_at && (
-          <span className="marker retired">{t('requester.departedOn', { date: formatTime(r.departed_at) })}</span>
+          <span className="marker departed">{t('requester.departedOn', { date: formatTime(r.departed_at) })}</span>
         )}
         {r.customer.offboarded && <span className="marker offboarded">{t('marker.offboarded')}</span>}
       </div>

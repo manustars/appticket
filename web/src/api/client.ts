@@ -354,14 +354,14 @@ export async function removeRequesterAddress(id: string, address: string): Promi
   await call('DELETE', `${requesterPath(id)}/addresses/${encodeURIComponent(address)}`)
 }
 
-/** Marks the requester departed: no ticket is opened for them and their mail waits in the inbox. */
+/** Marks the requester departed: no ticket is opened for them and their messages wait in the inbox. */
 export async function departRequester(id: string): Promise<void> {
   await call('POST', `${requesterPath(id)}/depart`)
 }
 
 /** Brings a departed requester back; refused while they have no address of their own. */
 export async function bringBackRequester(id: string): Promise<void> {
-  await call('POST', `${requesterPath(id)}/return`)
+  await call('POST', `${requesterPath(id)}/bring-back`)
 }
 
 /** No new tickets from then on; the customer's history stays. Refused for the help desk. */

@@ -50,22 +50,30 @@ pub async fn owner_of(tx: &mut Transaction<'_, Postgres>, address: &str) -> Resu
     .await?)
 }
 
-/// Checks that `address` can become an address of a requester of `customer`, `requester` when it
-/// is one already. It can if it belongs to nobody, or to a requester who departed from another
-/// customer: a person who changed customer keeps their address, which passes to the requester
-/// they are now. Returns whether it passes.
-async fn claim(
+/// Where an address a requester is given comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// It belongs to nobody yet.
+    Free,
+    /// It belongs to a requester who departed from another customer: a person who changed
+    /// customer keeps their address, which passes to the requester they are now.
+    Departed,
+}
+
+/// Where `address` would come from as an address of a requester of `customer` (`requester` when it
+/// is one already); refused when it belongs to someone it cannot be taken from.
+async fn source_of(
     tx: &mut Transaction<'_, Postgres>,
     customer: Uuid,
     requester: Option<Uuid>,
     address: &str,
-) -> Result<bool> {
+) -> Result<Source> {
     match owner_of(tx, address).await? {
-        None => Ok(false),
+        None => Ok(Source::Free),
         Some(owner) if Some(owner.requester_id) == requester => rule(format!(
             "the address {address} already belongs to this requester"
         )),
-        Some(owner) if owner.departed && owner.customer_id != customer => Ok(true),
+        Some(owner) if owner.departed && owner.customer_id != customer => Ok(Source::Departed),
         Some(owner) if owner.departed => rule(format!(
             "the address {address} belongs to a requester who has departed from {}: bring them back from their page instead",
             owner.customer_name
@@ -77,21 +85,22 @@ async fn claim(
     }
 }
 
-/// Gives `requester` the address, claimed with [`claim`]: a passing address leaves its departed
-/// requester and counts as newly registered.
+/// Gives `requester` the address from its [`source_of`]: one passing from a departed requester
+/// leaves them and counts as newly registered.
 async fn give_address(
     tx: &mut Transaction<'_, Postgres>,
     requester: Uuid,
     address: &str,
-    passes: bool,
+    source: Source,
 ) -> Result<()> {
-    let given = if passes {
-        sqlx::query(
+    let given = match source {
+        Source::Free => {
+            sqlx::query("INSERT INTO requester_addresses (address, requester_id) VALUES ($1, $2)")
+        }
+        Source::Departed => sqlx::query(
             "UPDATE requester_addresses SET requester_id = $2, created_at = now()
              WHERE address = $1",
-        )
-    } else {
-        sqlx::query("INSERT INTO requester_addresses (address, requester_id) VALUES ($1, $2)")
+        ),
     }
     .bind(address)
     .bind(requester)
@@ -114,7 +123,7 @@ pub async fn create(
     address: &str,
     name: Option<&str>,
 ) -> Result<Uuid> {
-    let passes = claim(tx, customer, None, address).await?;
+    let source = source_of(tx, customer, None, address).await?;
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO requesters (id, customer_id, name) VALUES ($1, $2, $3)")
         .bind(id)
@@ -122,7 +131,7 @@ pub async fn create(
         .bind(filled(name))
         .execute(&mut **tx)
         .await?;
-    give_address(tx, id, address, passes).await?;
+    give_address(tx, id, address, source).await?;
     Ok(id)
 }
 
@@ -165,8 +174,8 @@ pub async fn add_address(db: &PgPool, requester: Uuid, address: &str) -> Result<
     let address = clean_address(address)?;
     let mut tx = db.begin().await?;
     let customer = lock_with_customer(&mut tx, requester).await?;
-    let passes = claim(&mut tx, customer, Some(requester), &address).await?;
-    give_address(&mut tx, requester, &address, passes).await?;
+    let source = source_of(&mut tx, customer, Some(requester), &address).await?;
+    give_address(&mut tx, requester, &address, source).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -311,7 +320,7 @@ pub async fn depart(db: &PgPool, id: Uuid) -> Result<()> {
 
 /// Brings a departed requester back to their customer. They need an address of their own again,
 /// since the ones they kept may have passed to the requester they became elsewhere.
-pub async fn come_back(db: &PgPool, id: Uuid) -> Result<()> {
+pub async fn bring_back(db: &PgPool, id: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
     lock_with_customer(&mut tx, id).await?;
     let departed: bool =
@@ -827,10 +836,10 @@ mod tests {
             "departed twice"
         );
 
-        come_back(&db, ada).await.unwrap();
+        bring_back(&db, ada).await.unwrap();
         assert!(detail(&db, ada).await.unwrap().departed_at.is_none());
         assert!(
-            matches!(come_back(&db, ada).await, Err(Error::Rule(_))),
+            matches!(bring_back(&db, ada).await, Err(Error::Rule(_))),
             "back without having left"
         );
         assert!(matches!(
@@ -896,11 +905,64 @@ mod tests {
         assert_eq!(ticket.requester.map(|r| r.id), Some(ada));
 
         // Without an address of her own she cannot come back, until she gets one.
-        assert!(matches!(come_back(&db, ada).await, Err(Error::Rule(_))));
+        assert!(matches!(bring_back(&db, ada).await, Err(Error::Rule(_))));
         add_address(&db, ada, "a.ferrini@brightfield.test")
             .await
             .unwrap();
-        come_back(&db, ada).await.unwrap();
+        bring_back(&db, ada).await.unwrap();
+    }
+
+    /// An existing requester of another customer can be given a departed requester's address too;
+    /// one of the same customer cannot, since that is the person who departed.
+    #[sqlx::test]
+    async fn a_departed_requester_s_address_passes_to_another_customer_s_requester(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        add_address(&db, ada, "ada@home.test").await.unwrap();
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        let ada_at_harbor = testing::requester(&db, harbor, "ada@harbor.test").await;
+        depart(&db, ada).await.unwrap();
+
+        let Err(Error::Rule(why)) = add_address(&db, lena, "ada@home.test").await else {
+            panic!("a departed requester's address given within their customer");
+        };
+        assert!(why.contains("departed"), "{why}");
+        add_address(&db, ada_at_harbor, "ada@home.test")
+            .await
+            .unwrap();
+        assert_eq!(
+            addresses(&db, ada_at_harbor).await.unwrap(),
+            ["ada@harbor.test", "ada@home.test"]
+        );
+        assert_eq!(addresses(&db, ada).await.unwrap(), ["ada@brightfield.test"]);
+    }
+
+    /// The database lets an address leave its requester only when they departed, for a requester of
+    /// another customer.
+    #[sqlx::test]
+    async fn the_database_lets_only_a_departed_requester_s_address_pass(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        add_address(&db, ada, "ada@home.test").await.unwrap();
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        let ivo = testing::requester(&db, harbor, "ivo@harbor.test").await;
+        let pass = |to: Uuid| {
+            let db = db.clone();
+            async move {
+                sqlx::query(
+                    "UPDATE requester_addresses SET requester_id = $1 WHERE address = 'ada@home.test'",
+                )
+                .bind(to)
+                .execute(&db)
+                .await
+            }
+        };
+        assert!(pass(ivo).await.is_err(), "taken from a present requester");
+        depart(&db, ada).await.unwrap();
+        assert!(pass(lena).await.is_err(), "given within their own customer");
+        assert!(pass(ivo).await.is_ok());
     }
 
     /// The database keeps the departed requesters' rules even when the code is bypassed.

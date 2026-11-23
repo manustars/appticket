@@ -8,6 +8,7 @@ import {
   type CustomerEntry,
   type InboxMessage,
 } from './api/client'
+import { DepartedMarker } from './DepartedMarker'
 import { useI18n } from './i18n/context'
 import { InboxProposal, type TriageDone } from './Proposals'
 import { ticketHref } from './route'
@@ -166,7 +167,10 @@ function InboxItem({ message: m, customers, canSort, onDone, onChanged, onSigned
   return (
     <li>
       <div className="from">
-        {sender}
+        <span>
+          {sender}
+          {m.departed_from && <DepartedMarker from={m.departed_from} />}
+        </span>
         <span className="when">{formatTime(m.received_at)}</span>
       </div>
       <div className="subject">{m.subject || t('inbox.noSubject')}</div>

@@ -2763,13 +2763,13 @@
         }
       }
     },
-    "/api/requesters/{id}/depart": {
+    "/api/requesters/{id}/bring-back": {
       "post": {
         "tags": [
           "customers"
         ],
-        "summary": "Marks a requester departed: they left their customer. Their history stays, no ticket is\nopened for them and their messages wait in the inbox.",
-        "operationId": "depart",
+        "summary": "Brings a departed requester back to their customer; they need an e-mail address of their own.",
+        "operationId": "bring_back_requester",
         "parameters": [
           {
             "name": "id",
@@ -2814,13 +2814,13 @@
         }
       }
     },
-    "/api/requesters/{id}/return": {
+    "/api/requesters/{id}/depart": {
       "post": {
         "tags": [
           "customers"
         ],
-        "summary": "Brings a departed requester back to their customer; they need an e-mail address of their own.",
-        "operationId": "come_back",
+        "summary": "Marks a requester departed: they left their customer. Their history stays, no ticket is\nopened for them and their messages wait in the inbox.",
+        "operationId": "depart",
         "parameters": [
           {
             "name": "id",
@@ -5654,6 +5654,13 @@
         "properties": {
           "body_text": {
             "type": "string"
+          },
+          "departed_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the sender is a departed requester, the customer they left: their messages wait here\nand no ticket is opened for them there."
           },
           "from_address": {
             "type": "string"

@@ -70,3 +70,24 @@ CREATE TRIGGER messages_of_departed_requesters_wait
     FOR EACH ROW
     WHEN (NEW.direction = 'inbound' AND NEW.ticket_id IS NOT NULL)
     EXECUTE FUNCTION departed_requesters_write_to_the_inbox();
+
+-- An address leaves its requester only when they departed, for the requester the person became at
+-- another customer. Both requesters are locked, so that one coming back at the same time is seen.
+CREATE FUNCTION addresses_pass_only_from_departed_requesters() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM requesters r, requesters n
+                   WHERE r.id = OLD.requester_id AND n.id = NEW.requester_id
+                     AND r.departed_at IS NOT NULL AND r.customer_id <> n.customer_id
+                   FOR SHARE) THEN
+        RAISE EXCEPTION 'an address passes only from a departed requester to one of another customer'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER addresses_pass_from_departed_requesters
+    AFTER UPDATE OF requester_id ON requester_addresses
+    FOR EACH ROW
+    WHEN (NEW.requester_id IS DISTINCT FROM OLD.requester_id)
+    EXECUTE FUNCTION addresses_pass_only_from_departed_requesters();

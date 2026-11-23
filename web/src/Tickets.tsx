@@ -8,6 +8,7 @@ import {
   type TicketState,
   type TicketSummary,
 } from './api/client'
+import { DepartedMarker } from './DepartedMarker'
 import { useI18n } from './i18n/context'
 import { NewTicket } from './NewTicket'
 import {
@@ -89,7 +90,7 @@ export function TicketTable({ tickets }: { tickets: TicketSummary[] }) {
             <td>{ticket.customer_name}</td>
             <td>
               {ticket.requester_email ?? '—'}
-              {ticket.requester_departed && <> <span className="marker retired">{t('marker.departed')}</span></>}
+              {ticket.requester_departed && <DepartedMarker />}
             </td>
             <td>{ticket.assignee_name ?? '—'}</td>
             <td><span className={`state ${ticket.state}`}>{t(`state.${ticket.state}`)}</span></td>

@@ -1069,6 +1069,12 @@ async fn a_requester_departs_and_comes_back_through_the_api(db: PgPool) {
     assert_eq!(ticket["requester"]["departed"], true);
     let list = api.get("/api/tickets").await;
     assert_eq!(list[0]["requester_departed"], true);
+    // Their message waits in the inbox, which says why.
+    testing::inbox_message(&db, "ada@brightfield.test").await;
+    testing::inbox_message(&db, "someone@elsewhere.test").await;
+    let inbox = api.get("/api/inbox").await;
+    assert_eq!(inbox[0]["departed_from"], "Brightfield", "{inbox}");
+    assert!(inbox[1]["departed_from"].is_null(), "{inbox}");
 
     let (status, json) = api
         .call(
@@ -1083,7 +1089,7 @@ async fn a_requester_departs_and_comes_back_through_the_api(db: PgPool) {
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{json}");
 
-    let back = format!("/api/requesters/{ada}/return");
+    let back = format!("/api/requesters/{ada}/bring-back");
     let (status, _) = worker.call("POST", &back, None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     let (status, json) = api.call("POST", &back, None).await;

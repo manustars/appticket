@@ -130,7 +130,8 @@ pub struct ResolvedChildren {
 }
 
 /// Resolves every child that is still open or waiting, queuing `body` as a reply to each child's
-/// requester (children without a requester are only resolved). The parent itself is not changed.
+/// requester (children without a requester, or whose departed requester has no address left, are
+/// only resolved). The parent itself is not changed.
 pub async fn resolve_children(
     db: &PgPool,
     sender: &Sender,
@@ -142,7 +143,9 @@ pub async fn resolve_children(
         return rule("the message to the requesters cannot be empty");
     }
     let children: Vec<(i64, Uuid, bool)> = sqlx::query_as(
-        "SELECT t.number, t.id, t.requester_id IS NOT NULL FROM tickets t
+        "SELECT t.number, t.id,
+                EXISTS (SELECT 1 FROM requester_addresses a WHERE a.requester_id = t.requester_id)
+         FROM tickets t
          JOIN tickets p ON p.id = t.parent_id
          WHERE p.number = $1 AND t.state IN ('open', 'waiting')
          ORDER BY t.number",
@@ -158,8 +161,8 @@ pub async fn resolve_children(
     // one: refuse before changing anything, so that no child is left half done.
     let mut conn = db.acquire().await?;
     let mut undecided = Vec::new();
-    for (number, id, has_requester) in &children {
-        if *has_requester
+    for (number, id, has_address) in &children {
+        if *has_address
             && let Some(recipient) = crate::requesters::recipient(&mut conn, *id).await?
             && recipient.choose(None).is_err()
         {
@@ -177,8 +180,8 @@ pub async fn resolve_children(
         resolved: 0,
         replied: 0,
     };
-    for (number, _, has_requester) in children {
-        if has_requester {
+    for (number, _, has_address) in children {
+        if has_address {
             tickets::reply(
                 db,
                 sender,
@@ -293,6 +296,30 @@ mod tests {
             resolve_children(&db, &testing::sender(), outage, agent, "Again").await,
             Err(Error::Rule(_))
         ));
+    }
+
+    /// A departed requester whose addresses all passed to another requester cannot be written to:
+    /// their child is resolved without a reply, as one without a requester is.
+    #[sqlx::test]
+    async fn a_child_whose_requester_has_no_address_left_is_only_resolved(db: PgPool) {
+        let own = help_desk(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
+        let child = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
+        attach(&db, child, outage).await.unwrap();
+        crate::requesters::depart(&db, ada).await.unwrap();
+        crate::customers::add_requester(&db, harbor, "ada@brightfield.test", None)
+            .await
+            .unwrap();
+
+        let done = resolve_children(&db, &testing::sender(), outage, agent, "Fixed.")
+            .await
+            .unwrap();
+        assert_eq!((done.resolved, done.replied), (1, 0));
+        assert_eq!(testing::state(&db, child).await, "resolved");
     }
 
     #[sqlx::test]

@@ -801,6 +801,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/requesters/{id}/bring-back": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Brings a departed requester back to their customer; they need an e-mail address of their own. */
+        post: operations["bring_back_requester"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/requesters/{id}/depart": {
         parameters: {
             query?: never;
@@ -815,23 +832,6 @@ export interface paths {
          *     opened for them and their messages wait in the inbox.
          */
         post: operations["depart"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/requesters/{id}/return": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Brings a departed requester back to their customer; they need an e-mail address of their own. */
-        post: operations["come_back"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1562,6 +1562,11 @@ export interface components {
         };
         InboxMessage: {
             body_text: string;
+            /**
+             * @description When the sender is a departed requester, the customer they left: their messages wait here
+             *     and no ticket is opened for them there.
+             */
+            departed_from?: string | null;
             from_address: string;
             from_name?: string | null;
             /** Format: uuid */
@@ -4292,7 +4297,7 @@ export interface operations {
             };
         };
     };
-    depart: {
+    bring_back_requester: {
         parameters: {
             query?: never;
             header?: never;
@@ -4336,7 +4341,7 @@ export interface operations {
             };
         };
     };
-    come_back: {
+    depart: {
         parameters: {
             query?: never;
             header?: never;

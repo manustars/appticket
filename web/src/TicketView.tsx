@@ -25,6 +25,7 @@ import { useI18n } from './i18n/context'
 import { addonName } from './addon'
 import { useDraftKeeper, type SaveState } from './drafts'
 import { TicketProposals } from './Proposals'
+import { DepartedMarker } from './DepartedMarker'
 import { requesterLabel } from './people'
 import { requesterHref } from './route'
 import { useSession } from './session'
@@ -218,7 +219,7 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
                       ? <>{requester.name} <span className="muted">&lt;{requester.email}&gt;</span></>
                       : requesterLabel(t, requester.name, requester.email)}
                   </a>
-                  {requester.departed && <> <span className="marker retired">{t('marker.departed')}</span></>}
+                  {requester.departed && <DepartedMarker />}
                 </>
               )
               : <span className="muted">{t('ticket.noRequester')}</span>}
