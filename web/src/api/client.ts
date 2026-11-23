@@ -40,13 +40,18 @@ export type TimelineEntry = Schemas['TimelineEntry']
 
 export class Unauthorized extends Error {}
 
-/** A request the core refused; `message` is the core's own explanation when it gave one. */
+/**
+ * A request the core refused; `message` is the core's own explanation when it gave one, `code`
+ * what went wrong when the core names it.
+ */
 export class Refused extends Error {
   readonly status: number
+  readonly code: Schemas['ProblemCode'] | null
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code: Schemas['ProblemCode'] | null = null) {
     super(message)
     this.status = status
+    this.code = code
   }
 }
 
@@ -59,19 +64,28 @@ async function call(method: string, path: string, body?: unknown, keepalive = fa
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (response.status === 401) throw new Unauthorized()
-  if (!response.ok) throw new Refused(response.status, await problem(response, method, path))
+  if (!response.ok) {
+    const { message, code } = await problem(response, method, path)
+    throw new Refused(response.status, message, code)
+  }
   return response
 }
 
-/** The `{error}` text of a failed response, or a generic sentence when the body has none. */
-async function problem(response: Response, method: string, path: string): Promise<string> {
+/**
+ * The `{error}` text of a failed response, or a generic sentence when the body has none, with its
+ * `code` if any.
+ */
+async function problem(response: Response, method: string, path: string): Promise<{ message: string, code: Schemas['ProblemCode'] | null }> {
+  let message = `${method} ${path} failed with ${response.status}`
+  let code: Schemas['ProblemCode'] | null = null
   try {
     const body = (await response.json()) as Partial<Schemas['Problem']>
-    if (typeof body.error === 'string' && body.error) return body.error
+    if (typeof body.error === 'string' && body.error) message = body.error
+    if (typeof body.code === 'string') code = body.code
   } catch {
     // Not JSON: fall through.
   }
-  return `${method} ${path} failed with ${response.status}`
+  return { message, code }
 }
 
 async function json<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -99,7 +113,7 @@ export async function signIn(email: string, password: string): Promise<'signedIn
   } catch (error) {
     if (error instanceof Unauthorized) return 'wrong'
     if (error instanceof Refused && error.status === 429) return 'tooManyFailures'
-    if (error instanceof Refused && error.status === 403) return 'localSignInOff'
+    if (error instanceof Refused && error.code === 'local_sign_in_off') return 'localSignInOff'
     throw error
   }
 }

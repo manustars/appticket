@@ -2284,8 +2284,14 @@ export interface components {
         };
         /** @description Why a request failed, in words an agent can read. */
         Problem: {
+            code?: components["schemas"]["ProblemCode"] | null;
             error: string;
         };
+        /**
+         * @description A refusal the UI recognises, whatever the wording of `error`.
+         * @enum {string}
+         */
+        ProblemCode: "local_sign_in_off";
         ProposalCreated: {
             /** Format: uuid */
             id: string;
@@ -5877,7 +5883,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Local sign-in is off */
+            /** @description Local sign-in is off: `code` is `local_sign_in_off`, the same for every account */
             403: {
                 headers: {
                     [name: string]: unknown;

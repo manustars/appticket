@@ -175,6 +175,8 @@ pub enum ApiError {
     TooManySignInsUnderWay {
         retry_after: std::time::Duration,
     },
+    /// A local password while local sign-in is off: the same answer for every account.
+    LocalSignInOff,
     Internal(anyhow::Error),
 }
 
@@ -187,6 +189,7 @@ impl<E: Into<anyhow::Error>> From<E> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let mut retry_after = None;
+        let mut code = None;
         let (status, error) = match self {
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "not signed in".to_owned()),
             ApiError::BadRequest(why) => (StatusCode::BAD_REQUEST, why),
@@ -209,6 +212,13 @@ impl IntoResponse for ApiError {
                         .to_owned(),
                 )
             }
+            ApiError::LocalSignInOff => {
+                code = Some(ProblemCode::LocalSignInOff);
+                (
+                    StatusCode::FORBIDDEN,
+                    "local sign-in is off: sign in through the identity provider".to_owned(),
+                )
+            }
             ApiError::Internal(error) => {
                 tracing::error!(error = format!("{error:#}"), "request failed");
                 (
@@ -221,6 +231,7 @@ impl IntoResponse for ApiError {
             status,
             Json(Problem {
                 error: sentence(&error),
+                code,
             }),
         )
             .into_response();
@@ -256,6 +267,18 @@ fn sentence(text: &str) -> String {
 #[derive(Serialize, ToSchema)]
 pub struct Problem {
     pub error: String,
+    /// What went wrong, for the UI to tell apart from other refusals with the same status; only
+    /// on the answers that need it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<ProblemCode>,
+}
+
+/// A refusal the UI recognises, whatever the wording of `error`.
+#[derive(Serialize, ToSchema, Debug, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum ProblemCode {
+    /// A local password while local sign-in is off.
+    LocalSignInOff,
 }
 
 /// Requires a signed-in agent.
@@ -399,7 +422,8 @@ async fn change_password(
 /// off every attempt is refused before anything is checked, the same way for every account.
 #[utoipa::path(post, path = "/api/session", tag = "session", request_body = SignInRequest,
     responses((status = NO_CONTENT), (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, body = Problem, description = "Local sign-in is off"),
+        (status = FORBIDDEN, body = Problem, description = "Local sign-in is off: `code` is \
+            `local_sign_in_off`, the same for every account"),
         (status = TOO_MANY_REQUESTS, body = Problem,
             headers(("Retry-After" = u64, description = "Seconds until attempts are accepted again")))))]
 async fn sign_in(
@@ -410,7 +434,7 @@ async fn sign_in(
 ) -> Result<(CookieJar, StatusCode), ApiError> {
     // Before the limits: nothing is guessed, so nothing is counted.
     if !crate::local_sign_in::is_on(&state.db).await? {
-        return Err(local_sign_in_off());
+        return Err(ApiError::LocalSignInOff);
     }
     let check = auth::sign_in(&state.db, &request.email, &request.password);
     let token = match state
@@ -424,16 +448,13 @@ async fn sign_in(
             return Err(ApiError::TooManySignIns { retry_after });
         }
         // Switched off while the password was being checked.
-        Err(error) if error.is::<crate::local_sign_in::Off>() => return Err(local_sign_in_off()),
+        Err(error) if error.is::<crate::local_sign_in::Off>() => {
+            return Err(ApiError::LocalSignInOff);
+        }
         Err(error) => return Err(error.into()),
     };
     let cookie = session_cookie(token, time::Duration::days(SESSION_DAYS.into()));
     Ok((jar.add(cookie), StatusCode::NO_CONTENT))
-}
-
-/// The answer to every local sign-in while local sign-in is off.
-fn local_sign_in_off() -> ApiError {
-    ApiError::Forbidden("local sign-in is off: sign in through the identity provider".to_owned())
 }
 
 /// The cookie that carries a session's token, for as long as the session lasts.

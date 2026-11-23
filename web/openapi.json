@@ -4020,7 +4020,7 @@
             }
           },
           "403": {
-            "description": "Local sign-in is off",
+            "description": "Local sign-in is off: `code` is `local_sign_in_off`, the same for every account",
             "content": {
               "application/json": {
                 "schema": {
@@ -7683,10 +7683,28 @@
           "error"
         ],
         "properties": {
+          "code": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProblemCode",
+                "description": "What went wrong, for the UI to tell apart from other refusals with the same status; only\non the answers that need it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "error": {
             "type": "string"
           }
         }
+      },
+      "ProblemCode": {
+        "type": "string",
+        "description": "A refusal the UI recognises, whatever the wording of `error`.",
+        "enum": [
+          "local_sign_in_off"
+        ]
       },
       "ProposalCreated": {
         "type": "object",
