@@ -86,21 +86,29 @@ function dropProviderErrorFromAddress() {
   window.history.replaceState(null, '', window.location.pathname + (query ? `?${query}` : '') + window.location.hash)
 }
 
+type SignInOptions = Awaited<ReturnType<typeof signInOptions>>
+
 function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
   const { t } = useI18n()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [failed, setFailed] = useState<'wrong' | 'tooManyFailures' | 'unreachable' | null>(null)
+  const [failed, setFailed] = useState<'wrong' | 'tooManyFailures' | 'localSignInOff' | 'unreachable' | null>(null)
   const [busy, setBusy] = useState(false)
   // Read while the address still has it: React may call this twice, which reads the same.
   const [providerError] = useState(providerErrorInAddress)
-  const [provider, setProvider] = useState<string | null>(null)
+  // undefined: still asking the core; null: no answer, and the page offers the password only.
+  const [options, setOptions] = useState<SignInOptions | null | undefined>(undefined)
+  const provider = options?.identity_provider?.label ?? null
+  const local = options === null || options?.local_sign_in === true
+
+  const askOptions = useCallback(() => {
+    signInOptions().then(setOptions, () => setOptions(null))
+  }, [])
 
   useEffect(() => {
     dropProviderErrorFromAddress()
-    // Without an answer the page offers the password only, as without a provider.
-    signInOptions().then((options) => setProvider(options.identity_provider?.label ?? null), () => {})
-  }, [])
+    askOptions()
+  }, [askOptions])
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -113,6 +121,8 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
         if (agent) onSignedIn(agent)
       } else {
         setFailed(outcome)
+        // Switched off since the page asked: it now offers what is left.
+        if (outcome === 'localSignInOff') askOptions()
       }
     } catch {
       setFailed('unreachable')
@@ -129,27 +139,35 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
         {provider !== null && (
           <>
             <a className="button provider" href={identityProviderSignIn}>{t('signIn.with', { provider })}</a>
-            <p className="hint">{t('signIn.orPassword')}</p>
+            {local && <p className="hint">{t('signIn.orPassword')}</p>}
           </>
         )}
-        <label>
-          {t('signIn.email')}
-          <input type="email" autoComplete="username" required value={email}
-            onChange={(e) => setEmail(e.target.value)} />
-        </label>
-        <label>
-          {t('signIn.password')}
-          <input type="password" autoComplete="current-password" required value={password}
-            onChange={(e) => setPassword(e.target.value)} />
-        </label>
+        {options !== undefined && !local && provider === null && (
+          <p className="error" role="alert">{t('signIn.noWayIn')}</p>
+        )}
+        {local && (
+          <>
+            <label>
+              {t('signIn.email')}
+              <input type="email" autoComplete="username" required value={email}
+                onChange={(e) => setEmail(e.target.value)} />
+            </label>
+            <label>
+              {t('signIn.password')}
+              <input type="password" autoComplete="current-password" required value={password}
+                onChange={(e) => setPassword(e.target.value)} />
+            </label>
+          </>
+        )}
         {failed && (
           <p className="error" role="alert">
             {failed === 'wrong' ? t('signIn.wrong')
               : failed === 'tooManyFailures' ? t('signIn.tooManyFailures')
-                : t('error.unreachable')}
+                : failed === 'localSignInOff' ? t('signIn.localSignInOff')
+                  : t('error.unreachable')}
           </p>
         )}
-        <button type="submit" disabled={busy}>{t('signIn.submit')}</button>
+        {local && <button type="submit" disabled={busy}>{t('signIn.submit')}</button>}
         <LanguageSwitcher />
       </form>
     </main>

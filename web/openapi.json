@@ -3996,7 +3996,7 @@
           "session"
         ],
         "summary": "Signs an agent in and sets the session cookie.",
-        "description": "Repeated failures for the e-mail or from the same address are slowed, then refused for a\nwhile (`Retry-After` says how long) without the password being checked.",
+        "description": "Repeated failures for the e-mail or from the same address are slowed, then refused for a\nwhile (`Retry-After` says how long) without the password being checked. While local sign-in is\noff every attempt is refused before anything is checked, the same way for every account.",
         "operationId": "sign_in",
         "requestBody": {
           "content": {
@@ -4011,6 +4011,16 @@
         "responses": {
           "204": {},
           "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Local sign-in is off",
             "content": {
               "application/json": {
                 "schema": {
@@ -8248,6 +8258,9 @@
       "SignInOptions": {
         "type": "object",
         "description": "How agents can sign in, for the sign-in page.",
+        "required": [
+          "local_sign_in"
+        ],
         "properties": {
           "identity_provider": {
             "oneOf": [
@@ -8259,6 +8272,10 @@
                 "type": "null"
               }
             ]
+          },
+          "local_sign_in": {
+            "type": "boolean",
+            "description": "Whether agents can sign in with a local password; when not, the page offers the identity\nprovider only."
           }
         }
       },

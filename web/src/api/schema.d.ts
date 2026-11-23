@@ -1153,7 +1153,8 @@ export interface paths {
         /**
          * Signs an agent in and sets the session cookie.
          * @description Repeated failures for the e-mail or from the same address are slowed, then refused for a
-         *     while (`Retry-After` says how long) without the password being checked.
+         *     while (`Retry-After` says how long) without the password being checked. While local sign-in is
+         *     off every attempt is refused before anything is checked, the same way for every account.
          */
         post: operations["sign_in"];
         /** Signs the agent out. */
@@ -2504,6 +2505,11 @@ export interface components {
         /** @description How agents can sign in, for the sign-in page. */
         SignInOptions: {
             identity_provider?: components["schemas"]["IdentityProviderButton"] | null;
+            /**
+             * @description Whether agents can sign in with a local password; when not, the page offers the identity
+             *     provider only.
+             */
+            local_sign_in: boolean;
         };
         SignInRequest: {
             email: string;
@@ -5864,6 +5870,15 @@ export interface operations {
                 content?: never;
             };
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Local sign-in is off */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
