@@ -89,15 +89,17 @@ export async function currentAgent(): Promise<Agent | null> {
 
 /**
  * Whether the agent is signed in; `wrong` when the e-mail or the password is wrong,
- * `tooManyFailures` when too many sign-ins failed and attempts are refused for a while.
+ * `tooManyFailures` when too many sign-ins failed and attempts are refused for a while,
+ * `localSignInOff` when local sign-in has been switched off.
  */
-export async function signIn(email: string, password: string): Promise<'signedIn' | 'wrong' | 'tooManyFailures'> {
+export async function signIn(email: string, password: string): Promise<'signedIn' | 'wrong' | 'tooManyFailures' | 'localSignInOff'> {
   try {
     await call('POST', '/api/session', { email, password })
     return 'signedIn'
   } catch (error) {
     if (error instanceof Unauthorized) return 'wrong'
     if (error instanceof Refused && error.status === 429) return 'tooManyFailures'
+    if (error instanceof Refused && error.status === 403) return 'localSignInOff'
     throw error
   }
 }
