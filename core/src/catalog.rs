@@ -250,7 +250,7 @@ macro_rules! stored_assets {
 }
 
 /// The customer's assets with that serial number, ignoring case, retired ones too: active ones
-/// first, then by age. Nothing is locked.
+/// first, then the most recently retired. Nothing is locked.
 pub(crate) async fn with_serial_number<'e>(
     db: impl sqlx::PgExecutor<'e>,
     customer: Uuid,
@@ -258,7 +258,7 @@ pub(crate) async fn with_serial_number<'e>(
 ) -> Result<Vec<StoredAsset>> {
     Ok(sqlx::query_as(stored_assets!(
         "WHERE customer_id = $1 AND lower(serial_number) = lower($2)
-         ORDER BY retired_at IS NOT NULL, created_at, id"
+         ORDER BY retired_at DESC NULLS FIRST, created_at, id"
     ))
     .bind(customer)
     .bind(serial_number)
@@ -267,7 +267,7 @@ pub(crate) async fn with_serial_number<'e>(
 }
 
 /// The customer's assets with that name, ignoring case, retired ones too: active ones first, then
-/// by age. Nothing is locked.
+/// the most recently retired. Nothing is locked.
 pub(crate) async fn with_name<'e>(
     db: impl sqlx::PgExecutor<'e>,
     customer: Uuid,
@@ -275,7 +275,7 @@ pub(crate) async fn with_name<'e>(
 ) -> Result<Vec<StoredAsset>> {
     Ok(sqlx::query_as(stored_assets!(
         "WHERE customer_id = $1 AND lower(name) = lower($2)
-         ORDER BY retired_at IS NOT NULL, created_at, id"
+         ORDER BY retired_at DESC NULLS FIRST, created_at, id"
     ))
     .bind(customer)
     .bind(name)

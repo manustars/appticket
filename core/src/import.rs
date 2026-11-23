@@ -1384,25 +1384,81 @@ async fn write_requester(
 }
 
 /// The asset of `customer` a row is about, by serial number, else by name, both ignoring case;
-/// none for a new one. Retired assets count too, after the active ones, so that a row matching
-/// one is not taken for a new asset.
+/// none for a new one. A row is about one asset entered by hand and not retired: an import
+/// chooses between no two assets, brings back no asset and never changes one an add-on is the
+/// source of. Retired assets are found too, after the active ones, so that a row matching one
+/// is not taken for a new asset.
 async fn recognised_asset(
     tx: &mut Transaction<'_, Postgres>,
     customer: Uuid,
     name: Option<&str>,
     serial_number: Option<&str>,
 ) -> Result<Option<crate::catalog::StoredAsset>> {
+    let mut found = None;
     if let Some(serial_number) = serial_number {
-        let found = crate::catalog::with_serial_number(&mut **tx, customer, serial_number).await?;
-        if let Some(asset) = found.into_iter().next() {
-            return Ok(Some(asset));
-        }
+        let assets = crate::catalog::with_serial_number(&mut **tx, customer, serial_number).await?;
+        found = one_of(
+            tx,
+            customer,
+            assets,
+            "have the serial number",
+            serial_number,
+        )
+        .await?;
     }
-    let Some(name) = name else {
+    // Found by its name when its serial number, if the row has one, was not found.
+    let mut by_name = false;
+    if found.is_none()
+        && let Some(name) = name
+    {
+        let assets = crate::catalog::with_name(&mut **tx, customer, name).await?;
+        found = one_of(tx, customer, assets, "are named", name).await?;
+        by_name = true;
+    }
+    let Some(asset) = found else {
         return Ok(None);
     };
-    let found = crate::catalog::with_name(&mut **tx, customer, name).await?;
-    Ok(found.into_iter().next())
+    if let Some(addon) = &asset.source_addon {
+        return rule(format!(
+            "{} comes from the add-on {addon}: only its source changes it, an import does not",
+            asset.name
+        ));
+    }
+    if asset.retired {
+        return rule(format!(
+            "{} is retired: an import neither changes a retired asset nor brings it back",
+            asset.name
+        ));
+    }
+    if by_name && let (Some(theirs), Some(serial_number)) = (&asset.serial_number, serial_number) {
+        return rule(format!(
+            "{} has the serial number {theirs}, not {serial_number}: an import does not replace \
+             a serial number; correct it on the asset's page",
+            asset.name
+        ));
+    }
+    Ok(Some(asset))
+}
+
+/// The asset of `assets`, found by `what` (`have the serial number`, `are named`) `value`: the
+/// active one, else the most recent retired one; none when there is none, refused when several
+/// active ones could be it.
+async fn one_of(
+    tx: &mut Transaction<'_, Postgres>,
+    customer: Uuid,
+    assets: Vec<crate::catalog::StoredAsset>,
+    what: &str,
+    value: &str,
+) -> Result<Option<crate::catalog::StoredAsset>> {
+    let active = assets.iter().filter(|a| !a.retired).count();
+    if active > 1 {
+        return rule(format!(
+            "{active} assets of {} {what} {value}, ignoring case: an import does not choose \
+             between them; tell them apart on their pages first",
+            name_of(tx, customer).await?
+        ));
+    }
+    Ok(assets.into_iter().next())
 }
 
 /// The asset kind a row names, which must exist; none when the cell is empty.
@@ -1868,7 +1924,10 @@ mod tests {
                 (8, "there is no asset kind called Tablet"),
                 (9, "Brightfield has no site named Quay office"),
                 (10, "the site Old lab is retired"),
-                (11, "the holder cleo@harbor.test is a requester of Harbor Lane"),
+                (
+                    11,
+                    "the holder cleo@harbor.test is a requester of Harbor Lane",
+                ),
                 (12, "the holder lena@brightfield.test has departed"),
                 (13, "no requester has the address nobody@brightfield.test"),
                 (14, "is not an e-mail address"),
@@ -1885,6 +1944,104 @@ mod tests {
         );
         assert!(assets_of(&db, harbor).await.is_empty());
         assert!(assets_of(&db, gone).await.is_empty());
+    }
+
+    /// A row is about one asset of its customer, entered by hand and not retired: an import
+    /// chooses between no two assets, replaces no serial number, brings back no asset and never
+    /// changes one an add-on is the source of, even to leave it as it is.
+    #[sqlx::test]
+    async fn a_row_is_about_one_active_asset_entered_by_hand(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let laptop = crate::testing::asset_kind(&db, "Laptop").await;
+        let details = crate::testing::asset_details;
+        let add = |name: &'static str, serial_number: Option<&'static str>| {
+            let db = db.clone();
+            async move {
+                crate::catalog::create_asset(
+                    &db,
+                    brightfield,
+                    &details(laptop, name, serial_number, None, None),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        let watched = add("NAS-01", Some("SN-0100")).await;
+        sqlx::query(
+            "UPDATE assets SET source_addon = 'watchtower', source_ref = 'host-1' WHERE id = $1",
+        )
+        .bind(watched)
+        .execute(&db)
+        .await
+        .unwrap();
+        let old = add("PC-0001", Some("SN-0001")).await;
+        crate::catalog::retire_asset(&db, old).await.unwrap();
+        let replaced = add("PC-0002", Some("SN-0002")).await;
+        crate::catalog::retire_asset(&db, replaced).await.unwrap();
+        add("PC-0002", None).await;
+        add("PC-0003", Some("SN-0003")).await;
+        add("PC-0004", Some("sn-0003")).await;
+        add("Spare", None).await;
+        add("spare", None).await;
+        add("PC-0005", Some("SN-0005")).await;
+
+        let file = "customer,name,serial_number,kind,site,holder\n\
+            Brightfield,,SN-0100,,,\n\
+            Brightfield,nas-01,,,,\n\
+            Brightfield,PC-0001 Ada,SN-0001,,,\n\
+            Brightfield,PC-0001,,,,\n\
+            Brightfield,PC-0002,SN-0002B,,,\n\
+            Brightfield,PC-0006,SN-0003,,,\n\
+            Brightfield,SPARE,,,,\n\
+            Brightfield,spare,SN-0007,,,\n\
+            Brightfield,PC-0005,SN-0008,,,\n";
+        let report = import(&db, vec![assets(file)], Mode::Apply).await;
+        assert_reasons(
+            &report.files[0],
+            &[
+                (2, "NAS-01 comes from the add-on watchtower"),
+                (3, "NAS-01 comes from the add-on watchtower"),
+                (4, "PC-0001 is retired"),
+                (5, "PC-0001 is retired"),
+                (
+                    7,
+                    "2 assets of Brightfield have the serial number SN-0003, ignoring case",
+                ),
+                (8, "2 assets of Brightfield are named SPARE, ignoring case"),
+                (9, "2 assets of Brightfield are named spare, ignoring case"),
+                (10, "PC-0005 has the serial number SN-0005, not SN-0008"),
+            ],
+        );
+        assert_eq!(
+            outcomes(&report)[0][4],
+            (6, Outcome::Update, "Brightfield / PC-0002 (SN-0002B)"),
+            "the active asset, not the retired one with its name"
+        );
+        let mut shown: Vec<(String, Option<String>, bool)> = assets_of(&db, brightfield)
+            .await
+            .into_iter()
+            .map(|(name, serial, _, _, _, retired)| (name, serial, retired))
+            .collect();
+        shown.sort();
+        let asset = |name: &str, serial: Option<&str>, retired| {
+            (name.to_owned(), serial.map(str::to_owned), retired)
+        };
+        assert_eq!(
+            shown,
+            [
+                asset("NAS-01", Some("SN-0100"), false),
+                asset("PC-0001", Some("SN-0001"), true),
+                asset("PC-0002", Some("SN-0002"), true),
+                asset("PC-0002", Some("SN-0002B"), false),
+                asset("PC-0003", Some("SN-0003"), false),
+                asset("PC-0004", Some("sn-0003"), false),
+                asset("PC-0005", Some("SN-0005"), false),
+                asset("Spare", None, false),
+                asset("spare", None, false),
+            ]
+        );
     }
 
     /// The customer's requesters, as their pages show them.
