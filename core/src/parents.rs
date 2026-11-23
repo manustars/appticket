@@ -1,6 +1,8 @@
 //! Parent and child tickets: one failure that affects several customers is tracked by a parent
 //! ticket of the help desk's own organization, and each customer's ticket about it is a child.
 
+use std::collections::{BTreeMap, HashMap, HashSet};
+
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
 use utoipa::ToSchema;
@@ -125,13 +127,17 @@ pub async fn related(
 pub struct ResolvedChildren {
     /// Children moved to resolved.
     pub resolved: i64,
-    /// Replies queued to their requesters.
+    /// Messages queued: one to each person written to, the children's requesters and the key
+    /// requesters of the children's customers.
     pub replied: i64,
 }
 
-/// Resolves every child that is still open or waiting, queuing `body` as a reply to each child's
-/// requester (children without a requester, or whose departed requester has no address left, are
-/// only resolved). The parent itself is not changed.
+/// Resolves every child that is still open or waiting, sending `body` to each child's requester
+/// and to the key requesters of each child's customer. Each person gets one message of their own:
+/// a requester on the first of their children where their address is known, at the address a reply
+/// there goes to; a key requester who is not one of those requesters on a child of their customer,
+/// one without a requester first, at their contact address. A child with neither, or whose
+/// departed requester has no address left, is only resolved. The parent itself is not changed.
 pub async fn resolve_children(
     db: &PgPool,
     sender: &Sender,
@@ -139,66 +145,106 @@ pub async fn resolve_children(
     author: Uuid,
     body: &str,
 ) -> Result<ResolvedChildren> {
-    if body.trim().is_empty() {
+    let body = body.trim();
+    if body.is_empty() {
         return rule("the message to the requesters cannot be empty");
     }
-    let children: Vec<(i64, Uuid, bool)> = sqlx::query_as(
-        "SELECT t.number, t.id,
-                EXISTS (SELECT 1 FROM requester_addresses a WHERE a.requester_id = t.requester_id)
+    let mut tx = db.begin().await?;
+    let children: Vec<(i64, Uuid, Uuid, Option<Uuid>)> = sqlx::query_as(
+        "SELECT t.number, t.id, t.customer_id, t.requester_id
          FROM tickets t
          JOIN tickets p ON p.id = t.parent_id
          WHERE p.number = $1 AND t.state IN ('open', 'waiting')
-         ORDER BY t.number",
+         ORDER BY t.number
+         FOR UPDATE OF t",
     )
     .bind(parent)
-    .fetch_all(db)
+    .fetch_all(&mut *tx)
     .await?;
     if children.is_empty() {
         return rule("the ticket has no open or waiting children");
     }
-    // Each reply goes where its requester last wrote from on the child, else where an agent's
-    // last reply there went. A requester with several addresses and neither needs an agent to pick
-    // one: refuse before changing anything, so that no child is left half done.
-    let mut conn = db.acquire().await?;
-    let mut undecided = Vec::new();
-    for (number, id, has_address) in &children {
-        if *has_address
-            && let Some(recipient) = crate::requesters::recipient(&mut conn, *id).await?
-            && recipient.choose(None).is_err()
-        {
-            undecided.push(format!("#{number}"));
+
+    // Who is written to, and on which child.
+    let mut written: HashSet<Uuid> = HashSet::new();
+    let mut messages: Vec<(Uuid, String)> = Vec::new();
+    // A reply goes where its requester last wrote from on the child, else where an agent's last
+    // reply there went. A requester with several addresses and neither on all their children needs
+    // an agent to pick one: refuse before changing anything.
+    let mut undecided: BTreeMap<Uuid, Vec<i64>> = BTreeMap::new();
+    for (number, id, _, requester) in &children {
+        let Some(requester) = requester else { continue };
+        if written.contains(requester) {
+            continue;
+        }
+        let Some(recipient) = crate::requesters::recipient(&mut tx, *id).await? else {
+            continue;
+        };
+        if recipient.addresses.is_empty() {
+            continue;
+        }
+        match recipient.choose(None) {
+            Ok(to) => {
+                written.insert(*requester);
+                undecided.remove(requester);
+                messages.push((*id, to));
+            }
+            Err(_) => undecided.entry(*requester).or_default().push(*number),
         }
     }
-    drop(conn);
     if !undecided.is_empty() {
+        let numbers: Vec<String> = undecided
+            .into_values()
+            .flatten()
+            .map(|n| format!("#{n}"))
+            .collect();
         return rule(format!(
             "the requesters of {} have several addresses and have not written on their ticket: reply to them there first, picking the address",
-            undecided.join(", ")
+            numbers.join(", ")
         ));
     }
-    let mut done = ResolvedChildren {
-        resolved: 0,
-        replied: 0,
-    };
-    for (number, _, has_address) in children {
-        if has_address {
-            tickets::reply(
-                db,
-                sender,
-                number,
-                author,
-                body,
-                None,
-                TicketState::Resolved,
-            )
-            .await?;
-            done.replied += 1;
-        } else {
-            tickets::set_state(db, number, TicketState::Resolved).await?;
+    let mut customers: Vec<Uuid> = children.iter().map(|(_, _, c, _)| *c).collect();
+    let mut seen = HashSet::new();
+    customers.retain(|c| seen.insert(*c));
+    for customer in customers {
+        let on = children
+            .iter()
+            .filter(|(_, _, c, _)| *c == customer)
+            .min_by_key(|(number, _, _, requester)| (requester.is_some(), *number))
+            .map(|(_, id, _, _)| *id)
+            .expect("a child of the customer");
+        for key in crate::key_requesters::of_customer(&mut *tx, customer).await? {
+            if written.insert(key.id) {
+                messages.push((on, key.contact_address));
+            }
         }
-        done.resolved += 1;
     }
-    Ok(done)
+
+    // Each message threads with its child's conversation as it was before any of them.
+    let mut outgoing = HashMap::new();
+    for (ticket, _) in &messages {
+        if !outgoing.contains_key(ticket) {
+            let message = tickets::Outgoing::on(&mut tx, *ticket, author, body).await?;
+            outgoing.insert(*ticket, message);
+        }
+    }
+    for (ticket, to) in &messages {
+        outgoing[ticket].queue(&mut tx, sender, to).await?;
+    }
+    for ticket in outgoing.keys() {
+        crate::drafts::clear(&mut tx, *ticket, author).await?;
+    }
+    let ids: Vec<Uuid> = children.iter().map(|(_, id, _, _)| *id).collect();
+    sqlx::query("UPDATE tickets SET state = $2, updated_at = now() WHERE id = ANY($1)")
+        .bind(&ids)
+        .bind(TicketState::Resolved)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(ResolvedChildren {
+        resolved: children.len() as i64,
+        replied: messages.len() as i64,
+    })
 }
 
 #[cfg(test)]
@@ -298,6 +344,70 @@ mod tests {
         ));
     }
 
+    /// The messages queued on the parent's children: on which child, to whom, in that order.
+    async fn sent(db: &PgPool, children: &[i64]) -> Vec<(i64, String)> {
+        let mut sent = Vec::new();
+        for &child in children {
+            for entry in tickets::detail(db, child).await.unwrap().timeline {
+                if let tickets::TimelineEntry::Message(m) = entry
+                    && m.direction == tickets::Direction::Outbound
+                {
+                    sent.push((child, m.to_address.unwrap()));
+                }
+            }
+        }
+        sent.sort();
+        sent
+    }
+
+    /// Resolving the children writes to each child's requester and to the key requesters of each
+    /// child's customer, each person once and in a message of their own: on their own ticket for a
+    /// requester, else on a ticket of their customer, one without a requester first. A child with
+    /// neither is only resolved.
+    #[sqlx::test]
+    async fn resolving_children_writes_to_each_person_once(db: PgPool) {
+        let own = help_desk(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let delta = testing::customer(&db, "Delta Works").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        let ivo = testing::requester(&db, harbor, "ivo@harbor.test").await;
+        let nora = testing::requester(&db, harbor, "nora@harbor.test").await;
+        for key in [ada, lena, nora] {
+            crate::key_requesters::mark(&db, key, None).await.unwrap();
+        }
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
+        let a1 = testing::ticket(&db, brightfield, Some(ada), "a1@brightfield.test").await;
+        let a2 = testing::ticket(&db, brightfield, Some(ada), "a2@brightfield.test").await;
+        let b = testing::ticket(&db, harbor, Some(ivo), "b@harbor.test").await;
+        let c = testing::ticket(&db, harbor, None, "c@harbor.test").await;
+        let d = testing::ticket(&db, delta, None, "d@delta.test").await;
+        let children = [a1, a2, b, c, d];
+        for child in children {
+            attach(&db, child, outage).await.unwrap();
+        }
+
+        let done = resolve_children(&db, &testing::sender(), outage, agent, "Mail works again.")
+            .await
+            .unwrap();
+        assert_eq!((done.resolved, done.replied), (5, 4));
+        assert_eq!(
+            sent(&db, &children).await,
+            [
+                (a1, "ada@brightfield.test".to_owned()),
+                (a1, "lena@brightfield.test".to_owned()),
+                (b, "ivo@harbor.test".to_owned()),
+                (c, "nora@harbor.test".to_owned()),
+            ]
+        );
+        for child in children {
+            assert_eq!(testing::state(&db, child).await, "resolved");
+        }
+        assert_eq!(testing::state(&db, outage).await, "open");
+    }
+
     /// A departed requester whose addresses all passed to another requester cannot be written to:
     /// their child is resolved without a reply, as one without a requester is.
     #[sqlx::test]
@@ -322,20 +432,29 @@ mod tests {
         assert_eq!(testing::state(&db, child).await, "resolved");
     }
 
+    /// A requester is written to once, on the first of their children where their address is
+    /// known. One whose address is known on none of them, having several, needs an agent to pick
+    /// it: resolving is refused, naming their children, and nothing changes.
     #[sqlx::test]
     async fn children_are_answered_where_their_requesters_wrote_from(db: PgPool) {
         let own = help_desk(&db).await;
         let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
         let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
-        crate::requesters::add_address(&db, ada, "ada@home.test")
-            .await
-            .unwrap();
+        let ivo = testing::requester(&db, harbor, "ivo@harbor.test").await;
+        for (requester, address) in [(ada, "ada@home.test"), (ivo, "ivo@home.test")] {
+            crate::requesters::add_address(&db, requester, address)
+                .await
+                .unwrap();
+        }
         let agent = testing::agent(&db, "marco@northgate.test").await;
         let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
-        let wrote = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
+        let silent = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
+        let wrote = testing::ticket(&db, brightfield, Some(ada), "b@brightfield.test").await;
         testing::message_from(&db, wrote, "ada@home.test").await;
-        let silent = testing::ticket(&db, brightfield, Some(ada), "b@brightfield.test").await;
-        for child in [wrote, silent] {
+        let his = testing::ticket(&db, harbor, Some(ivo), "c@harbor.test").await;
+        let children = [silent, wrote, his];
+        for child in children {
             attach(&db, child, outage).await.unwrap();
         }
 
@@ -344,20 +463,20 @@ mod tests {
         else {
             panic!("a requester with several addresses was answered without a choice");
         };
-        assert!(why.contains(&format!("#{silent}")), "{why}");
-        assert!(!why.contains(&format!("#{wrote}")), "{why}");
-        for child in [wrote, silent] {
+        assert!(why.contains(&format!("#{his}")), "{why}");
+        assert!(!why.contains(&format!("#{silent}")), "{why}");
+        for child in children {
             assert_eq!(testing::state(&db, child).await, "open", "nothing changed");
         }
 
-        // Replying on the silent child, the agent picks the address; resolving then uses it.
+        // Replying on his ticket, the agent picks the address; resolving then uses it too.
         tickets::reply(
             &db,
             &testing::sender(),
-            silent,
+            his,
             agent,
             "Which address?",
-            Some("ada@brightfield.test"),
+            Some("ivo@harbor.test"),
             TicketState::Waiting,
         )
         .await
@@ -365,19 +484,14 @@ mod tests {
         resolve_children(&db, &testing::sender(), outage, agent, "Fixed.")
             .await
             .unwrap();
-        let sent: Vec<(i64, String)> = sqlx::query_as(
-            "SELECT t.number, m.to_address FROM messages m JOIN tickets t ON t.id = m.ticket_id
-             WHERE m.direction = 'outbound' AND m.body_text = 'Fixed.' ORDER BY t.number",
-        )
-        .fetch_all(&db)
-        .await
-        .unwrap();
         assert_eq!(
-            sent,
+            sent(&db, &children).await,
             [
                 (wrote, "ada@home.test".to_owned()),
-                (silent, "ada@brightfield.test".to_owned())
-            ]
+                (his, "ivo@harbor.test".to_owned()),
+                (his, "ivo@harbor.test".to_owned())
+            ],
+            "the agent's question and the message"
         );
     }
 }
