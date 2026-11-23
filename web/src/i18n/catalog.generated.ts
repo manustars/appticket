@@ -209,6 +209,7 @@ export interface Messages {
   "import.files": { plural: false; placeholders: never; tags: never }
   "import.file.customers": { plural: false; placeholders: never; tags: never }
   "import.file.sites": { plural: false; placeholders: never; tags: never }
+  "import.file.requesters": { plural: false; placeholders: never; tags: never }
   "import.columns": { plural: false; placeholders: "columns"; tags: never }
   "import.filesHint": { plural: false; placeholders: never; tags: never }
   "import.preview": { plural: false; placeholders: never; tags: never }

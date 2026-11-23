@@ -1,5 +1,5 @@
-// Importing customers and sites from CSV files: a preview first, then the import itself, and the
-// rows left out to download, correct and import again.
+// Importing customers, sites and requesters from CSV files: a preview first, then the import
+// itself, and the rows left out to download, correct and import again.
 import { useId, useState } from 'react'
 import { applyImport, previewImport, Refused, type ImportFile, type ImportKind, type ImportReport, type ImportRow } from './api/client'
 import { useI18n } from './i18n/context'
@@ -15,6 +15,11 @@ const kinds: { kind: ImportKind; columns: string[] }[] = [
       'address', 'phone', 'website', 'notes'],
   },
   { kind: 'sites', columns: ['customer', 'customer_external_system', 'customer_external_name', 'name', 'address'] },
+  {
+    kind: 'requesters',
+    columns: ['customer', 'customer_external_system', 'customer_external_name', 'email_addresses', 'name',
+      'phone_numbers', 'job_title', 'site', 'notes'],
+  },
 ]
 
 /** A file the browser could not read as UTF-8. */

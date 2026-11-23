@@ -144,26 +144,29 @@ in has it, `hd agent set-role <e-mail> Administrator` gives it back; the command
 limited by roles. Upgrading from a version without roles makes every existing agent an
 Administrator.
 
-### Importing customers and sites
+### Importing customers, sites and requesters
 
-Customers and their sites can be imported from CSV files, in the UI (Customers, then Import from
-CSV files) by an agent who manages customers, or with `hd import`. Each kind has its own file, in
-UTF-8 (Excel: "CSV UTF-8"), separated by commas or semicolons, with a header row of the column
-names below in any order. Every import first shows what it would create, update and leave out;
-nothing changes until it is applied (the Import button, or `--apply`), and applying checks
-every row again.
+Customers, their sites and their requesters can be imported from CSV files, in the UI
+(Customers, then Import from CSV files) by an agent who manages customers, or with `hd import`.
+Each kind has its own file, in UTF-8 (Excel: "CSV UTF-8"), separated by commas or semicolons,
+with a header row of the column names below in any order. The files of one import are taken
+customers first, then sites, then requesters, so that a row can refer to something an earlier
+file creates. Every import first shows what it would create, update and leave out; nothing
+changes until it is applied (the Import button, or `--apply`), and applying checks every row
+again.
 
 A filled cell sets a value and an empty one leaves it; an import never deletes, retires or
-offboards anything, and never brings an offboarded customer or a retired site back. A row that
-breaks a rule is left out with its reason, as is a site whose customer row is left out; the
-other rows are imported. The rows left out come back as a file with the same columns and an
-`error` column giving the reason, ready to correct and import again (an `error` column is
-ignored on import). A column without a name is ignored when all its cells are empty, as in the
-columns spreadsheets write after the last one. A file with an unknown or missing column, a file
-that is not UTF-8, or more than 5,000 rows in a file stops the whole import before anything
-changes. In the UI, the files of one import travel in one JSON request of at most 10 MiB, so
-their CSV text together must be somewhat smaller: quotes, line ends and non-ASCII characters
-take more room once encoded as JSON.
+offboards anything, never marks a requester departed, and never brings an offboarded customer,
+a retired site or a departed requester back. A row that breaks a rule is left out with its
+reason, as are the sites and requesters whose customer row is left out and the requesters whose
+site row is left out; the other rows are imported. The rows left out come back as a file with
+the same columns and an `error` column giving the reason, ready to correct and import again (an
+`error` column is ignored on import). A column without a name is ignored when all its cells are
+empty, as in the columns spreadsheets write after the last one. A file with an unknown or
+missing column, a file that is not UTF-8, or more than 5,000 rows in a file stops the whole
+import before anything changes. In the UI, the files of one import travel in one JSON request
+of at most 10 MiB, so their CSV text together must be somewhat smaller: quotes, line ends and
+non-ASCII characters take more room once encoded as JSON.
 
 Customers file. A customer is recognised by its external reference, else by its name, ignoring
 case; a row that could be two customers (two names that differ only in case, or a reference
@@ -192,6 +195,24 @@ retired site has is left out.
 | `name` | The site's name. Required. |
 | `address` | The site's address. The column is required; a new site needs a value. |
 
+Requesters file. A requester is recognised by any of their e-mail addresses, and is imported
+once per file. A row is about one requester of its customer who has not departed, or about a
+new one when none of its addresses belongs to anyone. It is left out when an address belongs to
+a requester of another customer (departed or not), or to a requester who has departed, or when
+its addresses belong to two requesters: an import moves, merges and brings back no one, and
+takes no address from anyone. Those are done on the requester's page.
+
+| Column | Meaning |
+|---|---|
+| `customer` | The requester's customer, by name. It must exist, or be created by the customers file, and not be offboarded. |
+| `customer_external_system`, `customer_external_name` | Or the customer by one of its external references. A requesters file has the `customer` column, these two, or all three. |
+| `email_addresses` | The requester's e-mail addresses, separated by commas, semicolons, spaces or line ends. Required. Those the requester does not have are added; none is taken away. |
+| `name` | The requester's name. |
+| `phone_numbers` | Phone numbers, separated by semicolons or line ends. Those the requester does not have are added; none is taken away. |
+| `job_title` | The job title. |
+| `site` | The requester's site, by name: one of their customer's sites, existing or created by the sites file, and not retired. |
+| `notes` | Internal notes; a filled cell replaces the notes there. |
+
 From the command line, inside the core's pod, whose file system is read-only, a file is read
 from standard input:
 
@@ -201,10 +222,11 @@ kubectl -n helpdesk exec -i deploy/hd-core -- hd import --customers - --apply < 
 ```
 
 The command lists every row with what it does, or why it is left out. Run on a machine with
-access to the database, `hd import --customers customers.csv --sites sites.csv` takes both
-files in one import and writes the rows left out to `customers-left-out.csv` and
-`sites-left-out.csv` beside them (or into `--left-out DIR`); it refuses to write one over a file
-it imports. `hd import --help` describes the columns too.
+access to the database, `hd import --customers customers.csv --sites sites.csv --requesters
+requesters.csv` takes the three files in one import and writes the rows left out to
+`customers-left-out.csv`, `sites-left-out.csv` and `requesters-left-out.csv` beside them (or
+into `--left-out DIR`); it refuses to write one over a file it imports. `hd import --help`
+describes the columns too.
 
 ## The Assistant
 

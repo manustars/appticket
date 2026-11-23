@@ -78,7 +78,8 @@ pub struct RowReport {
     /// The line of the file the row starts on; the header is line 1.
     pub line: u64,
     pub outcome: Outcome,
-    /// What the row is about: a customer's name, or a site's customer and name.
+    /// What the row is about: a customer's name, a site's customer and name, or a requester's
+    /// customer, name and first address.
     pub label: String,
     /// The columns whose values a row that updates changes.
     pub changes: Vec<String>,
@@ -1331,6 +1332,12 @@ mod tests {
                 "sites",
                 SITE_COLUMNS,
                 "Sites file.",
+                "Requesters file.",
+            ),
+            (
+                "requesters",
+                REQUESTER_COLUMNS,
+                "Requesters file.",
                 "From the command line",
             ),
         ] {
