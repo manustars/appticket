@@ -14,7 +14,6 @@ use uuid::Uuid;
 
 use super::{ApiError, AppState, Problem};
 use crate::addons::{self, Caller, DIRECTORY_READ, PROPOSALS_WRITE, TICKETS_READ};
-use crate::catalog::Asset;
 use crate::external_references::{self, NameInSystem};
 use crate::proposals::{self, Content, Target};
 use crate::tickets::{self, Priority, TicketDetail, TicketState};
@@ -134,22 +133,48 @@ async fn customers(
     Ok(Json(customers))
 }
 
+/// An asset as add-ons read it: without its holder, who is a person.
+#[derive(Serialize, ToSchema)]
+pub struct AddonAsset {
+    id: Uuid,
+    customer_id: Uuid,
+    customer_name: String,
+    kind_id: Uuid,
+    /// The name of its asset kind: laptop, printer, application, licence…
+    kind: String,
+    name: String,
+    /// The add-on it came from, when an add-on supplies it.
+    source_addon: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    retired_at: Option<OffsetDateTime>,
+}
+
 /// A customer's active assets. Scope `directory:read`.
 #[utoipa::path(get, path = "/api/addon/customers/{id}/assets", tag = "add-ons",
     params(("id" = Uuid, Path, description = "The customer")),
-    responses((status = OK, body = Vec<Asset>), (status = CONFLICT, body = Problem),
+    responses((status = OK, body = Vec<AddonAsset>), (status = CONFLICT, body = Problem),
         (status = UNAUTHORIZED, body = Problem)))]
 async fn customer_assets(
     State(state): State<AppState>,
     caller: Caller,
     Path(id): Path<Uuid>,
-) -> Result<Json<Vec<Asset>>, ApiError> {
+) -> Result<Json<Vec<AddonAsset>>, ApiError> {
     caller.require(DIRECTORY_READ)?;
     let assets = crate::catalog::assets_of(&state.db, id).await?;
     Ok(Json(
         assets
             .into_iter()
             .filter(|a| a.retired_at.is_none())
+            .map(|a| AddonAsset {
+                id: a.id,
+                customer_id: a.customer_id,
+                customer_name: a.customer_name,
+                kind_id: a.kind_id,
+                kind: a.kind,
+                name: a.name,
+                source_addon: a.source_addon,
+                retired_at: a.retired_at,
+            })
             .collect(),
     ))
 }
