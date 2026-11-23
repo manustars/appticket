@@ -4167,6 +4167,15 @@
             }
           },
           {
+            "name": "site",
+            "in": "query",
+            "description": "A site's id, retired ones included: the tickets at that site.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "q",
             "in": "query",
             "description": "Text found in the title, any of the requester's addresses or the customer's name; `#12` or\n`12` also finds ticket 12.",
@@ -8111,6 +8120,7 @@
           "priority",
           "customer_name",
           "requester_departed",
+          "sites",
           "updated_at"
         ],
         "properties": {
@@ -8145,6 +8155,13 @@
               "null"
             ],
             "description": "The address a reply goes to: the one the requester last wrote from on the ticket, else the\none an agent last picked there, else the first they registered."
+          },
+          "sites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SiteRef"
+            },
+            "description": "The sites the ticket is at: those of the assets it links, else its requester's; a closed\nticket stays at the sites it was at when it was closed. By name."
           },
           "state": {
             "$ref": "#/components/schemas/TicketState"
