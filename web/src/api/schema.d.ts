@@ -187,6 +187,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/agents/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Changes an agent's e-mail and name; refused for an agent linked to the identity provider,
+         *     which they come from.
+         */
+        put: operations["edit_agent"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/agents/{id}/deactivate": {
         parameters: {
             query?: never;
@@ -1143,6 +1163,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/session/identity-provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Sends the browser to the identity provider to sign in; it comes back to the callback. */
+        get: operations["begin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/session/identity-provider/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where the identity provider sends the browser back: opens the product's session and goes to
+         *     the help desk, or back to the sign-in page with `sign_in_error` saying why not:
+         *     `email_of_another_agent`, `email_not_verified`, `not_an_agent`, `deactivated` or `failed`.
+         */
+        get: operations["callback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/session/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** How agents can sign in; asked before anyone is signed in. */
+        get: operations["sign_in_options"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/session/password": {
         parameters: {
             query?: never;
@@ -1592,6 +1667,10 @@ export interface components {
             role_id: string;
             role_name: string;
         };
+        AgentDetails: {
+            email: string;
+            name: string;
+        };
         AgentEntry: {
             email: string;
             /** Format: uuid */
@@ -1883,6 +1962,10 @@ export interface components {
             /** Format: uuid */
             id: string;
             name?: string | null;
+        };
+        IdentityProviderButton: {
+            /** @description What the button names: "Sign in with <label>". */
+            label: string;
         };
         ImportFile: {
             /** @description The file's text: CSV with a header of fixed column names, comma or semicolon separated. */
@@ -2417,6 +2500,10 @@ export interface components {
             /** @description The assets the service runs on. */
             runs_on: components["schemas"]["Asset"][];
             used_by: components["schemas"]["CustomerRef"][];
+        };
+        /** @description How agents can sign in, for the sign-in page. */
+        SignInOptions: {
+            identity_provider?: components["schemas"]["IdentityProviderButton"] | null;
         };
         SignInRequest: {
             email: string;
@@ -2981,6 +3068,62 @@ export interface operations {
                 };
             };
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    edit_agent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentDetails"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5754,6 +5897,84 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    begin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description To the identity provider, or back to the sign-in page with `sign_in_error=failed` when it cannot be reached */
+            303: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No identity provider is configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    callback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string | null;
+                state: string | null;
+                /** @description The provider's refusal, such as `access_denied`. */
+                error: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description To the help desk, signed in, or to the sign-in page with the reason */
+            303: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No identity provider is configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    sign_in_options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInOptions"];
+                };
             };
         };
     };
