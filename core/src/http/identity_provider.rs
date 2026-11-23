@@ -9,7 +9,6 @@ use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use super::{ApiError, AppState};
-use crate::auth::SESSION_COOKIE;
 use crate::identities::{self, Refusal};
 use crate::oidc::Return;
 
@@ -96,12 +95,7 @@ async fn callback(
     match identities::sign_in(&state.db, &identity, provider.session()).await? {
         Ok(signed_in) => {
             tracing::info!(agent = %signed_in.agent, "signed in through the identity provider");
-            let cookie = Cookie::build((SESSION_COOKIE, signed_in.token))
-                .path("/")
-                .http_only(true)
-                .secure(true)
-                .same_site(SameSite::Lax)
-                .max_age(provider.session());
+            let cookie = super::session_cookie(signed_in.token, provider.session());
             Ok((jar.add(cookie), Redirect::to("/")))
         }
         Err(refusal) => {
