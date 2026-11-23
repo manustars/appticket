@@ -794,11 +794,15 @@ async fn customer_row(
     if let Some(notes) = cell("notes") {
         details.notes = notes;
     }
-    crate::customers::update_in(tx, id, &details).await?;
+    // Only a customer that changes is written, and locked.
+    let after = crate::customers::cleaned(&details)?;
     let mut changes = match &before {
-        Some(before) => customer_changes(before, &customer_details(tx, id).await?),
+        Some(before) => customer_changes(before, &after),
         None => Vec::new(),
     };
+    if before.is_none() || !changes.is_empty() {
+        crate::customers::update_in(tx, id, &after).await?;
+    }
     if let Some(reference) = &reference
         && named_by(tx, reference).await?.is_none()
     {
@@ -906,13 +910,16 @@ async fn site_row(
         return rule(format!("line {line} already imports this site"));
     }
     let address = address.unwrap_or(&before_address);
-    crate::sites::update_in(tx, id, name, address).await?;
     let mut changes = Vec::new();
     if before_name != name {
         changes.push("name");
     }
     if before_address != address {
         changes.push("address");
+    }
+    // Only a site that changes is written, and locked.
+    if !changes.is_empty() {
+        crate::sites::update_in(tx, id, name, address).await?;
     }
     so_far.sites.insert(id, row.line);
     Ok(Done::updated(changes))
@@ -1595,6 +1602,57 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(names(&db).await, ["Brightfield"]);
+    }
+
+    /// A row that changes nothing neither writes nor locks, so that an import waits only for
+    /// what it changes.
+    #[sqlx::test]
+    async fn rows_that_change_nothing_wait_for_no_one(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let details = CustomerDetails {
+            name: "Brightfield".into(),
+            website: Some("brightfield.test".into()),
+            ..CustomerDetails::default()
+        };
+        crate::customers::update(&db, brightfield, &details)
+            .await
+            .unwrap();
+        crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+
+        // An agent is changing the customer and its site meanwhile.
+        let mut agent = db.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM customers WHERE id = $1 FOR UPDATE")
+            .bind(brightfield)
+            .execute(&mut *agent)
+            .await
+            .unwrap();
+        sqlx::query("SELECT 1 FROM sites WHERE customer_id = $1 FOR UPDATE")
+            .bind(brightfield)
+            .execute(&mut *agent)
+            .await
+            .unwrap();
+
+        let files = vec![
+            customers("name,website\nBrightfield,brightfield.test\n"),
+            sites("customer,name,address\nBrightfield,Head office,Via dei Tigli 1\n"),
+        ];
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            import(&db, files, Mode::Apply),
+        )
+        .await
+        .expect("the import waited for a row it does not change");
+        let outcomes: Vec<Outcome> = report
+            .files
+            .iter()
+            .flat_map(|f| f.rows.iter().map(|r| r.outcome))
+            .collect();
+        assert_eq!(outcomes, [Outcome::Unchanged, Outcome::Unchanged]);
+        agent.rollback().await.unwrap();
     }
 
     /// Applying does everything again against the database as it is then: a preview is no promise.

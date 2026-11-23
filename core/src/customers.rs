@@ -296,8 +296,32 @@ pub(crate) async fn update_in(
     id: Uuid,
     details: &CustomerDetails,
 ) -> Result<()> {
-    let name = clean_name(&details.name)?;
-    let tax_id = filled(details.tax_id.as_deref());
+    let details = cleaned(details)?;
+    lock_active(tx, id).await?;
+    sqlx::query(
+        "UPDATE customers SET name = $2, legal_name = $3, tax_id = $4, tax_country = $5,
+                address = $6, phone = $7, website = $8, notes = $9
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&details.name)
+    .bind(&details.legal_name)
+    .bind(&details.tax_id)
+    .bind(&details.tax_country)
+    .bind(&details.address)
+    .bind(&details.phone)
+    .bind(&details.website)
+    .bind(&details.notes)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// The details as they are stored, or the rule they break: trimmed, blanks as none, the country
+/// in capitals and the website with its scheme.
+pub(crate) fn cleaned(details: &CustomerDetails) -> Result<CustomerDetails> {
+    let name = clean_name(&details.name)?.to_owned();
+    let tax_id = filled(details.tax_id.as_deref()).map(str::to_owned);
     let tax_country = filled(details.tax_country.as_deref())
         .map(clean_country)
         .transpose()?;
@@ -307,24 +331,16 @@ pub(crate) async fn update_in(
     let website = filled(details.website.as_deref())
         .map(clean_website)
         .transpose()?;
-    lock_active(tx, id).await?;
-    sqlx::query(
-        "UPDATE customers SET name = $2, legal_name = $3, tax_id = $4, tax_country = $5,
-                address = $6, phone = $7, website = $8, notes = $9
-         WHERE id = $1",
-    )
-    .bind(id)
-    .bind(name)
-    .bind(filled(details.legal_name.as_deref()))
-    .bind(tax_id)
-    .bind(tax_country)
-    .bind(filled(details.address.as_deref()))
-    .bind(filled(details.phone.as_deref()))
-    .bind(website)
-    .bind(details.notes.trim())
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
+    Ok(CustomerDetails {
+        name,
+        legal_name: filled(details.legal_name.as_deref()).map(str::to_owned),
+        tax_id,
+        tax_country,
+        address: filled(details.address.as_deref()).map(str::to_owned),
+        phone: filled(details.phone.as_deref()).map(str::to_owned),
+        website,
+        notes: details.notes.trim().to_owned(),
+    })
 }
 
 pub async fn add_domain(db: &PgPool, id: Uuid, domain: &str) -> Result<()> {
