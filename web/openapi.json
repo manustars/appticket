@@ -290,7 +290,7 @@
         "tags": [
           "add-ons"
         ],
-        "summary": "A ticket with its messages and links, without internal notes and without its customer's key\nrequesters. Scope `tickets:read`.",
+        "summary": "A ticket with its messages and links, without internal notes, announcements and its customer's\nkey requesters. Scope `tickets:read`.",
         "operationId": "ticket",
         "parameters": [
           {
@@ -4324,6 +4324,75 @@
         }
       }
     },
+    "/api/tickets/{number}/announcements": {
+      "post": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "Sends an announcement from this parent ticket, which is not closed, to the key requesters of\nits children's customers and of the customers that use the services it links, one message to\neach person. No ticket changes state.",
+        "operationId": "announce",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The parent ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewAnnouncement"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Announcement"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tickets/{number}/assets/{asset}": {
       "put": {
         "tags": [
@@ -5622,6 +5691,90 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "Announcement": {
+        "type": "object",
+        "description": "An announcement sent from a parent ticket, with when it was sent and to whom.",
+        "required": [
+          "id",
+          "author_name",
+          "subject",
+          "body",
+          "created_at",
+          "recipients"
+        ],
+        "properties": {
+          "author_name": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "recipients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnnouncementRecipient"
+            },
+            "description": "Who it went to, as they were when it was sent, by customer and address."
+          },
+          "subject": {
+            "type": "string"
+          }
+        }
+      },
+      "AnnouncementRecipient": {
+        "type": "object",
+        "description": "A key requester an announcement went to, each in a message of their own.",
+        "required": [
+          "requester_id",
+          "address",
+          "customer_id",
+          "customer_name",
+          "gave_up"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Their contact address when it was sent."
+          },
+          "customer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customer_name": {
+            "type": "string"
+          },
+          "gave_up": {
+            "type": "boolean",
+            "description": "The outbox stopped trying: their message will not be sent."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requester_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When their message left; empty while it waits in the outbox."
           }
         }
       },
@@ -6939,6 +7092,18 @@
           }
         }
       },
+      "NewAnnouncement": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Sent to each key requester of the customers the failure affects, each person once."
+          }
+        }
+      },
       "NewCustomer": {
         "type": "object",
         "required": [
@@ -8222,6 +8387,29 @@
               }
             ],
             "description": "An internal remark, seen only by agents."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Announcement",
+                "description": "An announcement sent from a parent ticket to the key requesters of the customers the\nfailure affects."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "announcement"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "An announcement sent from a parent ticket to the key requesters of the customers the\nfailure affects."
           }
         ]
       },
