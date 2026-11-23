@@ -1010,6 +1010,7 @@ dependencies = [
  "hex",
  "hmac",
  "http-body-util",
+ "ipnet",
  "lettre",
  "mail-parser",
  "percent-encoding",
