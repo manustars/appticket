@@ -130,6 +130,7 @@
   "entry.retrying": "Non ancora inviato, verrà ritentato: {error}",
   "composer.modes": "Tipo di testo",
   "composer.reply": "Rispondi al richiedente",
+  "composer.replyKeyRequesters": "Rispondi ai richiedenti chiave",
   "composer.note": "Nota interna",
   "composer.hintReply": "Inviata per e-mail a <strong>{email}</strong>.",
   "composer.hintReplyWroteFrom": "Inviata per e-mail a <strong>{email}</strong>, l'indirizzo da cui il richiedente ha scritto l'ultima volta su questo ticket.",
@@ -139,8 +140,10 @@
   "composer.hintNote": "Le note sono visibili solo agli operatori e <strong>non vengono mai inviate</strong> al richiedente.",
   "composer.hintNoRequester": "Questo ticket non ha un richiedente e il suo cliente non ha richiedenti chiave, quindi non c'è nessuno a cui rispondere. Le note sono visibili solo agli operatori.",
   "composer.replyLabel": "Risposta al richiedente",
+  "composer.replyKeyRequestersLabel": "Risposta ai richiedenti chiave",
   "composer.noteLabel": "Nota interna",
   "composer.replyPlaceholder": "Scrivi al richiedente…",
+  "composer.replyKeyRequestersPlaceholder": "Scrivi ai richiedenti chiave…",
   "composer.notePlaceholder": "Scrivi una nota per gli operatori…",
   "composer.then": "Stato del ticket dopo l'invio",
   "composer.to": "A",
@@ -207,7 +210,7 @@
     "one": "Risolto {count} ticket figlio.",
     "other": "Risolti {count} ticket figli."
   },
-  "parent.replied": {
+  "parent.writtenTo": {
     "one": "Messo in coda il messaggio per {count} persona.",
     "many": "Messo in coda il messaggio per {count} persone.",
     "other": "Messo in coda il messaggio per {count} persone."

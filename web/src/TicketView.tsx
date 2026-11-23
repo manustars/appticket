@@ -397,7 +397,7 @@ interface Allowed {
  * get the replies on its tickets without one; it is not closed; and the role allows it.
  */
 const replyPossible = (ticket: TicketDetail, allowed: Allowed) =>
-  allowed.reply && (Boolean(ticket.requester) || ticket.key_requesters.length > 0) && ticket.state !== 'closed'
+  allowed.reply && (Boolean(ticket.requester) || (ticket.key_requesters ?? []).length > 0) && ticket.state !== 'closed'
 
 /** What the composer writes: the agent's pick when both are possible, else the one that is. */
 function composerMode(ticket: TicketDetail, picked: Mode | null, allowed: Allowed): Mode {
@@ -446,8 +446,10 @@ function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked
   const mode: Mode = composerMode(ticket, picked, allowed)
   const to = replyTo(requester, pickedTo)
   // Without a requester, a reply goes to each key requester of the customer, at their contact address.
-  const keyContacts = requester ? [] : ticket.key_requesters.map((k) => k.contact_address)
+  const keyContacts = requester ? [] : (ticket.key_requesters ?? []).map((k) => k.contact_address)
   const addressed = requester ? to !== null : keyContacts.length > 0
+  // A reply goes to the key requesters: the composer says so instead of naming the requester.
+  const toKeys = !requester && keyContacts.length > 0
   // The requester has not written on the ticket and has several addresses: the agent picks one.
   const pickAddress = mode === 'reply' && !!requester && !requester.reply_to && requester.addresses.length > 1
 
@@ -500,7 +502,7 @@ function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked
         <label className={mode === 'reply' ? 'current' : ''}>
           <input type="radio" name={`${id}-mode`} value="reply" checked={mode === 'reply'}
             disabled={!canReply} onChange={() => setChosen('reply')} />
-          {t('composer.reply')}
+          {toKeys ? t('composer.replyKeyRequesters') : t('composer.reply')}
         </label>
         <label className={mode === 'note' ? 'current' : ''}>
           <input type="radio" name={`${id}-mode`} value="note" checked={mode === 'note'}
@@ -526,7 +528,7 @@ function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked
                 : t('composer.hintNoRequester')}
       </p>
       <label className="visually-hidden" htmlFor={`${id}-body`}>
-        {mode === 'reply' ? t('composer.replyLabel') : t('composer.noteLabel')}
+        {mode === 'reply' ? t(toKeys ? 'composer.replyKeyRequestersLabel' : 'composer.replyLabel') : t('composer.noteLabel')}
       </label>
       {pickAddress && requester && (
         <label className="reply-to">
@@ -543,7 +545,7 @@ function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked
         </p>
       )}
       <textarea ref={textarea} id={`${id}-body`} rows={5} value={body} aria-describedby={`${id}-hint`}
-        placeholder={mode === 'reply' ? t('composer.replyPlaceholder') : t('composer.notePlaceholder')}
+        placeholder={mode === 'reply' ? t(toKeys ? 'composer.replyKeyRequestersPlaceholder' : 'composer.replyPlaceholder') : t('composer.notePlaceholder')}
         onChange={(e) => setBody(e.target.value)} onBlur={onLeave} />
       {error !== null && <p className="error" role="alert">{errorText(error)}</p>}
       <div className="composer-foot">

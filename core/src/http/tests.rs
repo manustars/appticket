@@ -1481,3 +1481,37 @@ async fn key_requesters_are_marked_and_written_to_through_the_api(db: PgPool) {
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "nobody to reply to: {json}");
 }
+
+/// Add-ons read a ticket without its customer's key requesters and their contact addresses: no
+/// add-on needs them.
+#[sqlx::test]
+async fn add_ons_do_not_read_key_requesters(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+    crate::key_requesters::mark(&db, lena, None).await.unwrap();
+    let n = testing::ticket(&db, brightfield, None, "alert@monitor.test").await;
+    let reader = crate::addons::register(
+        &db,
+        "reader",
+        "http://127.0.0.1:9",
+        &[],
+        &["tickets:read".into()],
+    )
+    .await
+    .unwrap();
+    let bot = Client::new_with_token(&db, &reader.token, api.agent);
+
+    let seen = bot.get(&format!("/api/addon/tickets/{n}")).await;
+    assert_eq!(seen["number"], n);
+    assert!(seen.get("key_requesters").is_none(), "{seen}");
+    assert!(
+        !seen.to_string().contains("lena@brightfield.test"),
+        "{seen}"
+    );
+    let agents = api.get(&format!("/api/tickets/{n}")).await;
+    assert_eq!(
+        agents["key_requesters"][0]["contact_address"],
+        "lena@brightfield.test"
+    );
+}

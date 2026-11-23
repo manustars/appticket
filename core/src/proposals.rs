@@ -210,14 +210,8 @@ pub async fn submit(
                         return rule("a draft reply cannot be empty");
                     }
                     // Without a requester, a reply goes to the customer's key requesters.
-                    if !has_requester
-                        && crate::key_requesters::of_customer(&mut *tx, customer)
-                            .await?
-                            .is_empty()
-                    {
-                        return rule(
-                            "the ticket has no requester and its customer has no key requesters: there is nobody to reply to",
-                        );
+                    if !has_requester {
+                        crate::key_requesters::to_reply_to(&mut tx, customer).await?;
                     }
                 }
                 Content::Priority { .. } | Content::Triage(_) => {}

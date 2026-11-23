@@ -105,7 +105,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** A ticket with its messages and links, without internal notes. Scope `tickets:read`. */
+        /**
+         * A ticket with its messages and links, without internal notes and without its customer's key
+         *     requesters. Scope `tickets:read`.
+         */
         get: operations["ticket"];
         put?: never;
         post?: never;
@@ -1754,7 +1757,7 @@ export interface components {
             id: string;
             name?: string | null;
         };
-        KeyRequesterContact: {
+        KeyRequesterMark: {
             /**
              * @description One of the requester's addresses, where the messages for key requesters go. It can be
              *     left out for a requester with one address, and for a key requester, who keeps theirs.
@@ -2148,10 +2151,10 @@ export interface components {
         ResolvedChildren: {
             /**
              * Format: int64
-             * @description Messages queued: one to each person written to, the children's requesters and the key
-             *     requesters of the children's customers.
+             * @description How many people the message was queued to, one message each: the children's requesters and
+             *     the key requesters of the children's customers.
              */
-            replied: number;
+            people_written_to: number;
             /**
              * Format: int64
              * @description Children moved to resolved.
@@ -2254,9 +2257,10 @@ export interface components {
             id: string;
             /**
              * @description The key requesters of the ticket's customer. Without a requester, a reply on the ticket goes
-             *     to each of them, at their contact address; with none either, it cannot be replied to.
+             *     to each of them, at their contact address; with none either, it cannot be replied to. Given
+             *     to agents only: add-ons never get it.
              */
-            key_requesters: components["schemas"]["KeyRequester"][];
+            key_requesters?: components["schemas"]["KeyRequester"][] | null;
             /** Format: int64 */
             number: number;
             parent?: components["schemas"]["RelatedTicket"] | null;
@@ -4759,7 +4763,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["KeyRequesterContact"];
+                "application/json": components["schemas"]["KeyRequesterMark"];
             };
         };
         responses: {

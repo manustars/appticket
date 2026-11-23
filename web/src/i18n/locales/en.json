@@ -130,6 +130,7 @@
   "entry.retrying": "Not sent yet, will try again: {error}",
   "composer.modes": "What you are writing",
   "composer.reply": "Reply to requester",
+  "composer.replyKeyRequesters": "Reply to key requesters",
   "composer.note": "Internal note",
   "composer.hintReply": "Sent by e-mail to <strong>{email}</strong>.",
   "composer.hintReplyWroteFrom": "Sent by e-mail to <strong>{email}</strong>, where the requester last wrote from on this ticket.",
@@ -139,8 +140,10 @@
   "composer.hintNote": "Only agents see a note. It is <strong>never sent</strong> to the requester.",
   "composer.hintNoRequester": "This ticket has no requester and its customer has no key requesters, so there is nobody to reply to. Only agents see a note.",
   "composer.replyLabel": "Reply to the requester",
+  "composer.replyKeyRequestersLabel": "Reply to the key requesters",
   "composer.noteLabel": "Internal note",
   "composer.replyPlaceholder": "Write to the requester…",
+  "composer.replyKeyRequestersPlaceholder": "Write to the key requesters…",
   "composer.notePlaceholder": "Write a note for the agents…",
   "composer.then": "Then set the ticket to",
   "composer.to": "To",
@@ -206,7 +209,7 @@
     "one": "Resolved {count} child ticket.",
     "other": "Resolved {count} child tickets."
   },
-  "parent.replied": {
+  "parent.writtenTo": {
     "one": "Queued the message to {count} person.",
     "other": "Queued the message to {count} people."
   },
