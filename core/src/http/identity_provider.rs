@@ -502,6 +502,9 @@ mod tests {
             .execute(&db)
             .await
             .unwrap();
+        // The unverified address is another agent's: it is not taken over, so no reason to
+        // refuse.
+        agent(&db, "otto.vale@example.com", "Someone else").await;
         let answer = sign_in_as(&state, "otto").await;
         assert_eq!(answer.location, "/");
         let (name, email): (String, String) =
