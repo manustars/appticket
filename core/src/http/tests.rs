@@ -163,6 +163,81 @@ async fn tickets_can_be_filtered(db: PgPool) {
     assert_eq!(json["error"], "Unknown ticket state \"pending\".");
 }
 
+/// Tickets are listed with the sites they are at and filtered by one, retired sites included: a
+/// closed ticket stays at the site it was closed at.
+#[sqlx::test]
+async fn tickets_are_listed_with_their_sites_and_filtered_by_site(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+        .await
+        .unwrap();
+    let lab = crate::sites::create(&db, brightfield, "Lab", "Via del Glicine 3")
+        .await
+        .unwrap();
+    let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+    let at_head = crate::requesters::RequesterDetails {
+        site_id: Some(head),
+        ..Default::default()
+    };
+    crate::requesters::update(&db, ada, &at_head).await.unwrap();
+    let printer = testing::asset_kind(&db, "Printer").await;
+    let printer_2f = crate::catalog::create_asset(
+        &db,
+        brightfield,
+        &testing::asset_details(printer, "Printer 2F", None, Some(lab), None),
+    )
+    .await
+    .unwrap();
+    let hers = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
+    let printers = testing::ticket(&db, brightfield, None, "b@brightfield.test").await;
+    crate::catalog::link_asset(&db, printers, printer_2f, true)
+        .await
+        .unwrap();
+    let nowhere = testing::ticket(&db, brightfield, None, "c@brightfield.test").await;
+    let closed = testing::ticket(&db, brightfield, Some(ada), "d@brightfield.test").await;
+    crate::tickets::set_state(&db, closed, crate::tickets::TicketState::Closed)
+        .await
+        .unwrap();
+    crate::sites::retire(&db, head).await.unwrap();
+
+    let list = api.get("/api/tickets").await;
+    let sites_of = |n: i64| -> Vec<String> {
+        let ticket = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["number"] == n)
+            .unwrap();
+        ticket["sites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(
+        sites_of(hers),
+        Vec::<String>::new(),
+        "she left the retired site"
+    );
+    assert_eq!(sites_of(printers), ["Lab"]);
+    assert_eq!(sites_of(nowhere), Vec::<String>::new());
+    assert_eq!(sites_of(closed), ["Head office"]);
+
+    assert_eq!(
+        numbers(&api.get(&format!("/api/tickets?site={lab}")).await),
+        [printers]
+    );
+    assert_eq!(
+        numbers(&api.get(&format!("/api/tickets?site={head}")).await),
+        [closed],
+        "a retired site"
+    );
+    let (status, _) = api.call("GET", "/api/tickets?site=lab", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
 #[sqlx::test]
 async fn the_api_refuses_requests_without_a_session(db: PgPool) {
     let api = Client {
