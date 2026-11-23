@@ -3,19 +3,27 @@
 ## Prerequisites
 
 - Rust (stable) and Node.js 24 with npm.
-- Podman (or Docker) with compose, for PostgreSQL and the test mail server.
+- Podman (or Docker) with compose, for PostgreSQL, the test mail server and the test identity
+  provider.
 
 ## Services
 
 ```sh
 podman machine start          # once per boot, on Windows and macOS
-podman compose up -d          # PostgreSQL on 127.0.0.1:55432, GreenMail on 55025 (SMTP) / 55143 (IMAP)
+podman compose up -d          # PostgreSQL on 127.0.0.1:55432, GreenMail on 55025 (SMTP) / 55143 (IMAP),
+                              # Keycloak on 55080
 ```
 
 The host ports sit above 55000 because Windows often reserves ranges in the 3000s.
 
 GreenMail is a mail server for tests only: it accepts any mail on its SMTP port and keeps it in the
 mailbox `helpdesk@helpdesk.test` (login `helpdesk`, password `helpdesk`). Nothing leaves it.
+
+Keycloak, on 127.0.0.1:55080, is a test identity provider for signing in through OpenID Connect.
+It imports `dev/keycloak/helpdesk-realm.json` when it starts and keeps nothing: realm `helpdesk`,
+client `hd-core` with the secret `dev-only-client-secret`, and the users `lena`, `otto`, `nadia`
+and `piet` (password `<user>-dev-password`, addresses `@example.com`; Otto's is not verified).
+These are for development and CI only. `podman compose up -d keycloak` starts it alone.
 
 ## Configuration
 
@@ -51,6 +59,21 @@ Percent-encode `@`, `/` and `:` inside the user or password. Certificates are ch
 public web PKI; for servers with a private certificate authority, point `HD_MAIL_CA_FILE` at a PEM
 file of that authority. Plain `imap://` and `smtp://` are accepted only for a server on this
 machine, such as the test one.
+
+To sign in through the test Keycloak, add (the redirect is registered for the core on 8080 and
+for Vite on 5173):
+
+```sh
+HD_OIDC_ISSUER=http://127.0.0.1:55080/realms/helpdesk
+HD_OIDC_CLIENT_ID=hd-core
+HD_OIDC_CLIENT_SECRET=dev-only-client-secret
+HD_OIDC_LABEL=Keycloak
+HD_PUBLIC_URL=http://localhost:5173
+```
+
+and add an agent with a Keycloak user's address, such as `lena.marsh@example.com`. Use the same
+host for the browser as in `HD_PUBLIC_URL`. [`deploy.md`](deploy.md#signing-in-through-an-identity-provider)
+explains how the sign-in finds the agent.
 
 The first time the core reads a mailbox it leaves the mail already there alone and reads only what
 arrives afterwards; set `HD_IMAP_IMPORT_EXISTING=true` to turn the existing mail into tickets too.
@@ -120,7 +143,7 @@ of seconds per message, so proposals appear accordingly later.
 
 ```sh
 cargo test                    # needs the database: each test gets a fresh one from sqlx
-cargo test -- --ignored       # tests that also need the test mail server (TLS reading)
+cargo test -- --ignored       # tests that also need the test mail server and Keycloak
 ```
 
 ## API specification
