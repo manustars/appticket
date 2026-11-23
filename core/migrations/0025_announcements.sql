@@ -147,3 +147,16 @@ BEGIN
     RETURN NULL;
 END;
 $$;
+
+-- An announcement is not part of the parent's conversation with its requester: sending one to the
+-- requester's contact address picks no address for the replies there.
+CREATE OR REPLACE FUNCTION ticket_picked_address(ticket uuid) RETURNS text LANGUAGE sql STABLE AS $$
+    SELECT m.to_address
+    FROM tickets t
+    JOIN messages m ON m.ticket_id = t.id AND m.direction = 'outbound'
+                       AND m.announcement_id IS NULL
+    JOIN requester_addresses a ON a.address = m.to_address AND a.requester_id = t.requester_id
+    WHERE t.id = ticket
+    ORDER BY m.created_at DESC, m.id
+    LIMIT 1
+$$;
