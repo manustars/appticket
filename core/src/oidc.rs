@@ -314,6 +314,7 @@ impl Provider {
             email: claims.email().map(|email| email.as_str().to_owned()),
             email_verified: claims.email_verified() == Some(true),
             name,
+            authorized_group: crate::identities::AuthorizedGroup::NotConfigured,
         })
     }
 }

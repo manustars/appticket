@@ -120,6 +120,7 @@ impl Refusal {
     /// The reason the sign-in page is sent, which it shows in the agent's language.
     pub fn code(self) -> &'static str {
         match self {
+            Refusal::NotInAuthorizedGroup => "not_in_authorized_group",
             Refusal::EmailOfAnotherAgent => "email_of_another_agent",
             Refusal::EmailNotVerified => "email_not_verified",
             Refusal::NotAnAgent => "not_an_agent",
