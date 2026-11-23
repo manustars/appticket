@@ -392,9 +392,12 @@ interface Allowed {
   note: boolean
 }
 
-/** Whether a reply can be written: the ticket has a requester, is not closed, and the role allows it. */
+/**
+ * Whether a reply can be written: the ticket has a requester, or its customer key requesters, who
+ * get the replies on its tickets without one; it is not closed; and the role allows it.
+ */
 const replyPossible = (ticket: TicketDetail, allowed: Allowed) =>
-  allowed.reply && Boolean(ticket.requester) && ticket.state !== 'closed'
+  allowed.reply && (Boolean(ticket.requester) || ticket.key_requesters.length > 0) && ticket.state !== 'closed'
 
 /** What the composer writes: the agent's pick when both are possible, else the one that is. */
 function composerMode(ticket: TicketDetail, picked: Mode | null, allowed: Allowed): Mode {
@@ -442,6 +445,9 @@ function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked
   const canReply = replyPossible(ticket, allowed)
   const mode: Mode = composerMode(ticket, picked, allowed)
   const to = replyTo(requester, pickedTo)
+  // Without a requester, a reply goes to each key requester of the customer, at their contact address.
+  const keyContacts = requester ? [] : ticket.key_requesters.map((k) => k.contact_address)
+  const addressed = requester ? to !== null : keyContacts.length > 0
   // The requester has not written on the ticket and has several addresses: the agent picks one.
   const pickAddress = mode === 'reply' && !!requester && !requester.reply_to && requester.addresses.length > 1
 
@@ -470,11 +476,11 @@ function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    if (busy || !body.trim() || (mode === 'reply' && !to)) return
+    if (busy || !body.trim() || (mode === 'reply' && !addressed)) return
     setBusy(true)
     setError(null)
     try {
-      if (mode === 'reply') await reply(ticket.number, body, then, requester?.reply_to ? null : to)
+      if (mode === 'reply') await reply(ticket.number, body, then, requester && !requester.reply_to ? to : null)
       else await addNote(ticket.number, body)
       setBody('')
       setThen('waiting')
@@ -509,11 +515,15 @@ function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked
             : to
               ? rich('composer.hintReply', { email: to, strong })
               : t('composer.hintPickAddress')
-          : closed
-            ? t('composer.hintClosed')
-            : requester
-              ? rich('composer.hintNote', { strong })
-              : t('composer.hintNoRequester')}
+          : mode === 'reply'
+            ? rich('composer.hintReplyKeyRequesters', {
+              customer: ticket.customer.name, addresses: keyContacts.join(', '), strong,
+            })
+            : closed
+              ? t('composer.hintClosed')
+              : requester || keyContacts.length > 0
+                ? rich('composer.hintNote', { strong })
+                : t('composer.hintNoRequester')}
       </p>
       <label className="visually-hidden" htmlFor={`${id}-body`}>
         {mode === 'reply' ? t('composer.replyLabel') : t('composer.noteLabel')}
@@ -552,8 +562,12 @@ function Composer({ ticket, allowed, body, chosen: picked, draftFrom, caretAsked
             {t('composer.draftNotSaved', { error: errorText(saveState.error) })}
           </span>
         )}
-        <button type="submit" disabled={busy || !body.trim() || (mode === 'reply' && !to)}>
-          {mode !== 'reply' ? t('composer.addNote') : to ? t('composer.sendReply', { email: to }) : t('composer.send')}
+        <button type="submit" disabled={busy || !body.trim() || (mode === 'reply' && !addressed)}>
+          {mode !== 'reply'
+            ? t('composer.addNote')
+            : !requester
+              ? t('composer.sendToKeyRequesters', { count: keyContacts.length })
+              : to ? t('composer.sendReply', { email: to }) : t('composer.send')}
         </button>
       </div>
     </form>

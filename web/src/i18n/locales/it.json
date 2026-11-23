@@ -133,10 +133,11 @@
   "composer.note": "Nota interna",
   "composer.hintReply": "Inviata per e-mail a <strong>{email}</strong>.",
   "composer.hintReplyWroteFrom": "Inviata per e-mail a <strong>{email}</strong>, l'indirizzo da cui il richiedente ha scritto l'ultima volta su questo ticket.",
+  "composer.hintReplyKeyRequesters": "Questo ticket non ha un richiedente: la risposta va a ciascun richiedente chiave di {customer}, con un messaggio a sé, a <strong>{addresses}</strong>. Il ticket resta senza richiedente.",
   "composer.hintPickAddress": "Il richiedente ha più indirizzi e non ha scritto su questo ticket: scegliere quello a cui scrivere.",
   "composer.hintClosed": "Il ticket è chiuso e non riceve altre risposte. Le note sono visibili solo agli operatori.",
   "composer.hintNote": "Le note sono visibili solo agli operatori e <strong>non vengono mai inviate</strong> al richiedente.",
-  "composer.hintNoRequester": "Questo ticket non ha un richiedente, quindi non c'è nessuno a cui rispondere. Le note sono visibili solo agli operatori.",
+  "composer.hintNoRequester": "Questo ticket non ha un richiedente e il suo cliente non ha richiedenti chiave, quindi non c'è nessuno a cui rispondere. Le note sono visibili solo agli operatori.",
   "composer.replyLabel": "Risposta al richiedente",
   "composer.noteLabel": "Nota interna",
   "composer.replyPlaceholder": "Scrivi al richiedente…",
@@ -145,6 +146,11 @@
   "composer.to": "A",
   "composer.chooseAddress": "Scegliere un indirizzo…",
   "composer.sendReply": "Invia la risposta a {email}",
+  "composer.sendToKeyRequesters": {
+    "one": "Invia la risposta a {count} richiedente chiave",
+    "many": "Invia la risposta a {count} richiedenti chiave",
+    "other": "Invia la risposta a {count} richiedenti chiave"
+  },
   "composer.send": "Invia la risposta",
   "composer.addNote": "Aggiungi nota interna",
   "composer.draftSaving": "Salvataggio della bozza…",
@@ -188,22 +194,23 @@
   "parent.children": "Ticket figli",
   "parent.noChildren": "Nessun ticket figlio. Quando un guasto colpisce più clienti, agganciare a questo il ticket di ciascun cliente dalla pagina di quel ticket.",
   "parent.resolveChildren": "Risolvi i ticket figli",
-  "parent.message": "Messaggio a ciascun richiedente",
+  "parent.message": "Messaggio ai richiedenti e ai richiedenti chiave",
   "parent.resolveHint": {
-    "one": "Il ticket figlio aperto o in attesa viene risolto e il suo richiedente riceve questo messaggio. Questo ticket resta com'è.",
-    "other": "I {count} ticket figli aperti o in attesa vengono risolti e ciascun richiedente riceve questo messaggio. Questo ticket resta com'è."
+    "one": "Il ticket figlio aperto o in attesa viene risolto. Il suo richiedente e i richiedenti chiave del suo cliente ricevono questo messaggio, ciascuno con un messaggio a sé. Questo ticket resta com'è.",
+    "other": "I {count} ticket figli aperti o in attesa vengono risolti. Il richiedente di ciascun figlio e i richiedenti chiave del cliente di ciascun figlio ricevono questo messaggio una volta, ciascuno con un messaggio a sé. Questo ticket resta com'è."
   },
   "parent.confirmResolve": {
-    "one": "Risolvere il ticket figlio di #{number} e inviare il messaggio al suo richiedente?",
-    "other": "Risolvere {count} ticket figli di #{number} e inviare il messaggio a ciascun richiedente?"
+    "one": "Risolvere il ticket figlio di #{number} e inviare il messaggio al suo richiedente e ai richiedenti chiave?",
+    "other": "Risolvere {count} ticket figli di #{number} e inviare il messaggio ai loro richiedenti e ai richiedenti chiave?"
   },
   "parent.resolved": {
     "one": "Risolto {count} ticket figlio.",
     "other": "Risolti {count} ticket figli."
   },
   "parent.replied": {
-    "one": "Messa in coda una risposta per {count} richiedente.",
-    "other": "Messe in coda le risposte per {count} richiedenti."
+    "one": "Messo in coda il messaggio per {count} persona.",
+    "many": "Messo in coda il messaggio per {count} persone.",
+    "other": "Messo in coda il messaggio per {count} persone."
   },
   "customers.title": "Clienti",
   "customers.name": "Nome",
@@ -248,6 +255,11 @@
   "customer.requesterNameOptional": "Nome (facoltativo)",
   "customer.requesterTickets": "Ticket",
   "customer.requesterSite": "Sede",
+  "customer.keyRequester": "Richiedente chiave",
+  "customer.keyRequestersHint": "I richiedenti chiave parlano per il cliente: ricevono le risposte sui suoi ticket senza richiedente e i messaggi sui guasti che lo riguardano, all'indirizzo scelto qui.",
+  "customer.keyRequesterOf": "Richiedente chiave: {requester}",
+  "customer.notKeyRequester": "Non è un richiedente chiave",
+  "customer.keyRequesterAt": "Richiedente chiave, a {address}",
   "customer.addRequester": "Registra il richiedente",
   "customer.offboardHint": "Un cliente dismesso conserva lo storico ma non riceve nuovi ticket; la sua posta attende nella posta in arrivo.",
   "customer.offboard": "Dismetti il cliente",
@@ -303,6 +315,7 @@
   },
   "requester.moveNoTickets": "Non ha ticket da spostare.",
   "requester.moveLeavesSite": "Lascia la sua sede, {site}, che appartiene a {customer}.",
+  "requester.moveEndsKeyRequester": "Smette di essere un richiedente chiave di {customer}.",
   "requester.moveWillUnlink": "Lo spostamento scollega dai suoi ticket:",
   "requester.moveSubmit": "Sposta il richiedente",
   "requester.moved": "Richiedente spostato.",

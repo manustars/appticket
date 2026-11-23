@@ -48,15 +48,19 @@ interface RequesterProps {
   heading: string
 }
 
-/** The warnings of a requester's move: the site they leave and every link the move removes. */
+/**
+ * The warnings of a requester's move: the site they leave, their being a key requester of the old
+ * customer, which ends, and every link the move removes.
+ */
 export function RequesterMoveWarnings({ preview, from, to, lead, heading }: RequesterProps) {
   const { t } = useI18n()
   return (
     <>
-      {(lead || preview.site) && (
+      {(lead || preview.site || preview.key_requester) && (
         <div className="warning" role="note">
           {lead && <p>{lead}</p>}
           {preview.site && <p>{t('requester.moveLeavesSite', { site: preview.site.name, customer: from })}</p>}
+          {preview.key_requester && <p>{t('requester.moveEndsKeyRequester', { customer: from })}</p>}
         </div>
       )}
       <UnlinkWarning from={from} to={to} assets={preview.assets} services={preview.services} heading={heading} />
