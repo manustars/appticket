@@ -606,7 +606,8 @@ tr.addon-error td { padding-top: 0; white-space: normal; }
 /* Importing: the preview before the import, and the reason of each row left out. */
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .import-actions, .import-left-out { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 0.75rem; }
-.import-rows td { white-space: normal; overflow-wrap: anywhere; }
+/* Labels and reasons wrap anywhere, long addresses included; the line and the outcome stay whole. */
+.import-rows td.wrap { white-space: normal; overflow-wrap: anywhere; }
 .import-rows tr.outcome-left_out td:last-child { color: var(--danger); }
 .import-rows tr.outcome-unchanged td { color: var(--muted); }
 .import-counts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.2rem 1.2rem; }
