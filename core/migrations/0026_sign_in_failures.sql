@@ -17,3 +17,5 @@ CREATE TABLE sign_in_failures (
 
 CREATE INDEX sign_in_failures_account ON sign_in_failures (account, failed_at);
 CREATE INDEX sign_in_failures_address ON sign_in_failures (address, failed_at);
+-- For deleting the old ones without reading the whole table.
+CREATE INDEX sign_in_failures_failed_at ON sign_in_failures (failed_at);

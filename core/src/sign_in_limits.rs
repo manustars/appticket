@@ -96,13 +96,8 @@ impl SignInLimits {
         address: &AddressKey,
     ) -> anyhow::Result<Reserved> {
         let now = self.clock.now();
+        self.forget_old_failures(db, now).await;
         let mut tx = db.begin().await?;
-        // A refusal rests on failures up to a window before the last one, itself within the
-        // window: older ones no longer matter.
-        sqlx::query("DELETE FROM sign_in_failures WHERE failed_at <= $1")
-            .bind(now - 2 * self.window)
-            .execute(&mut *tx)
-            .await?;
         // Always the account before the address, so that two attempts never wait for each other.
         let by_account = self
             .newest_failures(&mut tx, CountedFor::Account(account))
@@ -132,6 +127,25 @@ impl SignInLimits {
         };
         tx.commit().await?;
         Ok(reserved)
+    }
+
+    /// Deletes failures that can no longer slow or refuse an attempt: a refusal rests on failures
+    /// up to a window before the last one, itself within the window. Outside the attempt's
+    /// transaction and skipping rows another statement holds, it never waits for a lock, so it
+    /// cannot deadlock; rows it leaves go with a later attempt. Keeping a few rows too long is
+    /// harmless, so a failure here only goes to the log.
+    async fn forget_old_failures(&self, db: &PgPool, now: OffsetDateTime) {
+        let deleted = sqlx::query(
+            "DELETE FROM sign_in_failures WHERE id IN (
+                 SELECT id FROM sign_in_failures WHERE failed_at <= $1
+                 LIMIT 1000 FOR UPDATE SKIP LOCKED)",
+        )
+        .bind(now - 2 * self.window)
+        .execute(db)
+        .await;
+        if let Err(error) = deleted {
+            tracing::warn!(%error, "deleting old failed sign-ins");
+        }
     }
 
     /// Takes the turn of the account or the address until `tx` ends, and gives its newest
