@@ -52,8 +52,8 @@ impl SignInLimits {
         address: IpAddr,
         check: impl Future<Output = anyhow::Result<Option<T>>>,
     ) -> anyhow::Result<Guarded<T>> {
-        let account = account_key(account);
-        let address = address_key(address);
+        let account = AccountKey::new(account);
+        let address = AddressKey::new(address);
         let (attempt, delay) = match self.reserve(db, &account, &address).await? {
             Reserved::Refused { retry_after } => return Ok(Guarded::Refused { retry_after }),
             Reserved::Allowed { attempt, delay } => (attempt, delay),
@@ -82,7 +82,7 @@ impl SignInLimits {
                     .execute(&mut *tx)
                     .await?;
                 sqlx::query("UPDATE sign_in_failures SET account = NULL WHERE account = $1")
-                    .bind(&account)
+                    .bind(&account.0)
                     .execute(&mut *tx)
                     .await?;
                 tx.commit().await?;
@@ -95,7 +95,12 @@ impl SignInLimits {
     /// Records the attempt as a failure, unless it is refused, and says how long it waits first.
     /// Attempts for the same account or from the same address take their turn, so that attempts
     /// sent at once cannot all pass before any is counted.
-    async fn reserve(&self, db: &PgPool, account: &str, address: &str) -> anyhow::Result<Reserved> {
+    async fn reserve(
+        &self,
+        db: &PgPool,
+        account: &AccountKey,
+        address: &AddressKey,
+    ) -> anyhow::Result<Reserved> {
         let now = self.clock.now();
         let mut tx = db.begin().await?;
         // A refusal rests on failures up to a window before the last one, itself within the
@@ -105,18 +110,18 @@ impl SignInLimits {
             .execute(&mut *tx)
             .await?;
         sqlx::query("SELECT pg_advisory_xact_lock(1, hashtext($1))")
-            .bind(account)
+            .bind(&account.0)
             .execute(&mut *tx)
             .await?;
         sqlx::query("SELECT pg_advisory_xact_lock(2, hashtext($1))")
-            .bind(address)
+            .bind(&address.0)
             .execute(&mut *tx)
             .await?;
         let by_account: Vec<OffsetDateTime> = sqlx::query_scalar(
             "SELECT failed_at FROM sign_in_failures WHERE account = $1
              ORDER BY failed_at DESC LIMIT $2",
         )
-        .bind(account)
+        .bind(&account.0)
         .bind(i64::from(self.most_checked()))
         .fetch_all(&mut *tx)
         .await?;
@@ -124,7 +129,7 @@ impl SignInLimits {
             "SELECT failed_at FROM sign_in_failures WHERE address = $1
              ORDER BY failed_at DESC LIMIT $2",
         )
-        .bind(address)
+        .bind(&address.0)
         .bind(i64::from(self.most_checked()))
         .fetch_all(&mut *tx)
         .await?;
@@ -140,8 +145,8 @@ impl SignInLimits {
                      VALUES ($1, $2, $3, $4)",
                 )
                 .bind(attempt)
-                .bind(account)
-                .bind(address)
+                .bind(&account.0)
+                .bind(&address.0)
                 .bind(now)
                 .execute(&mut *tx)
                 .await?;
@@ -228,27 +233,36 @@ enum Reserved {
     },
 }
 
-/// The account an attempt counts for: what was typed in, trimmed and in lower case, as agents
-/// are looked up by their e-mail.
-/// Longer than any e-mail, it is kept as its SHA-256, which fits the table's index.
-fn account_key(account: &str) -> String {
-    let account = account.trim().to_lowercase();
-    if account.len() <= 254 {
-        return account;
+/// The account an attempt counts for, as stored.
+struct AccountKey(String);
+
+impl AccountKey {
+    /// What was typed in, trimmed and in lower case, as agents are looked up by their e-mail.
+    /// Longer than any e-mail, it is kept as its SHA-256, which fits the table's index.
+    fn new(account: &str) -> AccountKey {
+        let account = account.trim().to_lowercase();
+        if account.len() <= 254 {
+            return AccountKey(account);
+        }
+        use sha2::Digest;
+        AccountKey(format!(
+            "sha256:{}",
+            hex::encode(sha2::Sha256::digest(account.as_bytes()))
+        ))
     }
-    use sha2::Digest;
-    format!(
-        "sha256:{}",
-        hex::encode(sha2::Sha256::digest(account.as_bytes()))
-    )
 }
 
-/// The address an attempt counts for: an IPv4 address (also when mapped into IPv6), or the /64
-/// network of an IPv6 address, as one client usually holds a whole /64.
-fn address_key(address: IpAddr) -> String {
-    match address.to_canonical() {
-        IpAddr::V4(v4) => v4.to_string(),
-        IpAddr::V6(v6) => ipnet::Ipv6Net::new_assert(v6, 64).trunc().to_string(),
+/// The address an attempt counts for, as stored.
+struct AddressKey(String);
+
+impl AddressKey {
+    /// An IPv4 address (also when mapped into IPv6), or the /64 network of an IPv6 address, as
+    /// one client usually holds a whole /64.
+    fn new(address: IpAddr) -> AddressKey {
+        AddressKey(match address.to_canonical() {
+            IpAddr::V4(v4) => v4.to_string(),
+            IpAddr::V6(v6) => ipnet::Ipv6Net::new_assert(v6, 64).trunc().to_string(),
+        })
     }
 }
 
