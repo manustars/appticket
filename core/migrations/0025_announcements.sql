@@ -78,22 +78,25 @@ CREATE CONSTRAINT TRIGGER announcements_have_recipients
     FOR EACH ROW EXECUTE FUNCTION announcements_have_recipients();
 
 -- Each recipient is, when the announcement is sent, a key requester at their contact address, of a
--- customer of one of the parent's children or that uses a service the parent links. The key
--- requester is locked, so that one being unmarked at the same time is seen.
+-- customer that is not offboarded (the help desk no longer serves it) and that has a child of the
+-- parent or uses a service the parent links. The key requester and the customer are locked, so
+-- that one being unmarked or offboarded at the same time is seen.
 CREATE FUNCTION announcements_go_to_key_requesters_affected() RETURNS trigger
     LANGUAGE plpgsql AS $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM announcements n
         JOIN key_requesters k ON k.requester_id = NEW.requester_id
+        JOIN customers c ON c.id = k.customer_id
         WHERE n.id = NEW.announcement_id
           AND k.customer_id = NEW.customer_id AND k.contact_address = NEW.address
+          AND c.offboarded_at IS NULL
           AND (EXISTS (SELECT 1 FROM tickets t
                        WHERE t.parent_id = n.ticket_id AND t.customer_id = k.customer_id)
                OR EXISTS (SELECT 1 FROM ticket_services ts
                           JOIN customer_services cs ON cs.service_id = ts.service_id
                           WHERE ts.ticket_id = n.ticket_id AND cs.customer_id = k.customer_id))
-        FOR SHARE OF k) THEN
+        FOR SHARE OF k, c) THEN
         RAISE EXCEPTION 'an announcement goes to a key requester, at their contact address, of a customer of the parent''s children or of its services'
             USING ERRCODE = 'check_violation';
     END IF;

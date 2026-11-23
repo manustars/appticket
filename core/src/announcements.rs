@@ -41,17 +41,31 @@ pub struct AnnouncementRecipient {
 }
 
 /// The customers an announcement from the ticket goes to, each once, by id: those of its children
-/// and those that use the services it links.
+/// and those that use the services it links, leaving out the offboarded ones, which the help desk
+/// no longer serves.
 async fn affected_customers(tx: &mut Transaction<'_, Postgres>, ticket: Uuid) -> Result<Vec<Uuid>> {
     Ok(sqlx::query_scalar(
-        "SELECT customer_id FROM tickets WHERE parent_id = $1
-         UNION
-         SELECT cs.customer_id FROM ticket_services ts
-         JOIN customer_services cs ON cs.service_id = ts.service_id
-         WHERE ts.ticket_id = $1
-         ORDER BY customer_id",
+        "SELECT c.id FROM customers c
+         WHERE c.offboarded_at IS NULL
+           AND (c.id IN (SELECT customer_id FROM tickets WHERE parent_id = $1)
+                OR c.id IN (SELECT cs.customer_id FROM ticket_services ts
+                            JOIN customer_services cs ON cs.service_id = ts.service_id
+                            WHERE ts.ticket_id = $1))
+         ORDER BY c.id",
     )
     .bind(ticket)
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
+/// Locks `customers` against being offboarded until the transaction ends, before their key
+/// requesters; returns those that still are not.
+async fn lock_served(tx: &mut Transaction<'_, Postgres>, customers: &[Uuid]) -> Result<Vec<Uuid>> {
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM customers WHERE id = ANY($1) AND offboarded_at IS NULL
+         ORDER BY id FOR SHARE",
+    )
+    .bind(customers)
     .fetch_all(&mut **tx)
     .await?)
 }
@@ -72,8 +86,8 @@ pub async fn send(
         return rule("an announcement cannot be empty");
     }
     let mut tx = db.begin().await?;
-    // Read before any lock: the key requesters are locked before the parent, and who the
-    // announcement goes to must not change in between.
+    // Read before any lock: customers and their key requesters are locked before the parent, and
+    // who the announcement goes to must not change in between.
     let read: Option<(Uuid, String)> =
         sqlx::query_as("SELECT id, title FROM tickets WHERE number = $1")
             .bind(parent)
@@ -81,6 +95,9 @@ pub async fn send(
             .await?;
     let (ticket, title) = read.ok_or(Error::NotFound("ticket"))?;
     let customers = affected_customers(&mut tx, ticket).await?;
+    if lock_served(&mut tx, &customers).await? != customers {
+        return rule("a customer has just been offboarded; reload and try again");
+    }
     let keys = crate::key_requesters::locked_of_customers(&mut tx, &customers).await?;
     let (state, help_desk, child): (TicketState, bool, bool) = sqlx::query_as(
         "SELECT t.state, c.is_help_desk, t.parent_id IS NOT NULL
@@ -102,7 +119,9 @@ pub async fn send(
         return rule("the ticket is closed; a closed ticket sends no announcements");
     }
     if affected_customers(&mut tx, ticket).await? != customers {
-        return rule("the ticket's children have just changed; reload and try again");
+        return rule(
+            "the customers the announcement goes to have just changed; reload and try again",
+        );
     }
     if keys.is_empty() {
         return rule(
@@ -406,6 +425,47 @@ mod tests {
         assert_eq!(queued, 0);
     }
 
+    /// An offboarded customer is no longer served: an announcement does not go to its key
+    /// requesters, whether it has a child of the parent or uses one of its services.
+    #[sqlx::test]
+    async fn an_announcement_skips_offboarded_customers(db: PgPool) {
+        let own = testing::help_desk(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let delta = testing::customer(&db, "Delta Works").await;
+        let echo = testing::customer(&db, "Echo Farms").await;
+        let mail = crate::catalog::create_service(&db, "Hosted mail", "")
+            .await
+            .unwrap();
+        for customer in [brightfield, echo] {
+            crate::catalog::use_service(&db, mail, customer)
+                .await
+                .unwrap();
+        }
+        for (customer, address) in [
+            (brightfield, "ada@brightfield.test"),
+            (delta, "nora@delta.test"),
+            (echo, "eva@echo.test"),
+        ] {
+            let key = testing::requester(&db, customer, address).await;
+            crate::key_requesters::mark(&db, key, None).await.unwrap();
+        }
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
+        crate::catalog::link_service(&db, outage, mail, true)
+            .await
+            .unwrap();
+        let child = testing::ticket(&db, delta, None, "d@delta.test").await;
+        attach(&db, child, outage).await.unwrap();
+        for customer in [delta, echo] {
+            crate::customers::offboard(&db, customer).await.unwrap();
+        }
+
+        let sent = send(&db, &testing::sender(), outage, agent, "Mail is down.")
+            .await
+            .unwrap();
+        assert_eq!(to_whom(&sent), [("Brightfield", "ada@brightfield.test")]);
+    }
+
     /// An announcement needs something to say and someone to say it to: an empty one is refused,
     /// and so is one from a parent whose children's customers and service users have no key
     /// requesters, or that has neither children nor services.
@@ -513,7 +573,12 @@ mod tests {
         let mail = crate::catalog::create_service(&db, "Hosted mail", "")
             .await
             .unwrap();
-        crate::catalog::use_service(&db, mail, delta).await.unwrap();
+        let foxglen = testing::customer(&db, "Foxglen").await;
+        for customer in [delta, foxglen] {
+            crate::catalog::use_service(&db, mail, customer)
+                .await
+                .unwrap();
+        }
         let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
         crate::requesters::add_address(&db, ada, "ada@home.test")
             .await
@@ -521,12 +586,14 @@ mod tests {
         let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
         let nora = testing::requester(&db, delta, "nora@delta.test").await;
         let eva = testing::requester(&db, echo, "eva@echo.test").await;
+        let finn = testing::requester(&db, foxglen, "finn@foxglen.test").await;
         crate::key_requesters::mark(&db, ada, Some("ada@brightfield.test"))
             .await
             .unwrap();
-        for key in [nora, eva] {
+        for key in [nora, eva, finn] {
             crate::key_requesters::mark(&db, key, None).await.unwrap();
         }
+        crate::customers::offboard(&db, foxglen).await.unwrap();
         testing::agent(&db, "marco@northgate.test").await;
         let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
         crate::catalog::link_service(&db, outage, mail, true)
@@ -544,6 +611,7 @@ mod tests {
                 (eva, "eva@echo.test"),
                 "a customer the failure does not affect",
             ),
+            ((finn, "finn@foxglen.test"), "an offboarded customer"),
         ] {
             let why = write(&db, outage, &[to]).await.unwrap_err();
             assert!(why.contains("a key requester"), "{what}: {why}");
