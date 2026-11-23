@@ -223,6 +223,118 @@ async fn assets_and_services_are_linked_through_the_api(db: PgPool) {
     assert_eq!(ticket["services"][0]["name"], "Hosted mail");
 }
 
+/// Agents who manage the catalog set and clear an asset's serial number, site and holder; the
+/// customer's assets, and the requester's page, show where each asset is and who holds it.
+#[sqlx::test]
+async fn an_asset_s_details_are_set_through_the_api(db: PgPool) {
+    use crate::roles::Permission;
+    let cataloguer = role_with(&db, "Cataloguer", &[Permission::ManageCatalog]).await;
+    let api = Client::with_role(&db, "carla@northgate.test", cataloguer).await;
+    let manager = role_with(&db, "Manager", &[Permission::ManageCustomers]).await;
+    let manager = Client::with_role(&db, "mara@northgate.test", manager).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let harbor = testing::customer(&db, "Harbor Lane").await;
+    let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+        .await
+        .unwrap();
+    let lab = crate::sites::create(&db, brightfield, "Lab", "Via del Glicine 3")
+        .await
+        .unwrap();
+    let quay = crate::sites::create(&db, harbor, "Quay office", "Molo delle Reti 2")
+        .await
+        .unwrap();
+    let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+    let at_lab = crate::requesters::RequesterDetails {
+        name: Some("Ada Ferrini".into()),
+        site_id: Some(lab),
+        ..Default::default()
+    };
+    crate::requesters::update(&db, ada, &at_lab).await.unwrap();
+    let laptop = crate::asset_kinds::create(&db, "Laptop", true)
+        .await
+        .unwrap();
+
+    let assets = format!("/api/customers/{brightfield}/assets");
+    let (status, created) = api
+        .call(
+            "POST",
+            &assets,
+            Some(serde_json::json!({
+                "kind_id": laptop, "name": "PC-0042", "serial_number": "SN-0042",
+                "site_id": head, "holder_id": ada
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let pc = created["id"].as_str().unwrap().to_owned();
+    let listed = api.get(&assets).await;
+    let asset = &listed[0];
+    assert_eq!(asset["serial_number"], "SN-0042");
+    assert_eq!(asset["moves_with_holder"], true);
+    assert_eq!(asset["site"]["name"], "Head office");
+    assert_eq!(
+        asset["holder"],
+        serde_json::json!({"id": ada, "name": "Ada Ferrini", "address": "ada@brightfield.test"})
+    );
+    assert_eq!(asset["at_site"]["name"], "Lab", "with its holder");
+    let page = api.get(&format!("/api/requesters/{ada}")).await;
+    assert_eq!(page["held_assets"][0]["name"], "PC-0042");
+    let preview = api
+        .get(&format!(
+            "/api/requesters/{ada}/move-preview?customer_id={harbor}"
+        ))
+        .await;
+    assert_eq!(preview["held_assets"][0]["name"], "PC-0042");
+
+    let asset = format!("/api/assets/{pc}");
+    let elsewhere = serde_json::json!({"kind_id": laptop, "name": "PC-0042", "site_id": quay});
+    let (status, json) = api.call("PUT", &asset, Some(elsewhere)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert_eq!(
+        json["error"],
+        "The site is not one of the asset's customer."
+    );
+    let cleared = serde_json::json!({"kind_id": laptop, "name": "PC-0042"});
+    let (status, json) = manager.call("PUT", &asset, Some(cleared.clone())).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "the holder is part of the catalog: {json}"
+    );
+    let (status, json) = api.call("PUT", &asset, Some(cleared)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    let listed = api.get(&assets).await;
+    for field in ["serial_number", "site", "holder", "at_site"] {
+        assert_eq!(listed[0][field], Value::Null, "{field} cleared");
+    }
+}
+
+/// Add-ons that read a customer's assets are not told who holds them.
+#[sqlx::test]
+async fn add_ons_do_not_read_holders(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+    testing::held_asset(&db, brightfield, "Laptop", "PC-0042", ada).await;
+    let reader = crate::addons::register(
+        &db,
+        "reader",
+        "http://127.0.0.1:9",
+        &[],
+        &[crate::addons::DIRECTORY_READ.into()],
+    )
+    .await
+    .unwrap();
+    let bot = Client::new_with_token(&db, &reader.token, api.agent);
+
+    let seen = bot
+        .get(&format!("/api/addon/customers/{brightfield}/assets"))
+        .await;
+    assert_eq!(seen[0]["name"], "PC-0042");
+    assert!(seen[0].get("holder").is_none(), "{seen}");
+    assert!(!seen.to_string().contains(&ada.to_string()), "{seen}");
+}
+
 #[sqlx::test]
 async fn asset_kinds_are_managed_through_the_api(db: PgPool) {
     let api = Client::new(&db).await;
