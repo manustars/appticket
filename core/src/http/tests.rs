@@ -1809,6 +1809,69 @@ async fn requesters_are_imported_after_their_customers_and_sites(db: PgPool) {
     assert_eq!(ada["site"]["name"], "Head office");
 }
 
+/// Assets are imported last, by an agent who manages customers and the catalog; an import with
+/// an assets file is refused as a whole to an agent who manages customers only.
+#[sqlx::test]
+async fn assets_are_imported_by_an_agent_who_manages_the_catalog_too(db: PgPool) {
+    use crate::roles::Permission;
+    testing::asset_kind(&db, "Laptop").await;
+    let import = serde_json::json!({ "files": [
+        { "kind": "assets", "content": "customer,name,serial_number,kind,site\n\
+            Brightfield,PC-0042,SN-0042,laptop,Head office\n\
+            Brightfield,PC-0043,,Tablet,\n" },
+        { "kind": "sites", "content": "customer,name,address\nBrightfield,Head office,Via dei Tigli 1\n" },
+        { "kind": "customers", "content": "name\nBrightfield\n" },
+    ]});
+    let customers_only = role_with(&db, "Accounts", &[Permission::ManageCustomers]).await;
+    let customers_only = Client::with_role(&db, "carla@northgate.test", customers_only).await;
+    for uri in ["/api/imports/preview", "/api/imports"] {
+        let (status, json) = customers_only.call("POST", uri, Some(import.clone())).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{uri}: {json}");
+    }
+    assert_eq!(
+        customers_only.get("/api/customers/all").await,
+        serde_json::json!([])
+    );
+
+    let both = role_with(
+        &db,
+        "Inventory",
+        &[Permission::ManageCustomers, Permission::ManageCatalog],
+    )
+    .await;
+    let api = Client::with_role(&db, "ivo@northgate.test", both).await;
+    let (status, preview) = api
+        .call("POST", "/api/imports/preview", Some(import.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["files"][2]["kind"], "assets");
+    assert_eq!(preview["files"][2]["rows"][0]["outcome"], "create");
+    assert_eq!(
+        preview["files"][2]["rows"][0]["label"],
+        "Brightfield / PC-0042 (SN-0042)"
+    );
+    assert!(
+        preview["files"][2]["left_out"]
+            .as_str()
+            .unwrap()
+            .starts_with(
+                "customer,name,serial_number,kind,site,error\r\nBrightfield,PC-0043,,Tablet,,there is no asset kind called Tablet"
+            ),
+        "{preview}"
+    );
+
+    let (status, applied) = api.call("POST", "/api/imports", Some(import)).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let customers = api.get("/api/customers/all").await;
+    let brightfield = customers[0]["id"].as_str().unwrap();
+    let assets = api
+        .get(&format!("/api/customers/{brightfield}/assets"))
+        .await;
+    assert_eq!(assets.as_array().unwrap().len(), 1, "{assets}");
+    assert_eq!(assets[0]["serial_number"], "SN-0042");
+    assert_eq!(assets[0]["site"]["name"], "Head office");
+}
+
 #[sqlx::test]
 async fn an_import_needs_managing_customers_and_files_it_can_read(db: PgPool) {
     use crate::roles::Permission;
