@@ -106,8 +106,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * A ticket with its messages and links, without internal notes and without its customer's key
-         *     requesters. Scope `tickets:read`.
+         * A ticket with its messages and links, without internal notes, announcements and its customer's
+         *     key requesters. Scope `tickets:read`.
          */
         get: operations["ticket"];
         put?: never;
@@ -1228,6 +1228,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tickets/{number}/announcements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sends an announcement from this parent ticket, which is not closed, to the key requesters of
+         *     its children's customers and of the customers that use the services it links, one message to
+         *     each person. No ticket changes state.
+         */
+        post: operations["announce"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tickets/{number}/assets/{asset}": {
         parameters: {
             query?: never;
@@ -1572,6 +1593,36 @@ export interface components {
             /** Format: uuid */
             id: string;
             name: string;
+        };
+        /** @description An announcement sent from a parent ticket, with when it was sent and to whom. */
+        Announcement: {
+            author_name: string;
+            body: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            /** @description Who it went to, as they were when it was sent, by customer and address. */
+            recipients: components["schemas"]["AnnouncementRecipient"][];
+            subject: string;
+        };
+        /** @description A key requester an announcement went to, each in a message of their own. */
+        AnnouncementRecipient: {
+            /** @description Their contact address when it was sent. */
+            address: string;
+            /** Format: uuid */
+            customer_id: string;
+            customer_name: string;
+            /** @description The outbox stopped trying: their message will not be sent. */
+            gave_up: boolean;
+            name?: string | null;
+            /** Format: uuid */
+            requester_id: string;
+            /**
+             * Format: date-time
+             * @description When their message left; empty while it waits in the outbox.
+             */
+            sent_at?: string | null;
         };
         Asset: {
             at_site?: components["schemas"]["SiteRef"] | null;
@@ -2010,6 +2061,10 @@ export interface components {
              * @description The role; omitted, the default role.
              */
             role_id?: string | null;
+        };
+        NewAnnouncement: {
+            /** @description Sent to each key requester of the customers the failure affects, each person once. */
+            body: string;
         };
         NewCustomer: {
             /** @description Mail domains of the customer's requesters, e.g. `brightfield.test`. */
@@ -2467,6 +2522,9 @@ export interface components {
         }) | (components["schemas"]["NoteEntry"] & {
             /** @enum {string} */
             kind: "note";
+        }) | (components["schemas"]["Announcement"] & {
+            /** @enum {string} */
+            kind: "announcement";
         });
         Triage: {
             /** @enum {string} */
@@ -5948,6 +6006,56 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    announce: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The parent ticket's number */
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewAnnouncement"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Announcement"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
