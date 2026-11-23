@@ -467,7 +467,9 @@ pub async fn import(db: &PgPool, args: ImportArgs, out: &mut impl Write) -> anyh
         paths.push((kind, path));
     }
     if files.is_empty() {
-        anyhow::bail!("name a file to import: --customers, --sites, --requesters (see hd import --help)");
+        anyhow::bail!(
+            "name a file to import: --customers, --sites, --requesters (see hd import --help)"
+        );
     }
     if paths.iter().filter(|(_, p)| p.as_os_str() == "-").count() > 1 {
         anyhow::bail!("only one file can be read from standard input");
