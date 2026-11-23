@@ -1268,22 +1268,34 @@ mod tests {
     /// commits second is refused.
     #[sqlx::test]
     async fn the_database_keeps_the_asset_rules_at_the_same_time(db: PgPool) {
+        // Waits on locks: it fails rather than hang when they do not go as planned.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            asset_rules_at_the_same_time(db),
+        )
+        .await
+        .expect("the statements did not end in time");
+    }
+
+    async fn asset_rules_at_the_same_time(db: PgPool) {
         let brightfield = testing::customer(&db, "Brightfield").await;
         let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
             .await
             .unwrap();
         let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
         let pc = testing::asset(&db, brightfield, "Laptop", "PC-0042").await;
-        for (first, second, value) in [
+        for (first, second, value, refusal) in [
             (
                 "UPDATE sites SET retired_at = now() WHERE id = $1",
                 "UPDATE assets SET site_id = $2 WHERE id = $1",
                 head,
+                "an asset cannot be at a retired site",
             ),
             (
                 "UPDATE requesters SET departed_at = now() WHERE id = $1",
                 "UPDATE assets SET holder_id = $2 WHERE id = $1",
                 ada,
+                "a departed requester holds no asset",
             ),
         ] {
             let mut tx = db.begin().await.unwrap();
@@ -1300,9 +1312,14 @@ mod tests {
                     .execute(&other)
                     .await
             });
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            assert!(
+                testing::some_statement_waits_for_a_lock(&db).await,
+                "{second} did not wait for {first}"
+            );
+            assert!(!meanwhile.is_finished(), "{second} ended before {first}");
             tx.commit().await.unwrap();
-            assert!(meanwhile.await.unwrap().is_err(), "{second} after {first}");
+            let why = meanwhile.await.unwrap().unwrap_err().to_string();
+            assert!(why.contains(refusal), "{second} after {first}: {why}");
         }
     }
 

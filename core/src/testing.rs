@@ -38,6 +38,25 @@ pub async fn asset(db: &PgPool, customer: Uuid, kind: &str, name: &str) -> Uuid 
         .unwrap()
 }
 
+/// Whether some connection to the test's database comes to wait for a lock it has not been
+/// granted, within ten seconds.
+pub async fn some_statement_waits_for_a_lock(db: &PgPool) -> bool {
+    for _ in 0..200 {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+                            WHERE NOT l.granted AND a.datname = current_database())",
+        )
+        .fetch_one(db)
+        .await
+        .unwrap();
+        if waiting {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    false
+}
+
 /// An asset of the customer, of the named kind, given to `holder`.
 pub async fn held_asset(db: &PgPool, customer: Uuid, kind: &str, name: &str, holder: Uuid) -> Uuid {
     let kind = asset_kind(db, kind).await;

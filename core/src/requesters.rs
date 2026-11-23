@@ -463,9 +463,9 @@ pub async fn bring_back(db: &PgPool, id: Uuid) -> Result<()> {
 /// addresses, tickets and held assets of `merged` pass to `kept`, which remains, and `merged` is
 /// removed; the details `kept` lacks are taken from `merged`, so that nothing about the person is
 /// lost, and `kept` is a key requester when either was, written to where `merged` was if not
-/// already. A merge cannot be undone. Requesters of different customers are never merged, nor those of an
-/// offboarded customer. `merged` may have departed; `kept` may not, since tickets are not given to
-/// a departed requester.
+/// already. A merge cannot be undone. Requesters of different customers are never merged, nor
+/// those of an offboarded customer. `merged` may have departed; `kept` may not, since tickets are
+/// not given to a departed requester.
 pub async fn merge(db: &PgPool, kept: Uuid, merged: Uuid) -> Result<()> {
     if kept == merged {
         return rule("a requester cannot be merged with themselves");
@@ -1218,6 +1218,16 @@ mod tests {
     /// made, then the move unlinks it.
     #[sqlx::test]
     async fn moving_a_holder_and_linking_their_asset_do_not_wait_for_each_other(db: PgPool) {
+        // Waits on locks: it fails rather than hang when they do not go as planned.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            move_a_holder_while_linking_their_asset(db),
+        )
+        .await
+        .expect("the move and the link did not end in time");
+    }
+
+    async fn move_a_holder_while_linking_their_asset(db: PgPool) {
         use crate::tickets::{self, RequesterMove};
         let brightfield = testing::customer(&db, "Brightfield").await;
         let harbor = testing::customer(&db, "Harbor Lane").await;
@@ -1237,7 +1247,11 @@ mod tests {
             let db = db.clone();
             async move { tickets::move_to_customer(&db, hers, harbor, RequesterMove::Move).await }
         });
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // The move has taken the asset and waits for the ticket.
+        assert!(
+            testing::some_statement_waits_for_a_lock(&db).await,
+            "the move did not wait for the ticket being linked"
+        );
         assert!(!moving.is_finished(), "moved a ticket being linked");
         sqlx::query("SET LOCAL lock_timeout = '3s'")
             .execute(&mut *linking)
@@ -2205,6 +2219,16 @@ Prefers phone calls."
     /// bypassed on both sides: putting them there waits for the retirement, and is refused.
     #[sqlx::test]
     async fn the_database_keeps_requesters_from_a_site_retired_at_the_same_time(db: PgPool) {
+        // Waits on locks: it fails rather than hang when they do not go as planned.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            requester_put_at_a_site_being_retired(db),
+        )
+        .await
+        .expect("the statements did not end in time");
+    }
+
+    async fn requester_put_at_a_site_being_retired(db: PgPool) {
         let brightfield = testing::customer(&db, "Brightfield").await;
         let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
             .await
@@ -2227,9 +2251,20 @@ Prefers phone calls."
                     .await
             }
         });
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(
+            testing::some_statement_waits_for_a_lock(&db).await,
+            "putting the requester at the site did not wait for its retirement"
+        );
+        assert!(
+            !meanwhile.is_finished(),
+            "put at the site before it was retired"
+        );
         retiring.commit().await.unwrap();
-        assert!(meanwhile.await.unwrap().is_err(), "put at the retired site");
+        let why = meanwhile.await.unwrap().unwrap_err().to_string();
+        assert!(
+            why.contains("a requester cannot be at a retired site"),
+            "{why}"
+        );
     }
 
     /// The database keeps the rules even when the code above is bypassed.
