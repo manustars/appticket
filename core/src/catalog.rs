@@ -211,11 +211,121 @@ pub(crate) async fn pass_held(
     Ok(())
 }
 
+/// An asset as it is stored, with its source and whether it is retired, as an import compares it.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(crate) struct StoredAsset {
+    pub id: Uuid,
+    pub kind_id: Uuid,
+    pub name: String,
+    pub serial_number: Option<String>,
+    pub site_id: Option<Uuid>,
+    pub holder_id: Option<Uuid>,
+    pub source_addon: Option<String>,
+    pub retired: bool,
+}
+
+impl StoredAsset {
+    /// What an agent would set to leave the asset as it is.
+    pub fn fields(&self) -> AssetFields {
+        AssetFields {
+            kind_id: self.kind_id,
+            name: self.name.clone(),
+            serial_number: self.serial_number.clone(),
+            site_id: self.site_id,
+            holder_id: self.holder_id,
+        }
+    }
+}
+
+/// The [`StoredAsset`]s picked by the end of the query, on `assets`.
+macro_rules! stored_assets {
+    ($rest:literal) => {
+        concat!(
+            "SELECT id, kind_id, name, serial_number, site_id, holder_id, source_addon,
+                    retired_at IS NOT NULL AS retired
+             FROM assets ",
+            $rest
+        )
+    };
+}
+
+/// The customer's assets with that serial number, ignoring case, retired ones too: active ones
+/// first, then by age. Nothing is locked.
+pub(crate) async fn with_serial_number<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    customer: Uuid,
+    serial_number: &str,
+) -> Result<Vec<StoredAsset>> {
+    Ok(sqlx::query_as(stored_assets!(
+        "WHERE customer_id = $1 AND lower(serial_number) = lower($2)
+         ORDER BY retired_at IS NOT NULL, created_at, id"
+    ))
+    .bind(customer)
+    .bind(serial_number)
+    .fetch_all(db)
+    .await?)
+}
+
+/// The customer's assets with that name, ignoring case, retired ones too: active ones first, then
+/// by age. Nothing is locked.
+pub(crate) async fn with_name<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    customer: Uuid,
+    name: &str,
+) -> Result<Vec<StoredAsset>> {
+    Ok(sqlx::query_as(stored_assets!(
+        "WHERE customer_id = $1 AND lower(name) = lower($2)
+         ORDER BY retired_at IS NOT NULL, created_at, id"
+    ))
+    .bind(customer)
+    .bind(name)
+    .fetch_all(db)
+    .await?)
+}
+
+/// The asset as stored, locked against changes (`FOR NO KEY UPDATE`, so that a ticket being
+/// linked to it is not kept waiting). An asset is never deleted.
+pub(crate) async fn lock_stored(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+) -> Result<StoredAsset> {
+    Ok(
+        sqlx::query_as(stored_assets!("WHERE id = $1 FOR NO KEY UPDATE"))
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?,
+    )
+}
+
+/// The asset kind with that name, ignoring case, as kinds are named.
+pub(crate) async fn kind_named<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    name: &str,
+) -> Result<Option<Uuid>> {
+    Ok(
+        sqlx::query_scalar("SELECT id FROM asset_kinds WHERE lower(name) = lower($1)")
+            .bind(name)
+            .fetch_optional(db)
+            .await?,
+    )
+}
+
 /// Adds an asset the customer owns, with its details (see [`update_asset`]).
 pub async fn create_asset(db: &PgPool, customer: Uuid, fields: &AssetFields) -> Result<Uuid> {
     let mut tx = db.begin().await?;
     crate::customers::lock_active(&mut tx, customer).await?;
-    let details = checked_details(&mut tx, customer, fields).await?;
+    let id = create_asset_in(&mut tx, customer, fields).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// [`create_asset`], inside the caller's transaction, `customer` locked by the caller.
+pub(crate) async fn create_asset_in(
+    tx: &mut Transaction<'_, Postgres>,
+    customer: Uuid,
+    fields: &AssetFields,
+) -> Result<Uuid> {
+    let details = checked_details(tx, customer, fields).await?;
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO assets (id, customer_id, kind_id, name, serial_number, site_id, holder_id)
@@ -228,9 +338,8 @@ pub async fn create_asset(db: &PgPool, customer: Uuid, fields: &AssetFields) -> 
     .bind(details.serial_number)
     .bind(fields.site_id)
     .bind(fields.holder_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    tx.commit().await?;
     Ok(id)
 }
 
@@ -252,12 +361,24 @@ pub async fn update_asset(db: &PgPool, id: Uuid, fields: &AssetFields) -> Result
         .await?
         .ok_or(Error::NotFound("asset"))?;
     crate::customers::lock_active(&mut tx, customer).await?;
-    let details = checked_details(&mut tx, customer, fields).await?;
+    update_asset_in(&mut tx, id, customer, fields).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`update_asset`], inside the caller's transaction, the asset's `customer` locked by the caller.
+pub(crate) async fn update_asset_in(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    customer: Uuid,
+    fields: &AssetFields,
+) -> Result<()> {
+    let details = checked_details(tx, customer, fields).await?;
     let retired: bool = sqlx::query_scalar(
         "SELECT retired_at IS NOT NULL FROM assets WHERE id = $1 FOR NO KEY UPDATE",
     )
     .bind(id)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?;
     if retired && fields.holder_id.is_some() {
         return rule("a retired asset has no holder");
@@ -273,9 +394,8 @@ pub async fn update_asset(db: &PgPool, id: Uuid, fields: &AssetFields) -> Result
     .bind(details.serial_number)
     .bind(fields.site_id)
     .bind(fields.holder_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 

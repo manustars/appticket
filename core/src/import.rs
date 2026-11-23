@@ -1,5 +1,5 @@
-//! Importing customers, their sites and their requesters from CSV files. Rules are in
-//! docs/domain-rules.md ("Importing").
+//! Importing customers, their sites, their requesters and their assets from CSV files. Rules are
+//! in docs/domain-rules.md ("Importing").
 
 use std::collections::HashMap;
 
@@ -22,6 +22,7 @@ pub enum Kind {
     Customers,
     Sites,
     Requesters,
+    Assets,
 }
 
 impl Kind {
@@ -30,6 +31,7 @@ impl Kind {
             Kind::Customers => "customers",
             Kind::Sites => "sites",
             Kind::Requesters => "requesters",
+            Kind::Assets => "assets",
         }
     }
 }
@@ -78,8 +80,8 @@ pub struct RowReport {
     /// The line of the file the row starts on; the header is line 1.
     pub line: u64,
     pub outcome: Outcome,
-    /// What the row is about: a customer's name, a site's customer and name, or a requester's
-    /// customer, name and first address.
+    /// What the row is about: a customer's name, a site's customer and name, a requester's
+    /// customer, name and first address, or an asset's customer, name and serial number.
     pub label: String,
     /// The columns whose values a row that updates changes.
     pub changes: Vec<String>,
@@ -133,6 +135,19 @@ pub(crate) const REQUESTER_COLUMNS: &[&str] = &[
     "job_title",
     "site",
     "notes",
+];
+
+/// The columns of an assets file: the asset's customer, by name or by one of its external
+/// references, and the asset.
+pub(crate) const ASSET_COLUMNS: &[&str] = &[
+    "customer",
+    "customer_external_system",
+    "customer_external_name",
+    "name",
+    "serial_number",
+    "kind",
+    "site",
+    "holder",
 ];
 
 /// A file read: its columns and rows, and how it was written.
@@ -237,6 +252,14 @@ impl Table {
                 };
                 format!("{} / {who}", of_customer())
             }
+            // An asset by name and serial number.
+            Kind::Assets => {
+                let what = match (self.cell(row, "name"), self.cell(row, "serial_number")) {
+                    (Some(name), Some(serial)) => format!("{name} ({serial})"),
+                    (name, serial) => name.or(serial).unwrap_or_default().to_owned(),
+                };
+                format!("{} / {what}", of_customer())
+            }
         }
     }
 }
@@ -288,6 +311,7 @@ fn read(kind: Kind, content: &[u8]) -> Result<Table> {
         Kind::Customers => (CUSTOMER_COLUMNS, &["name"]),
         Kind::Sites => (SITE_COLUMNS, &["name", "address"]),
         Kind::Requesters => (REQUESTER_COLUMNS, &["email_addresses"]),
+        Kind::Assets => (ASSET_COLUMNS, &["name", "kind"]),
     };
     let bom = content.starts_with(BOM);
     let content = content.strip_prefix(BOM).unwrap_or(content);
@@ -363,8 +387,8 @@ fn read(kind: Kind, content: &[u8]) -> Result<Table> {
             _ => {}
         }
     }
-    // A site's or a requester's customer, by name or by external reference.
-    if matches!(kind, Kind::Sites | Kind::Requesters)
+    // A site's, a requester's or an asset's customer, by name or by external reference.
+    if matches!(kind, Kind::Sites | Kind::Requesters | Kind::Assets)
         && !columns.contains_key("customer")
         && !columns.contains_key("customer_external_system")
         && !columns.contains_key("customer_external_name")
@@ -493,6 +517,7 @@ async fn import(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) ->
                     site_row(&mut savepoint, table, row, &mut so_far, &mut site_customer).await
                 }
                 Kind::Requesters => requester_row(&mut savepoint, table, row, &mut so_far).await,
+                Kind::Assets => asset_row(&mut savepoint, table, row, &mut so_far).await,
             };
             let (outcome, changes, reason) = match left_out(done)? {
                 Ok(done) => {
@@ -617,6 +642,8 @@ struct SoFar {
     sites: HashMap<Uuid, u64>,
     /// The requesters imported, with the line of the row that did.
     requesters: HashMap<Uuid, u64>,
+    /// The assets imported, with the line of the row that did.
+    assets: HashMap<Uuid, u64>,
     /// The customer rows left out, for the rows that name their customers.
     customers_left_out: Vec<CustomerLeftOut>,
     /// The customer rows imported.
@@ -1177,9 +1204,9 @@ fn requester_changes(before: &RequesterDetails, after: &RequesterDetails) -> Vec
     .collect()
 }
 
-/// The site a requester row names, by name within the requester's customer: one that exists and
-/// is not retired, and whose row, if the sites file has one, is not left out.
-async fn requester_site(
+/// The site a requester or asset row names, by name within the row's customer: one that exists
+/// and is not retired, and whose row, if the sites file has one, is not left out.
+async fn named_site(
     tx: &mut Transaction<'_, Postgres>,
     table: &Table,
     row: &Row,
@@ -1197,8 +1224,8 @@ async fn requester_site(
     .bind(name)
     .fetch_optional(&mut **tx)
     .await?;
-    // Decided on the site found: a row left out about it holds the requester back, unless another
-    // row imported it.
+    // Decided on the site found: a row left out about it holds the row back, unless another row
+    // imported it.
     let imported = found.is_some_and(|id| so_far.sites.contains_key(&id));
     if !imported && let Some(line) = so_far.site_left_out(table, row, customer, name) {
         return rule(format!(
@@ -1218,7 +1245,7 @@ async fn requester_site(
     .await?;
     match retired {
         Some(retired) => rule(format!(
-            "the site {retired} is retired: nobody is put at a retired site"
+            "the site {retired} is retired: a retired site gets no new requesters or assets"
         )),
         None => rule(format!(
             "{} has no site named {name}",
@@ -1275,7 +1302,7 @@ async fn recognise_requester(
     }
     let owners = crate::requesters::owners(&mut **tx, &addresses).await?;
     let requester = recognised(customer, &owners, so_far)?;
-    let site = requester_site(tx, table, row, customer, so_far).await?;
+    let site = named_site(tx, table, row, customer, so_far).await?;
     let to_add = addresses
         .iter()
         .filter(|a| !owners.iter().any(|o| o.address == **a))
@@ -1356,6 +1383,224 @@ async fn write_requester(
     Ok(Done::updated(changed_columns))
 }
 
+/// The asset of `customer` a row is about, by serial number, else by name, both ignoring case;
+/// none for a new one. Retired assets count too, after the active ones, so that a row matching
+/// one is not taken for a new asset.
+async fn recognised_asset(
+    tx: &mut Transaction<'_, Postgres>,
+    customer: Uuid,
+    name: Option<&str>,
+    serial_number: Option<&str>,
+) -> Result<Option<crate::catalog::StoredAsset>> {
+    if let Some(serial_number) = serial_number {
+        let found = crate::catalog::with_serial_number(&mut **tx, customer, serial_number).await?;
+        if let Some(asset) = found.into_iter().next() {
+            return Ok(Some(asset));
+        }
+    }
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    let found = crate::catalog::with_name(&mut **tx, customer, name).await?;
+    Ok(found.into_iter().next())
+}
+
+/// The asset kind a row names, which must exist; none when the cell is empty.
+async fn named_kind(
+    tx: &mut Transaction<'_, Postgres>,
+    table: &Table,
+    row: &Row,
+) -> Result<Option<Uuid>> {
+    let Some(name) = table.cell(row, "kind") else {
+        return Ok(None);
+    };
+    match crate::catalog::kind_named(&mut **tx, name).await? {
+        Some(kind) => Ok(Some(kind)),
+        None => rule(format!("there is no asset kind called {name}")),
+    }
+}
+
+/// The holder an asset row names, by one of their e-mail addresses: a requester of `customer`
+/// who has not departed; none when the cell is empty.
+async fn named_holder(
+    tx: &mut Transaction<'_, Postgres>,
+    table: &Table,
+    row: &Row,
+    customer: Uuid,
+) -> Result<Option<Uuid>> {
+    let Some(written) = table.cell(row, "holder") else {
+        return Ok(None);
+    };
+    let address = crate::requesters::clean_address(written)?;
+    let owner = crate::requesters::owners(&mut **tx, std::slice::from_ref(&address))
+        .await?
+        .into_iter()
+        .next();
+    match owner {
+        None => rule(format!("no requester has the address {address}")),
+        Some(owner) if owner.customer_id != customer => rule(format!(
+            "the holder {address} is a requester of {}: an asset's holder is a requester of its \
+             customer",
+            owner.customer_name
+        )),
+        Some(owner) if owner.departed => rule(format!(
+            "the holder {address} has departed from {}: a departed requester holds no asset",
+            owner.customer_name
+        )),
+        Some(owner) => Ok(Some(owner.requester_id)),
+    }
+}
+
+/// An asset row as recognised, before anything is locked.
+struct AssetFound {
+    customer: Uuid,
+    /// The existing asset the row is about; none for a new one.
+    asset: Option<crate::catalog::StoredAsset>,
+    kind: Option<Uuid>,
+    site: Option<Uuid>,
+    holder: Option<Uuid>,
+}
+
+impl AssetFound {
+    /// The row's filled cells over the asset's details.
+    fn merged(
+        &self,
+        before: &crate::catalog::AssetFields,
+        table: &Table,
+        row: &Row,
+    ) -> crate::catalog::AssetFields {
+        let mut after = before.clone();
+        if let Some(kind) = self.kind {
+            after.kind_id = kind;
+        }
+        if let Some(name) = table.cell(row, "name") {
+            after.name = name.to_owned();
+        }
+        if let Some(serial_number) = table.cell(row, "serial_number") {
+            after.serial_number = Some(serial_number.to_owned());
+        }
+        if self.site.is_some() {
+            after.site_id = self.site;
+        }
+        if self.holder.is_some() {
+            after.holder_id = self.holder;
+        }
+        after
+    }
+}
+
+/// The columns whose values differ, in the order of the columns of an assets file.
+fn asset_changes(
+    before: &crate::catalog::AssetFields,
+    after: &crate::catalog::AssetFields,
+) -> Vec<&'static str> {
+    [
+        ("name", before.name == after.name),
+        ("serial_number", before.serial_number == after.serial_number),
+        ("kind", before.kind_id == after.kind_id),
+        ("site", before.site_id == after.site_id),
+        ("holder", before.holder_id == after.holder_id),
+    ]
+    .into_iter()
+    .filter(|(_, same)| !same)
+    .map(|(column, _)| column)
+    .collect()
+}
+
+async fn asset_row(
+    tx: &mut Transaction<'_, Postgres>,
+    table: &Table,
+    row: &Row,
+    so_far: &mut SoFar,
+) -> Result<Done> {
+    let found = recognise_asset(tx, table, row, so_far).await?;
+    write_asset(tx, table, row, so_far, found).await
+}
+
+/// What an asset row is about, read without locking anything.
+async fn recognise_asset(
+    tx: &mut Transaction<'_, Postgres>,
+    table: &Table,
+    row: &Row,
+    so_far: &SoFar,
+) -> Result<AssetFound> {
+    if let Some(line) = so_far.new_customer_left_out(table, row) {
+        return waits_for_customer(line);
+    }
+    let customer = named_customer(tx, table, row, "an asset needs its customer").await?;
+    if let Some(line) = so_far.existing_customer_left_out(customer) {
+        return waits_for_customer(line);
+    }
+    let name = table.cell(row, "name");
+    let serial_number = table.cell(row, "serial_number");
+    if name.is_none() && serial_number.is_none() {
+        return rule("an asset needs a name or a serial number");
+    }
+    let asset = recognised_asset(tx, customer, name, serial_number).await?;
+    if let Some(line) = asset.as_ref().and_then(|a| so_far.assets.get(&a.id)) {
+        return rule(format!("line {line} already imports this asset"));
+    }
+    let kind = named_kind(tx, table, row).await?;
+    let site = named_site(tx, table, row, customer, so_far).await?;
+    let holder = named_holder(tx, table, row, customer).await?;
+    if asset.is_none() {
+        if name.is_none() {
+            return rule("a new asset needs a name");
+        }
+        if kind.is_none() {
+            return rule("a new asset needs a kind");
+        }
+    }
+    Ok(AssetFound {
+        customer,
+        asset,
+        kind,
+        site,
+        holder,
+    })
+}
+
+/// Creates or updates the asset a row was recognised as; an existing one is locked and read
+/// again first, and only when the row changes it.
+async fn write_asset(
+    tx: &mut Transaction<'_, Postgres>,
+    table: &Table,
+    row: &Row,
+    so_far: &mut SoFar,
+    found: AssetFound,
+) -> Result<Done> {
+    let customer = found.customer;
+    let Some(asset) = &found.asset else {
+        crate::customers::lock_active(tx, customer).await?;
+        // A new asset has a kind and a name: a row without them was refused.
+        let fields = crate::catalog::AssetFields {
+            kind_id: found.kind.unwrap_or_default(),
+            name: String::new(),
+            serial_number: None,
+            site_id: None,
+            holder_id: None,
+        };
+        let id = crate::catalog::create_asset_in(tx, customer, &found.merged(&fields, table, row))
+            .await?;
+        so_far.assets.insert(id, row.line);
+        return Ok(Done::created());
+    };
+    let before = asset.fields();
+    let mut changes = asset_changes(&before, &found.merged(&before, table, row));
+    // Only an asset that changes is written, and locked; it is read again under the lock, so
+    // that a change made meanwhile is kept and the report says what is written.
+    if !changes.is_empty() {
+        crate::customers::lock_active(tx, customer).await?;
+        let stored = crate::catalog::lock_stored(tx, asset.id).await?;
+        let before = stored.fields();
+        let after = found.merged(&before, table, row);
+        changes = asset_changes(&before, &after);
+        crate::catalog::update_asset_in(tx, asset.id, customer, &after).await?;
+    }
+    so_far.assets.insert(asset.id, row.line);
+    Ok(Done::updated(changes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1431,6 +1676,141 @@ mod tests {
             kind: Kind::Requesters,
             content: csv.as_bytes().to_vec(),
         }
+    }
+
+    fn assets(csv: &str) -> File {
+        File {
+            kind: Kind::Assets,
+            content: csv.as_bytes().to_vec(),
+        }
+    }
+
+    /// An asset as the customer's page shows it: name, serial number, kind, own site, holder's
+    /// first address, and whether it is retired.
+    type ShownAsset = (
+        String,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+        bool,
+    );
+
+    /// The customer's assets, as its page shows them.
+    async fn assets_of(db: &PgPool, customer: Uuid) -> Vec<ShownAsset> {
+        crate::catalog::assets_of(db, customer)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|a| {
+                (
+                    a.name,
+                    a.serial_number,
+                    a.kind,
+                    a.site.map(|s| s.name),
+                    a.holder.and_then(|h| h.address),
+                    a.retired_at.is_some(),
+                )
+            })
+            .collect()
+    }
+
+    fn shown(
+        name: &str,
+        serial_number: Option<&str>,
+        kind: &str,
+        site: Option<&str>,
+        holder: Option<&str>,
+    ) -> ShownAsset {
+        (
+            name.to_owned(),
+            serial_number.map(str::to_owned),
+            kind.to_owned(),
+            site.map(str::to_owned),
+            holder.map(str::to_owned),
+            false,
+        )
+    }
+
+    #[sqlx::test]
+    async fn assets_are_created_and_updated_by_serial_number_else_by_name(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let office = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let ada = crate::testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let laptop = crate::asset_kinds::create(&db, "Laptop", true)
+            .await
+            .unwrap();
+        crate::asset_kinds::create(&db, "Desktop", false)
+            .await
+            .unwrap();
+        crate::asset_kinds::create(&db, "Printer", false)
+            .await
+            .unwrap();
+        let details = crate::testing::asset_details;
+        for fields in [
+            details(laptop, "PC-0042", Some("SN-0042"), None, None),
+            details(laptop, "PC-0043", None, None, None),
+            details(laptop, "PC-0044", Some("SN-0044"), Some(office), Some(ada)),
+        ] {
+            crate::catalog::create_asset(&db, brightfield, &fields)
+                .await
+                .unwrap();
+        }
+        let file = "customer,name,serial_number,kind,site,holder\n\
+            Brightfield,PC-0042 Ada,SN-0042,,head office,ADA@brightfield.test\n\
+            Brightfield,PC-0043,SN-0043,desktop,,\n\
+            Brightfield,Printer 2F,,printer,Head office,\n\
+            Brightfield,,SN-0044,,,\n";
+
+        let preview = import(&db, vec![assets(file)], Mode::Preview).await;
+        assert_eq!(
+            outcomes(&preview),
+            [[
+                (2, Outcome::Update, "Brightfield / PC-0042 Ada (SN-0042)"),
+                (3, Outcome::Update, "Brightfield / PC-0043 (SN-0043)"),
+                (4, Outcome::Create, "Brightfield / Printer 2F"),
+                (5, Outcome::Unchanged, "Brightfield / SN-0044"),
+            ]]
+        );
+        assert_eq!(
+            preview.files[0].rows[0].changes,
+            ["name", "site", "holder"],
+            "recognised by its serial number, renamed"
+        );
+        assert_eq!(
+            preview.files[0].rows[1].changes,
+            ["serial_number", "kind"],
+            "recognised by its name, given its serial number"
+        );
+        assert_eq!(assets_of(&db, brightfield).await.len(), 3);
+
+        import(&db, vec![assets(file)], Mode::Apply).await;
+        assert_eq!(
+            assets_of(&db, brightfield).await,
+            [
+                shown("PC-0043", Some("SN-0043"), "Desktop", None, None),
+                shown(
+                    "PC-0042 Ada",
+                    Some("SN-0042"),
+                    "Laptop",
+                    Some("Head office"),
+                    Some("ada@brightfield.test")
+                ),
+                shown(
+                    "PC-0044",
+                    Some("SN-0044"),
+                    "Laptop",
+                    Some("Head office"),
+                    Some("ada@brightfield.test")
+                ),
+                shown("Printer 2F", None, "Printer", Some("Head office"), None),
+            ],
+            "a filled cell sets a value, an empty one leaves it"
+        );
     }
 
     /// The customer's requesters, as their pages show them.
