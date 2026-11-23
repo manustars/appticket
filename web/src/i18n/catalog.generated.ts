@@ -130,6 +130,8 @@ export interface Messages {
   "entry.gaveUp": { plural: false; placeholders: "error"; tags: never }
   "entry.unknownError": { plural: false; placeholders: never; tags: never }
   "entry.retrying": { plural: false; placeholders: "error"; tags: never }
+  "entry.announcement": { plural: false; placeholders: never; tags: never }
+  "entry.announcedTo": { plural: true; placeholders: "count"; tags: never }
   "composer.modes": { plural: false; placeholders: never; tags: never }
   "composer.reply": { plural: false; placeholders: never; tags: never }
   "composer.replyKeyRequesters": { plural: false; placeholders: never; tags: never }
@@ -198,6 +200,11 @@ export interface Messages {
   "parent.confirmResolve": { plural: true; placeholders: "count" | "number"; tags: never }
   "parent.resolved": { plural: true; placeholders: "count"; tags: never }
   "parent.writtenTo": { plural: true; placeholders: "count"; tags: never }
+  "parent.announce": { plural: false; placeholders: never; tags: never }
+  "parent.announcement": { plural: false; placeholders: never; tags: never }
+  "parent.announceHint": { plural: false; placeholders: never; tags: never }
+  "parent.confirmAnnounce": { plural: false; placeholders: "number"; tags: never }
+  "parent.announced": { plural: true; placeholders: "count"; tags: never }
   "customers.title": { plural: false; placeholders: never; tags: never }
   "customers.name": { plural: false; placeholders: never; tags: never }
   "customers.domains": { plural: false; placeholders: never; tags: never }

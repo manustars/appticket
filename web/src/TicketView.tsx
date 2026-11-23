@@ -344,6 +344,32 @@ function Entry({ entry }: { entry: TimelineEntry }) {
       </li>
     )
   }
+  if (entry.kind === 'announcement') {
+    return (
+      <li className="entry announcement outbound">
+        <div className="entry-head">
+          <span className="tag">{t('entry.announcement')}</span>
+          <span className="who">{entry.author_name}</span>
+          <time className="when" dateTime={entry.created_at}>{formatTime(entry.created_at)}</time>
+        </div>
+        <div className="subject">{entry.subject}</div>
+        <p className="body">{entry.body}</p>
+        {/* A long list starts folded, so that the conversation around it stays readable. */}
+        <details className="recipients" open={entry.recipients.length <= 5}>
+          <summary>{t('entry.announcedTo', { count: entry.recipients.length })}</summary>
+          <ul>
+            {entry.recipients.map((r) => (
+              <li key={r.requester_id}>
+                <span>{r.name ? <>{r.name} <span className="muted">&lt;{r.address}&gt;</span></> : r.address}</span>
+                <span className="muted">{r.customer_name}</span>
+                <SendStatus sentAt={r.sent_at} gaveUp={r.gave_up} />
+              </li>
+            ))}
+          </ul>
+        </details>
+      </li>
+    )
+  }
   const outbound = entry.direction === 'outbound'
   const sender = entry.from_name ? `${entry.from_name} <${entry.from_address}>` : entry.from_address
   return (
@@ -353,11 +379,7 @@ function Entry({ entry }: { entry: TimelineEntry }) {
         <span className="who">
           {outbound ? <>{entry.author_name ?? sender} <span className="muted">{t('entry.to', { address: entry.to_address ?? '—' })}</span></> : sender}
         </span>
-        {outbound && (entry.sent_at
-          ? <span className="status sent">{t('entry.sent', { time: formatTime(entry.sent_at) })}</span>
-          : entry.gave_up
-            ? <span className="status failed">{t('entry.notSent')}</span>
-            : <span className="status queued">{t('entry.queued')}</span>)}
+        {outbound && <SendStatus sentAt={entry.sent_at} gaveUp={entry.gave_up} />}
         <time className="when" dateTime={entry.created_at}>{formatTime(entry.created_at)}</time>
       </div>
       {entry.subject && <div className="subject">{entry.subject}</div>}
@@ -372,6 +394,15 @@ function Entry({ entry }: { entry: TimelineEntry }) {
       )}
     </li>
   )
+}
+
+/** Where an outgoing message stands: sent, still in the outbox, or given up on. */
+function SendStatus({ sentAt, gaveUp }: { sentAt?: string | null, gaveUp: boolean }) {
+  const { t, formatTime } = useI18n()
+  if (sentAt) return <span className="status sent">{t('entry.sent', { time: formatTime(sentAt) })}</span>
+  return gaveUp
+    ? <span className="status failed">{t('entry.notSent')}</span>
+    : <span className="status queued">{t('entry.queued')}</span>
 }
 
 type Mode = 'reply' | 'note'
