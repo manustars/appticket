@@ -54,7 +54,7 @@ pub async fn sign_in(
         .as_deref()
         .map(crate::agents::normalized_email)
         .filter(|email| !email.is_empty());
-    // Only an address the provider verified is linked by or taken over.
+    // Only an address the provider verified links the identity the first time.
     let verified_email = email.as_ref().filter(|_| identity.email_verified);
     // The agent, and whether they are active.
     let linked: Option<(Uuid, bool)> = sqlx::query_as(
@@ -119,7 +119,8 @@ pub async fn sign_in(
     {
         return Ok(Err(Refusal::EmailOfAnotherAgent));
     }
-    // The name and a verified e-mail address follow the provider.
+    // The name and the e-mail address follow the provider, the address verified or not; a
+    // missing or blank one keeps what the agent has.
     let name = identity
         .name
         .as_deref()
@@ -130,7 +131,7 @@ pub async fn sign_in(
     )
     .bind(agent)
     .bind(name)
-    .bind(&verified_email)
+    .bind(&email)
     .execute(&mut *tx)
     .await?;
     let token = auth::open_session(&mut *tx, agent, OpenedWith::OpenIdConnect, lifetime).await?;
@@ -259,11 +260,11 @@ mod tests {
             ("Lena Brook".to_owned(), "lena.brook@example.com".to_owned())
         );
 
-        // A linked identity no longer needs a verified address to be found; an unverified one is
-        // not taken over, nor is a missing name.
+        // A linked identity no longer needs a verified address: an unverified one is taken over
+        // all the same, while a missing name is not.
         let unverified = Identity {
             name: None,
-            ..identity("sub-lena", "lena@elsewhere.test", false, "")
+            ..identity("sub-lena", "Lena@Elsewhere.test", false, "")
         };
         assert_eq!(
             sign_in(&db, &unverified, HOURS_12)
@@ -275,8 +276,25 @@ mod tests {
         );
         assert_eq!(
             name_and_email(&db, lena).await,
-            ("Lena Brook".to_owned(), "lena.brook@example.com".to_owned())
+            ("Lena Brook".to_owned(), "lena@elsewhere.test".to_owned())
         );
+
+        // Without an address from the provider, or with a blank one, she keeps hers.
+        for email in [None, Some(" ".to_owned())] {
+            let without = Identity {
+                email,
+                ..identity("sub-lena", "", true, "Lena Brook")
+            };
+            assert_eq!(
+                sign_in(&db, &without, HOURS_12)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .agent,
+                lena
+            );
+            assert_eq!(name_and_email(&db, lena).await.1, "lena@elsewhere.test");
+        }
     }
 
     async fn deactivated(db: &PgPool, agent: Uuid) -> bool {
