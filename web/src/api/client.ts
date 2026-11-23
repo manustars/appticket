@@ -328,6 +328,17 @@ export async function retireSite(id: string): Promise<void> {
   await call('POST', `${sitePath(id)}/retire`)
 }
 
+/** Gives the customer an external reference; refused when the name already names a customer in that system. */
+export async function addExternalReference(customer: string, system: string, name: string): Promise<void> {
+  const request: Schemas['NewExternalReference'] = { system, name }
+  await call('POST', `${customerPath(customer)}/external-references`, request)
+}
+
+/** Takes an external reference from its customer; its name is free again in its system. */
+export async function removeExternalReference(id: string): Promise<void> {
+  await call('DELETE', `/api/external-references/${encodeURIComponent(id)}`)
+}
+
 const requesterPath = (id: string) => `/api/requesters/${encodeURIComponent(id)}`
 
 /** A requester's page: their customer, addresses and details. */

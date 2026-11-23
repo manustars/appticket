@@ -1,6 +1,8 @@
 //! The part of the API add-ons call, with `Authorization: Bearer <token>`. Each operation needs
 //! a scope the add-on was registered with.
 
+use std::collections::HashMap;
+
 use axum::{
     Json,
     extract::{FromRequestParts, Path, Query, State},
@@ -101,9 +103,21 @@ pub struct AddonCustomer {
     is_help_desk: bool,
     /// Mail domains that identify the customer's requesters.
     domains: Vec<String>,
+    /// The names other systems use for the customer, by system and name. A name names exactly
+    /// one customer within its system; systems and names are compared ignoring case.
+    #[sqlx(skip)]
+    external_references: Vec<AddonExternalReference>,
 }
 
-/// Customers that can get tickets, with their mail domains. Scope `directory:read`.
+/// A name another system uses for a customer, such as a group in a monitoring tool.
+#[derive(Serialize, ToSchema)]
+pub struct AddonExternalReference {
+    system: String,
+    name: String,
+}
+
+/// Customers that can get tickets, with their mail domains and external references. Scope
+/// `directory:read`.
 #[utoipa::path(get, path = "/api/addon/customers", tag = "add-ons",
     responses((status = OK, body = Vec<AddonCustomer>), (status = CONFLICT, body = Problem),
         (status = UNAUTHORIZED, body = Problem)))]
@@ -112,16 +126,28 @@ async fn customers(
     caller: Caller,
 ) -> Result<Json<Vec<AddonCustomer>>, ApiError> {
     caller.require(DIRECTORY_READ)?;
-    Ok(Json(
-        sqlx::query_as(
-            "SELECT c.id, c.name, c.is_help_desk,
-                    coalesce((SELECT array_agg(d.domain ORDER BY d.domain) FROM customer_domains d
-                              WHERE d.customer_id = c.id), '{}') AS domains
-             FROM customers c WHERE c.offboarded_at IS NULL ORDER BY c.name",
-        )
-        .fetch_all(&state.db)
-        .await?,
-    ))
+    let mut customers: Vec<AddonCustomer> = sqlx::query_as(
+        "SELECT c.id, c.name, c.is_help_desk,
+                coalesce((SELECT array_agg(d.domain ORDER BY d.domain) FROM customer_domains d
+                          WHERE d.customer_id = c.id), '{}') AS domains
+         FROM customers c WHERE c.offboarded_at IS NULL ORDER BY c.name",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    // Only the references of the customers listed: the add-on sees nothing of the others.
+    let at: HashMap<Uuid, usize> = customers
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+    for (customer, system, name) in crate::external_references::all(&state.db).await? {
+        if let Some(&i) = at.get(&customer) {
+            customers[i]
+                .external_references
+                .push(AddonExternalReference { system, name });
+        }
+    }
+    Ok(Json(customers))
 }
 
 /// A customer's active assets. Scope `directory:read`.

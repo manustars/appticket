@@ -1099,3 +1099,142 @@ async fn a_requester_departs_and_comes_back_through_the_api(db: PgPool) {
     let ticket = api.get(&format!("/api/tickets/{n}")).await;
     assert_eq!(ticket["requester"]["departed"], false);
 }
+
+/// External references are listed on the customer's page, added and removed by those who manage
+/// customers; a name already naming another customer in the same system is refused.
+#[sqlx::test]
+async fn external_references_are_managed_through_the_api(db: PgPool) {
+    use crate::roles::Permission;
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let harbor = testing::customer(&db, "Harbor Lane").await;
+    let add = |customer: Uuid, system: &str, name: &str| {
+        (
+            format!("/api/customers/{customer}/external-references"),
+            serde_json::json!({ "system": system, "name": name }),
+        )
+    };
+
+    let (uri, body) = add(brightfield, "Watchtower", "Brightfield/Offices");
+    let (status, created) = api.call("POST", &uri, Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let offices = created["id"].as_str().unwrap().to_owned();
+    let (uri, body) = add(brightfield, "Watchtower", "Brightfield/Lab");
+    let (status, _) = api.call("POST", &uri, Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (uri, body) = add(harbor, "watchtower", "brightfield/offices");
+    let (status, refused) = api.call("POST", &uri, Some(body)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains("Brightfield"),
+        "{refused}"
+    );
+
+    let page = api.get(&format!("/api/customers/{brightfield}")).await;
+    let listed: Vec<(&str, &str)> = page["external_references"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["system"].as_str().unwrap(), r["name"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("Watchtower", "Brightfield/Lab"),
+            ("Watchtower", "Brightfield/Offices")
+        ]
+    );
+
+    // Changing them needs managing customers.
+    let reader = role_with(&db, "Reader", &[Permission::WorkTickets]).await;
+    let rita = Client::with_role(&db, "rita@northgate.test", reader).await;
+    let (uri, body) = add(harbor, "Watchtower", "Harbor");
+    let (status, _) = rita.call("POST", &uri, Some(body)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = rita
+        .call(
+            "DELETE",
+            &format!("/api/external-references/{offices}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _) = api
+        .call(
+            "DELETE",
+            &format!("/api/external-references/{offices}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let page = api.get(&format!("/api/customers/{brightfield}")).await;
+    assert_eq!(page["external_references"].as_array().unwrap().len(), 1);
+    let (status, _) = api
+        .call(
+            "DELETE",
+            &format!("/api/external-references/{offices}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (uri, body) = add(harbor, "Watchtower", "Brightfield/Offices");
+    let (status, _) = api.call("POST", &uri, Some(body)).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "the removed name is free again"
+    );
+}
+
+/// Add-ons with `directory:read` read the external references of the customers they see, so that
+/// they tell which customer a name of their own system belongs to.
+#[sqlx::test]
+async fn an_addon_reads_the_external_references_of_the_customers_it_sees(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let harbor = crate::customers::create(&db, "Harbor Lane", &[])
+        .await
+        .unwrap();
+    crate::external_references::add(&db, brightfield, "Watchtower", "Brightfield/Offices")
+        .await
+        .unwrap();
+    crate::external_references::add(&db, harbor, "Watchtower", "Harbor")
+        .await
+        .unwrap();
+    crate::customers::offboard(&db, harbor).await.unwrap();
+
+    let directory = crate::addons::register(
+        &db,
+        "watchtower",
+        "http://127.0.0.1:9",
+        &[],
+        &[crate::addons::DIRECTORY_READ.into()],
+    )
+    .await
+    .unwrap();
+    let bot = Client::new_with_token(&db, &directory.token, api.agent);
+    let customers = bot.get("/api/addon/customers").await;
+    let customers = customers.as_array().unwrap();
+    assert_eq!(customers.len(), 1, "offboarded customers are not seen");
+    assert_eq!(customers[0]["name"], "Brightfield");
+    assert_eq!(
+        customers[0]["external_references"],
+        serde_json::json!([{ "system": "Watchtower", "name": "Brightfield/Offices" }])
+    );
+
+    let blind = crate::addons::register(
+        &db,
+        "blind",
+        "http://127.0.0.1:9",
+        &[],
+        &[crate::addons::TICKETS_READ.into()],
+    )
+    .await
+    .unwrap();
+    let (status, _) = Client::new_with_token(&db, &blind.token, api.agent)
+        .call("GET", "/api/addon/customers", None)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "directory:read is needed");
+}

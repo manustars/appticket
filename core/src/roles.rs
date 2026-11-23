@@ -31,7 +31,7 @@ pub enum Permission {
     #[serde(rename = "inbox.triage")]
     SortInbox,
     /// Adding customers, correcting their details, offboarding them and bringing them back; their
-    /// domains, sites and requesters.
+    /// domains, sites, external references and requesters.
     #[serde(rename = "customers.manage")]
     ManageCustomers,
     /// Adding, changing and retiring assets and services.

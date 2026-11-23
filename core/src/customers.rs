@@ -42,6 +42,8 @@ pub struct CustomerDetail {
     pub requester_list: Vec<RequesterEntry>,
     /// The customer's sites, active ones first.
     pub sites: Vec<crate::sites::Site>,
+    /// The names other systems use for the customer, by system and name.
+    pub external_references: Vec<crate::external_references::ExternalReference>,
 }
 
 #[derive(Serialize, ToSchema, sqlx::FromRow)]
@@ -112,6 +114,7 @@ pub async fn detail(db: &PgPool, id: Uuid) -> Result<CustomerDetail> {
         notes: details.notes,
         requester_list,
         sites: crate::sites::of(db, id).await?,
+        external_references: crate::external_references::of(db, id).await?,
     })
 }
 

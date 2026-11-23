@@ -27,6 +27,18 @@ pub struct Customer {
     /// Mail domains that identify the customer's requesters.
     #[serde(default)]
     pub domains: Vec<String>,
+    /// The names other systems use for the customer, by system and name. Empty from a core that
+    /// predates external references.
+    #[serde(default)]
+    pub external_references: Vec<ExternalReference>,
+}
+
+/// A name another system uses for a customer, such as a group in a monitoring tool. A name names
+/// exactly one customer within its system; the core compares systems and names ignoring case.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalReference {
+    pub system: String,
+    pub name: String,
 }
 
 /// An active asset of a customer.

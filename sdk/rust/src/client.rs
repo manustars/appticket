@@ -187,7 +187,8 @@ impl Client {
         self.get("/whoami", &[]).await
     }
 
-    /// Customers that can get tickets, with their mail domains. Scope `directory:read`.
+    /// Customers that can get tickets, with their mail domains and external references. Scope
+    /// `directory:read`.
     pub async fn customers(&self) -> Result<Vec<Customer>, Error> {
         self.get("/customers", &[]).await
     }
