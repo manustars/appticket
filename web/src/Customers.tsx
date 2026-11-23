@@ -698,7 +698,8 @@ function Requesters({ customer: c, readOnly, onChanged, onSignedOut }: PartProps
                           onChange={(e) => setKey(r.id, e.target.value)}>
                           <option value="">{t('customer.notKeyRequester')}</option>
                           {r.addresses.map((a) => (
-                            <option key={a} value={a}>{t('customer.keyRequesterAt', { address: a })}</option>
+                            // The column says "Key requester": the address alone keeps the list narrow.
+                            <option key={a} value={a}>{a}</option>
                           ))}
                         </select>
                       )}
