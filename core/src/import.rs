@@ -473,6 +473,7 @@ pub async fn run(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -
             // Each row on its own: one left out leaves nothing behind.
             let mut savepoint = tx.begin().await?;
             let mut candidates = Vec::new();
+            let mut site_customer = None;
             let done = match kind {
                 // The database's text cannot hold it.
                 _ if row.cells.iter().any(|cell| cell.contains('\0')) => {
@@ -481,7 +482,9 @@ pub async fn run(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -
                 Kind::Customers => {
                     customer_row(&mut savepoint, table, row, &mut so_far, &mut candidates).await
                 }
-                Kind::Sites => site_row(&mut savepoint, table, row, &mut so_far).await,
+                Kind::Sites => {
+                    site_row(&mut savepoint, table, row, &mut so_far, &mut site_customer).await
+                }
                 Kind::Requesters => requester_row(&mut savepoint, table, row, &mut so_far).await,
             };
             let (outcome, changes, reason) = match left_out(done)? {
@@ -501,6 +504,14 @@ pub async fn run(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -
                             line: row.line,
                             customers: candidates,
                             keys: Keys::of_customer(table, row),
+                        });
+                    }
+                    if *kind == Kind::Sites {
+                        so_far.sites_left_out.push(SiteLeftOut {
+                            line: row.line,
+                            customer: site_customer,
+                            keys: Keys::of_its_customer(table, row),
+                            name: table.cell(row, "name").map(str::to_lowercase),
                         });
                     }
                     (Outcome::LeftOut, Vec::new(), Some(why))
@@ -567,6 +578,19 @@ struct SoFar {
     customers_left_out: Vec<CustomerLeftOut>,
     /// The customer rows imported.
     customers_imported: Vec<Keys>,
+    /// The site rows left out, for the requester rows that name their sites.
+    sites_left_out: Vec<SiteLeftOut>,
+}
+
+/// A site row left out.
+struct SiteLeftOut {
+    line: u64,
+    /// The customer the row was found to be about, when it got that far.
+    customer: Option<Uuid>,
+    /// How the row names its customer.
+    keys: Keys,
+    /// The site's name, ignoring case.
+    name: Option<String>,
 }
 
 /// A customer row left out.
@@ -599,6 +623,17 @@ impl Keys {
         Keys::of(table, row, "name", "external_system", "external_name")
     }
 
+    /// How a row of a sites or requesters file names its customer.
+    fn of_its_customer(table: &Table, row: &Row) -> Keys {
+        Keys::of(
+            table,
+            row,
+            "customer",
+            "customer_external_system",
+            "customer_external_name",
+        )
+    }
+
     /// Whether both name the same customer, by name or by external reference.
     fn meet(&self, other: &Keys) -> bool {
         fn same<T: PartialEq>(a: &Option<T>, b: &Option<T>) -> bool {
@@ -612,13 +647,7 @@ impl SoFar {
     /// The line of a customer row left out that would have created the customer a site row
     /// names, unless another row imported that customer.
     fn new_customer_left_out(&self, table: &Table, row: &Row) -> Option<u64> {
-        let keys = Keys::of(
-            table,
-            row,
-            "customer",
-            "customer_external_system",
-            "customer_external_name",
-        );
+        let keys = Keys::of_its_customer(table, row);
         if self.customers_imported.iter().any(|k| k.meet(&keys)) {
             return None;
         }
@@ -637,6 +666,20 @@ impl SoFar {
         self.customers_left_out
             .iter()
             .find(|left_out| left_out.customers.contains(&customer))
+            .map(|left_out| left_out.line)
+    }
+
+    /// The line of a site row left out that was about the site of `customer` a requester row
+    /// names.
+    fn site_left_out(&self, table: &Table, row: &Row, customer: Uuid, name: &str) -> Option<u64> {
+        let keys = Keys::of_its_customer(table, row);
+        let name = name.to_lowercase();
+        self.sites_left_out
+            .iter()
+            .find(|left_out| {
+                left_out.name.as_ref() == Some(&name)
+                    && (left_out.customer == Some(customer) || left_out.keys.meet(&keys))
+            })
             .map(|left_out| left_out.line)
     }
 }
@@ -922,23 +965,28 @@ async fn named_customer(
     Ok(id)
 }
 
+/// Refuses a site or requester row whose customer row is left out.
+fn waits_for_customer(line: u64) -> Result<Done> {
+    rule(format!(
+        "the row of its customer, line {line} of the customers file, is left out"
+    ))
+}
+
+/// A site row; `found` gets the customer it is about, once it is known.
 async fn site_row(
     tx: &mut Transaction<'_, Postgres>,
     table: &Table,
     row: &Row,
     so_far: &mut SoFar,
+    found: &mut Option<Uuid>,
 ) -> Result<Done> {
-    let waits = |line| {
-        rule(format!(
-            "the row of its customer, line {line} of the customers file, is left out"
-        ))
-    };
     if let Some(line) = so_far.new_customer_left_out(table, row) {
-        return waits(line);
+        return waits_for_customer(line);
     }
     let customer = named_customer(tx, table, row, "a site needs its customer").await?;
+    *found = Some(customer);
     if let Some(line) = so_far.existing_customer_left_out(customer) {
-        return waits(line);
+        return waits_for_customer(line);
     }
     let Some(name) = table.cell(row, "name") else {
         return rule("a site needs a name");
@@ -1132,24 +1180,54 @@ fn requester_changes(before: &RequesterDetails, after: &RequesterDetails) -> Vec
     .collect()
 }
 
-/// The site a requester row names, by name within the requester's customer.
+/// The site a requester row names, by name within the requester's customer: one that exists and
+/// is not retired, and whose row, if the sites file has one, is not left out.
 async fn requester_site(
     tx: &mut Transaction<'_, Postgres>,
     table: &Table,
     row: &Row,
     customer: Uuid,
+    so_far: &SoFar,
 ) -> Result<Option<Uuid>> {
     let Some(name) = table.cell(row, "site") else {
         return Ok(None);
     };
-    Ok(sqlx::query_scalar(
+    let found: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM sites
          WHERE customer_id = $1 AND lower(name) = lower($2) AND retired_at IS NULL",
     )
     .bind(customer)
     .bind(name)
     .fetch_optional(&mut **tx)
-    .await?)
+    .await?;
+    // Decided on the site found: a row left out about it holds the requester back, unless another
+    // row imported it.
+    let imported = found.is_some_and(|id| so_far.sites.contains_key(&id));
+    if !imported && let Some(line) = so_far.site_left_out(table, row, customer, name) {
+        return rule(format!(
+            "the row of its site, line {line} of the sites file, is left out"
+        ));
+    }
+    if found.is_some() {
+        return Ok(found);
+    }
+    let retired: Option<String> = sqlx::query_scalar(
+        "SELECT name FROM sites WHERE customer_id = $1 AND lower(name) = lower($2)
+         ORDER BY retired_at DESC LIMIT 1",
+    )
+    .bind(customer)
+    .bind(name)
+    .fetch_optional(&mut **tx)
+    .await?;
+    match retired {
+        Some(retired) => rule(format!(
+            "the site {retired} is retired: nobody is put at a retired site"
+        )),
+        None => rule(format!(
+            "{} has no site named {name}",
+            name_of(tx, customer).await?
+        )),
+    }
 }
 
 async fn requester_row(
@@ -1158,7 +1236,13 @@ async fn requester_row(
     row: &Row,
     so_far: &mut SoFar,
 ) -> Result<Done> {
+    if let Some(line) = so_far.new_customer_left_out(table, row) {
+        return waits_for_customer(line);
+    }
     let customer = named_customer(tx, table, row, "a requester needs its customer").await?;
+    if let Some(line) = so_far.existing_customer_left_out(customer) {
+        return waits_for_customer(line);
+    }
     let mut addresses: Vec<String> = Vec::new();
     for written in addresses_in(table.cell(row, "email_addresses")) {
         let address = crate::requesters::clean_address(written)?;
@@ -1166,9 +1250,12 @@ async fn requester_row(
             addresses.push(address);
         }
     }
+    if addresses.is_empty() {
+        return rule("a requester needs an e-mail address");
+    }
     let owners = owners(tx, &addresses).await?;
     let found = recognised(customer, &owners, so_far)?;
-    let site = requester_site(tx, table, row, customer).await?;
+    let site = requester_site(tx, table, row, customer, so_far).await?;
     let new: Vec<&String> = addresses
         .iter()
         .filter(|a| !owners.iter().any(|o| o.address == **a))
@@ -1464,6 +1551,121 @@ mod tests {
         assert_eq!((cleo.addresses.len(), cleo.name), (1, None));
         let dan = crate::requesters::detail(&db, dan).await.unwrap();
         assert_eq!(dan.addresses, ["dan@harbor.test"], "the address stays with Dan");
+    }
+
+    #[sqlx::test]
+    async fn a_requester_needs_a_customer_and_a_site_that_exist(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let office = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let old = crate::sites::create(&db, brightfield, "Old lab", "Via del Glicine 3")
+            .await
+            .unwrap();
+        crate::sites::retire(&db, old).await.unwrap();
+        let gone = crate::customers::create(&db, "Ninefold", &[])
+            .await
+            .unwrap();
+        crate::customers::offboard(&db, gone).await.unwrap();
+
+        let file = "customer,email_addresses,site\n\
+            Nowhere,a@nowhere.test,\n\
+            Ninefold,b@ninefold.test,\n\
+            ,c@brightfield.test,\n\
+            Brightfield,,\n\
+            Brightfield,not-an-address,\n\
+            Brightfield,d@brightfield.test,Lab\n\
+            Brightfield,e@brightfield.test,old lab\n\
+            Brightfield,f@brightfield.test,head office\n\
+            Brightfield,F@brightfield.test,\n";
+        let report = import(&db, vec![requesters(file)], Mode::Apply).await;
+        let reasons = reasons(&report.files[0]);
+        let expected = [
+            (2, "no customer is named Nowhere"),
+            (3, "Ninefold is offboarded"),
+            (4, "a requester needs its customer"),
+            (5, "a requester needs an e-mail address"),
+            (6, "is not an e-mail address"),
+            (7, "Brightfield has no site named Lab"),
+            (8, "the site Old lab is retired"),
+            (10, "line 9 already imports this requester"),
+        ];
+        assert_eq!(reasons.len(), expected.len(), "{reasons:?}");
+        for ((line, why), (expected_line, expected)) in reasons.iter().zip(expected) {
+            assert!(
+                *line == expected_line && why.contains(expected),
+                "line {line}: {why}"
+            );
+        }
+        let shown: Vec<(Vec<String>, Option<Uuid>)> = requesters_of(&db, brightfield)
+            .await
+            .into_iter()
+            .map(|r| (r.addresses, r.site.map(|s| s.id)))
+            .collect();
+        assert_eq!(shown, [(vec!["f@brightfield.test".to_owned()], Some(office))]);
+        assert!(requesters_of(&db, gone).await.is_empty());
+    }
+
+    #[sqlx::test]
+    async fn requesters_follow_the_customers_and_sites_of_the_same_import(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let customers_file = "name,tax_country\n\
+            Harbor Lane,\n\
+            Copperleaf,ITA\n\
+            Brightfield,ITA\n";
+        let sites_file = "customer,name,address\n\
+            Harbor Lane,Head office,Molo delle Reti 2\n\
+            Harbor Lane,Lab,\n";
+        let requesters_file = "customer,email_addresses,site\n\
+            Harbor Lane,cleo@harbor.test,head office\n\
+            Copperleaf,lia@copperleaf.test,\n\
+            Harbor Lane,dan@harbor.test,lab\n\
+            Brightfield,ada@brightfield.test,\n";
+        let report = import(
+            &db,
+            vec![
+                requesters(requesters_file),
+                sites(sites_file),
+                customers(customers_file),
+            ],
+            Mode::Apply,
+        )
+        .await;
+        assert_eq!(
+            report.files.iter().map(|f| f.kind).collect::<Vec<_>>(),
+            [Kind::Customers, Kind::Sites, Kind::Requesters],
+            "requesters last, whatever order the files come in"
+        );
+        assert_eq!(
+            outcomes(&report)[2][0],
+            (2, Outcome::Create, "Harbor Lane / cleo@harbor.test")
+        );
+        let reasons = reasons(&report.files[2]);
+        let expected = [
+            (3, "the row of its customer, line 3 of the customers file, is left out"),
+            (4, "the row of its site, line 3 of the sites file, is left out"),
+            (5, "the row of its customer, line 4 of the customers file, is left out"),
+        ];
+        assert_eq!(reasons.len(), expected.len(), "{reasons:?}");
+        for ((line, why), (expected_line, expected)) in reasons.iter().zip(expected) {
+            assert!(
+                *line == expected_line && why.contains(expected),
+                "line {line}: {why}"
+            );
+        }
+        let harbor = id_of(&db, "Harbor Lane").await;
+        let shown = requesters_of(&db, harbor).await;
+        assert_eq!(shown.len(), 1);
+        assert_eq!(
+            (shown[0].addresses.as_slice(), shown[0].site.as_ref().map(|s| s.name.as_str())),
+            (["cleo@harbor.test".to_owned()].as_slice(), Some("Head office")),
+            "a requester at a site the sites file creates"
+        );
+        assert!(requesters_of(&db, brightfield).await.is_empty());
     }
 
     /// The customer's sites: name, address and whether retired.
