@@ -31,6 +31,30 @@ use crate::sign_in_limits::AddressKey;
 
 mod check;
 
+/// The development Keycloak (`dev/keycloak`, started by compose.yaml and in CI), for tests.
+#[cfg(test)]
+pub mod keycloak {
+    /// The realm's issuer.
+    pub const ISSUER: &str = "http://127.0.0.1:55080/realms/helpdesk";
+    /// The secret of the client `hd-core`.
+    pub const SECRET: &str = "dev-only-client-secret";
+
+    /// The settings of an identity provider at `issuer`, with the client `client_id` and its
+    /// `secret`.
+    pub fn settings(issuer: &str, client_id: &str, secret: &str) -> super::Settings {
+        super::Settings {
+            issuer: Some(issuer.to_owned()),
+            client_id: Some(client_id.to_owned()),
+            client_secret: Some(secret.to_owned()),
+            client_secret_file: None,
+            label: None,
+            session_hours: 12,
+            authorized_group: None,
+            group_claim: "groups".to_owned(),
+        }
+    }
+}
+
 /// Where the provider sends the browser back to, under the core's public URL.
 pub const CALLBACK_PATH: &str = "/api/session/identity-provider/callback";
 

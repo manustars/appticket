@@ -149,7 +149,8 @@ mod tests {
     use crate::http::{AppState, router};
     use crate::roles::Grant;
 
-    const ISSUER: &str = "http://127.0.0.1:55080/realms/helpdesk";
+    use crate::oidc::keycloak::ISSUER;
+
     /// Lena's stable identifier at Keycloak.
     const LENA: &str = "6f1c2a0e-8d3b-4c55-9a41-0b7e2d6f3a01";
     /// Otto's stable identifier at Keycloak, where his address is not verified.
@@ -178,14 +179,10 @@ mod tests {
         group_claim: &str,
     ) -> AppState {
         let settings = crate::oidc::Settings {
-            issuer: Some(issuer.to_owned()),
-            client_id: Some("hd-core".to_owned()),
-            client_secret: Some("dev-only-client-secret".to_owned()),
-            client_secret_file: None,
             label: Some("Northgate".to_owned()),
-            session_hours: 12,
             authorized_group: authorized_group.map(str::to_owned),
             group_claim: group_claim.to_owned(),
+            ..crate::oidc::keycloak::settings(issuer, "hd-core", crate::oidc::keycloak::SECRET)
         };
         let config = crate::oidc::Config::from_settings(settings, Some("http://127.0.0.1:8080"))
             .unwrap()

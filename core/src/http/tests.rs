@@ -419,8 +419,10 @@ async fn local_sign_in_off_and_an_unreachable_provider_are_recovered_with_the_co
         switch: Some(switch),
     };
     let off = LocalSignIn::Off {
-        identity_provider: settings,
-        public_url: Some(public_url),
+        provider: Box::new(crate::cli::IdentityProviderArgs {
+            identity_provider: settings,
+            public_url: Some(public_url),
+        }),
     };
     crate::cli::sign_in(&db, switch(off), &mut Vec::new())
         .await

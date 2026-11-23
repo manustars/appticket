@@ -231,16 +231,11 @@ pub enum SignInCommand {
     /// agent signs in through it (needs no database).
     #[command(after_long_help = SIGN_IN_CHECK_HELP)]
     Check {
-        #[command(flatten, next_help_heading = "Identity provider (as for serve)")]
-        identity_provider: Box<crate::oidc::Settings>,
-        /// The core's public URL, as for serve.
-        #[arg(long, env = "HD_PUBLIC_URL")]
-        public_url: Option<String>,
+        #[command(flatten)]
+        provider: Box<IdentityProviderArgs>,
     },
 }
 
-// Parsed once per command; `Off` is large because it carries the identity provider's settings.
-#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum LocalSignIn {
     /// Let agents sign in with their local password again.
@@ -248,12 +243,26 @@ pub enum LocalSignIn {
     /// Agents sign in only through the identity provider; every session opened with a local
     /// password ends. Refused while no identity provider is configured.
     Off {
-        #[command(flatten, next_help_heading = "Identity provider (as for serve)")]
-        identity_provider: crate::oidc::Settings,
-        /// The core's public URL, as for serve.
-        #[arg(long, env = "HD_PUBLIC_URL")]
-        public_url: Option<String>,
+        #[command(flatten)]
+        provider: Box<IdentityProviderArgs>,
     },
+}
+
+/// The identity provider's settings as `serve` takes them, with the core's public URL they need.
+#[derive(clap::Args, Debug)]
+pub struct IdentityProviderArgs {
+    #[command(flatten, next_help_heading = "Identity provider (as for serve)")]
+    pub identity_provider: crate::oidc::Settings,
+    /// The core's public URL, as for serve.
+    #[arg(long, env = "HD_PUBLIC_URL")]
+    pub public_url: Option<String>,
+}
+
+impl IdentityProviderArgs {
+    /// The provider these settings configure, if any, checked as `serve` checks them.
+    fn config(self) -> anyhow::Result<Option<crate::oidc::Config>> {
+        crate::oidc::Config::from_settings(self.identity_provider, self.public_url.as_deref())
+    }
 }
 
 pub async fn sign_in(
@@ -264,10 +273,7 @@ pub async fn sign_in(
     let fail = |e: crate::error::Error| anyhow::anyhow!("{e}");
     let switch = match command {
         SignInCommand::Local { switch } => switch,
-        SignInCommand::Check {
-            identity_provider,
-            public_url,
-        } => return sign_in_check(*identity_provider, public_url, out).await,
+        SignInCommand::Check { provider } => return sign_in_check(*provider, out).await,
     };
     match switch {
         None => {
@@ -278,12 +284,8 @@ pub async fn sign_in(
             crate::local_sign_in::switch_on(db).await.map_err(fail)?;
             writeln!(out, "local sign-in is on")?;
         }
-        Some(LocalSignIn::Off {
-            identity_provider,
-            public_url,
-        }) => {
-            let config =
-                crate::oidc::Config::from_settings(identity_provider, public_url.as_deref())?;
+        Some(LocalSignIn::Off { provider }) => {
+            let config = provider.config()?;
             let ended = crate::local_sign_in::switch_off(db, config.is_some())
                 .await
                 .map_err(fail)?;
@@ -300,13 +302,10 @@ pub async fn sign_in(
 /// `hd sign-in check`: whether the identity provider the settings configure answers and accepts
 /// the client. Needs no database.
 pub async fn sign_in_check(
-    identity_provider: crate::oidc::Settings,
-    public_url: Option<String>,
+    provider: IdentityProviderArgs,
     out: &mut impl Write,
 ) -> anyhow::Result<()> {
-    let Some(config) =
-        crate::oidc::Config::from_settings(identity_provider, public_url.as_deref())?
-    else {
+    let Some(config) = provider.config()? else {
         anyhow::bail!(
             "no identity provider is configured, so there is nothing to check: set \
              HD_OIDC_ISSUER, HD_OIDC_CLIENT_ID, HD_OIDC_CLIENT_SECRET (or \
@@ -326,6 +325,11 @@ pub async fn sign_in_check(
         out,
         "client {client_id}: accepted by {}",
         checked.token_endpoint
+    )?;
+    writeln!(
+        out,
+        "accepted holds for a provider that checks the client before the code, as Keycloak does; \
+         with another, sign in once to confirm"
     )?;
     writeln!(
         out,
@@ -778,9 +782,9 @@ mod tests {
     }
 
     /// The identity provider's settings as the deployment gives them: none, some, or all.
-    fn provider_settings(given: &[&str]) -> (crate::oidc::Settings, Option<String>) {
+    fn provider_settings(given: &[&str]) -> IdentityProviderArgs {
         let has = |name: &str| given.contains(&name);
-        let settings = crate::oidc::Settings {
+        let identity_provider = crate::oidc::Settings {
             issuer: has("issuer").then(|| "https://login.example.com/realms/staff".to_owned()),
             client_id: has("client_id").then(|| "helpdesk".to_owned()),
             client_secret: has("client_secret").then(|| "invented-secret".to_owned()),
@@ -791,15 +795,16 @@ mod tests {
             group_claim: "groups".to_owned(),
         };
         let public_url = has("public_url").then(|| "https://helpdesk.example.com".to_owned());
-        (settings, public_url)
+        IdentityProviderArgs {
+            identity_provider,
+            public_url,
+        }
     }
 
     fn off(given: &[&str]) -> SignInCommand {
-        let (identity_provider, public_url) = provider_settings(given);
         SignInCommand::Local {
             switch: Some(LocalSignIn::Off {
-                identity_provider,
-                public_url,
+                provider: Box::new(provider_settings(given)),
             }),
         }
     }
@@ -859,8 +864,12 @@ mod tests {
 
     /// What `hd sign-in check` prints, or the error `hd` would print, as main prints it.
     async fn run_check(identity_provider: crate::oidc::Settings, public_url: &str) -> String {
+        let provider = IdentityProviderArgs {
+            identity_provider,
+            public_url: Some(public_url.to_owned()),
+        };
         let mut out = Vec::new();
-        let done = sign_in_check(identity_provider, Some(public_url.to_owned()), &mut out).await;
+        let done = sign_in_check(provider, &mut out).await;
         let mut said = String::from_utf8(out).unwrap();
         if let Err(error) = done {
             said.push_str(&format!("Error: {error:?}"));
@@ -869,19 +878,15 @@ mod tests {
     }
 
     fn keycloak(secret: &str) -> crate::oidc::Settings {
-        crate::oidc::Settings {
-            issuer: Some("http://127.0.0.1:55080/realms/helpdesk".to_owned()),
-            client_id: Some("hd-core".to_owned()),
-            client_secret: Some(secret.to_owned()),
-            ..provider_settings(&[]).0
-        }
+        crate::oidc::keycloak::settings(crate::oidc::keycloak::ISSUER, "hd-core", secret)
     }
 
     #[tokio::test]
     async fn the_sign_in_check_says_when_no_identity_provider_is_configured() {
-        let (none, _) = provider_settings(&[]);
         let mut out = Vec::new();
-        let error = sign_in_check(none, None, &mut out).await.unwrap_err();
+        let error = sign_in_check(provider_settings(&[]), &mut out)
+            .await
+            .unwrap_err();
         let error = error.to_string();
         assert!(
             error.contains("no identity provider is configured"),
@@ -890,20 +895,26 @@ mod tests {
         assert!(error.contains("HD_OIDC_ISSUER"), "{error}");
         assert!(out.is_empty());
         // One configured in part says what is missing, as serve does.
-        let (some, _) = provider_settings(&["issuer", "client_id", "client_secret"]);
-        let error = sign_in_check(some, None, &mut out).await.unwrap_err();
+        let some = provider_settings(&["issuer", "client_id", "client_secret"]);
+        let error = sign_in_check(some, &mut out).await.unwrap_err();
         assert!(error.to_string().contains("HD_PUBLIC_URL"), "{error}");
     }
 
     #[tokio::test]
     #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
     async fn the_sign_in_check_reports_keycloak_and_the_client_it_accepts() {
-        let said = run_check(keycloak("dev-only-client-secret"), "http://127.0.0.1:8080").await;
+        let said = run_check(
+            keycloak(crate::oidc::keycloak::SECRET),
+            "http://127.0.0.1:8080",
+        )
+        .await;
         assert_eq!(
             said,
             "issuer http://127.0.0.1:55080/realms/helpdesk: configuration and keys read\n\
              client hd-core: accepted by \
              http://127.0.0.1:55080/realms/helpdesk/protocol/openid-connect/token\n\
+             accepted holds for a provider that checks the client before the code, as Keycloak \
+             does; with another, sign in once to confirm\n\
              not checked: that the provider accepts the redirect URI \
              http://127.0.0.1:8080/api/session/identity-provider/callback, and the claims its \
              ID tokens hold; sign in once to see those\n"
