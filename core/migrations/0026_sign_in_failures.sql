@@ -6,8 +6,9 @@
 CREATE TABLE sign_in_failures (
     id         uuid PRIMARY KEY,
     -- What the person signed in as, trimmed and in lower case: an agent's e-mail, or any text
-    -- typed in, whether or not an agent has it.
-    account    text NOT NULL,
+    -- typed in, whether or not an agent has it. Null once someone signed in as that account: the
+    -- failure was theirs, and counts for the address only.
+    account    text,
     -- The client's address: an IPv4 address, or the /64 network of an IPv6 address.
     address    text NOT NULL CHECK (address <> ''),
     failed_at  timestamptz NOT NULL

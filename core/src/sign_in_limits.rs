@@ -49,17 +49,31 @@ impl SignInLimits {
     ) -> anyhow::Result<Guarded<T>> {
         let account = account_key(account);
         let address = address_key(address);
-        let delay = match self.reserve(db, &account, &address).await? {
+        let (attempt, delay) = match self.reserve(db, &account, &address).await? {
             Reserved::Refused { retry_after } => return Ok(Guarded::Refused { retry_after }),
-            Reserved::Allowed { delay } => delay,
+            Reserved::Allowed { attempt, delay } => (attempt, delay),
         };
         if !delay.is_zero() {
             self.clock.sleep(delay).await;
         }
-        Ok(match check.await? {
-            Some(value) => Guarded::Passed(value),
-            None => Guarded::Failed,
-        })
+        match check.await? {
+            Some(value) => {
+                // The account's earlier failures were the person's own: the account forgets
+                // them. The address keeps them, as they may be someone else's guesses.
+                let mut tx = db.begin().await?;
+                sqlx::query("DELETE FROM sign_in_failures WHERE id = $1")
+                    .bind(attempt)
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query("UPDATE sign_in_failures SET account = NULL WHERE account = $1")
+                    .bind(&account)
+                    .execute(&mut *tx)
+                    .await?;
+                tx.commit().await?;
+                Ok(Guarded::Passed(value))
+            }
+            None => Ok(Guarded::Failed),
+        }
     }
 
     /// Records the attempt as a failure, unless it is refused, and says how long it waits first.
@@ -92,22 +106,26 @@ impl SignInLimits {
         .bind(i64::from(self.most_checked()))
         .fetch_all(&mut *tx)
         .await?;
-        let reserved = self.stricter(
-            self.verdict(&by_account, now),
-            self.verdict(&by_address, now),
-        );
-        if let Reserved::Allowed { .. } = reserved {
-            sqlx::query(
-                "INSERT INTO sign_in_failures (id, account, address, failed_at)
-                 VALUES ($1, $2, $3, $4)",
-            )
-            .bind(Uuid::new_v4())
-            .bind(account)
-            .bind(address)
-            .bind(now)
-            .execute(&mut *tx)
-            .await?;
-        }
+        let reserved = match self
+            .verdict(&by_account, now)
+            .stricter(self.verdict(&by_address, now))
+        {
+            Verdict::Refused { retry_after } => Reserved::Refused { retry_after },
+            Verdict::Allowed { delay } => {
+                let attempt = Uuid::new_v4();
+                sqlx::query(
+                    "INSERT INTO sign_in_failures (id, account, address, failed_at)
+                     VALUES ($1, $2, $3, $4)",
+                )
+                .bind(attempt)
+                .bind(account)
+                .bind(address)
+                .bind(now)
+                .execute(&mut *tx)
+                .await?;
+                Reserved::Allowed { attempt, delay }
+            }
+        };
         tx.commit().await?;
         Ok(reserved)
     }
@@ -118,10 +136,10 @@ impl SignInLimits {
     }
 
     /// What the failures of one account or address, newest first, allow now.
-    fn verdict(&self, newest_first: &[OffsetDateTime], now: OffsetDateTime) -> Reserved {
+    fn verdict(&self, newest_first: &[OffsetDateTime], now: OffsetDateTime) -> Verdict {
         let window = time::Duration::try_from(self.window).unwrap_or(time::Duration::MAX);
         let Some(&last) = newest_first.first() else {
-            return Reserved::Allowed {
+            return Verdict::Allowed {
                 delay: Duration::ZERO,
             };
         };
@@ -133,7 +151,7 @@ impl SignInLimits {
             .count() as u32;
         if up_to_last >= self.most_checked() && now - last < window {
             let retry_after = (last + window - now).try_into().unwrap_or(Duration::ZERO);
-            return Reserved::Refused { retry_after };
+            return Verdict::Refused { retry_after };
         }
         let in_window = newest_first
             .iter()
@@ -143,23 +161,7 @@ impl SignInLimits {
             Some(past) => FIRST_DELAY * 2u32.pow(past),
             None => Duration::ZERO,
         };
-        Reserved::Allowed { delay }
-    }
-
-    fn stricter(&self, a: Reserved, b: Reserved) -> Reserved {
-        match (a, b) {
-            (Reserved::Refused { retry_after: x }, Reserved::Refused { retry_after: y }) => {
-                Reserved::Refused {
-                    retry_after: x.max(y),
-                }
-            }
-            (refused @ Reserved::Refused { .. }, _) | (_, refused @ Reserved::Refused { .. }) => {
-                refused
-            }
-            (Reserved::Allowed { delay: x }, Reserved::Allowed { delay: y }) => {
-                Reserved::Allowed { delay: x.max(y) }
-            }
-        }
+        Verdict::Allowed { delay }
     }
 }
 
@@ -168,9 +170,40 @@ const SLOWED_ATTEMPTS: u32 = 4;
 /// How long the first slowed attempt waits; each one after waits twice as long as the last.
 const FIRST_DELAY: Duration = Duration::from_secs(1);
 
-enum Reserved {
+/// What the failures of an account or an address allow.
+enum Verdict {
     Allowed { delay: Duration },
     Refused { retry_after: Duration },
+}
+
+impl Verdict {
+    /// The stricter of the account's and the address's verdicts.
+    fn stricter(self, other: Verdict) -> Verdict {
+        match (self, other) {
+            (Verdict::Refused { retry_after: a }, Verdict::Refused { retry_after: b }) => {
+                Verdict::Refused {
+                    retry_after: a.max(b),
+                }
+            }
+            (refused @ Verdict::Refused { .. }, _) | (_, refused @ Verdict::Refused { .. }) => {
+                refused
+            }
+            (Verdict::Allowed { delay: a }, Verdict::Allowed { delay: b }) => {
+                Verdict::Allowed { delay: a.max(b) }
+            }
+        }
+    }
+}
+
+enum Reserved {
+    /// The attempt is recorded as `attempt`, and waits `delay` before its password is checked.
+    Allowed {
+        attempt: Uuid,
+        delay: Duration,
+    },
+    Refused {
+        retry_after: Duration,
+    },
 }
 
 /// The account an attempt counts for: what was typed in, trimmed and in lower case, as agents
@@ -293,6 +326,36 @@ mod tests {
             .guard(db, account, address(from), async { Ok(None) })
             .await
             .unwrap()
+    }
+
+    /// A sign-in with the right password.
+    async fn right(db: &PgPool, limits: &SignInLimits, account: &str, from: &str) -> Guarded<()> {
+        limits
+            .guard(db, account, address(from), async { Ok(Some(())) })
+            .await
+            .unwrap()
+    }
+
+    /// Signing in proves the person knows the account's password, not that nobody at their
+    /// address is guessing at others.
+    #[sqlx::test]
+    async fn signing_in_clears_the_accounts_failures_but_not_the_addresss(db: PgPool) {
+        let limits = SignInLimits::for_tests(5, 15 * MINUTE);
+        for _ in 0..4 {
+            wrong(&db, &limits, "ada@example.com", "203.0.113.7").await;
+        }
+        assert_eq!(
+            right(&db, &limits, "ada@example.com", "203.0.113.7").await,
+            Guarded::Passed(())
+        );
+        for _ in 0..5 {
+            wrong(&db, &limits, "ada@example.com", "198.51.100.4").await;
+        }
+        assert_eq!(limits.clock().sleeps(), secs(&[]));
+        // The address still has its four failures: one more, and the next attempt waits.
+        wrong(&db, &limits, "bo@example.com", "203.0.113.7").await;
+        wrong(&db, &limits, "bo@example.com", "203.0.113.7").await;
+        assert_eq!(limits.clock().sleeps(), secs(&[1]));
     }
 
     #[sqlx::test]
