@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::customers::CustomerDetails;
 use crate::error::{Error, Result, rule};
-use crate::roles::Grant;
+use crate::roles::{Grant, Permission};
 
 /// What a file of an import holds, one kind per file. Files are taken in this order, so that a
 /// row can refer to something an earlier file creates.
@@ -22,6 +22,13 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// What importing this kind needs.
+    fn permission(self) -> Permission {
+        match self {
+            Kind::Customers | Kind::Sites => Permission::ManageCustomers,
+        }
+    }
+
     fn as_str(self) -> &'static str {
         match self {
             Kind::Customers => "customers",
@@ -102,6 +109,16 @@ const CUSTOMER_COLUMNS: &[&str] = &[
     "notes",
 ];
 
+/// The columns of a sites file: the site's customer, by name or by one of its external
+/// references, and the site.
+const SITE_COLUMNS: &[&str] = &[
+    "customer",
+    "customer_external_system",
+    "customer_external_name",
+    "name",
+    "address",
+];
+
 /// A file read: its columns and rows, and how it was written.
 struct Table {
     /// Where each known column is, by its name.
@@ -163,10 +180,27 @@ impl Table {
 
     /// What the row is about, as the report shows it.
     fn label(&self, kind: Kind, row: &Line) -> String {
-        let cell = |column| self.cell(row, column).unwrap_or_default();
+        // A customer by its name, else by its external reference.
+        let customer = |name, system, reference| match (
+            self.cell(row, name),
+            self.cell(row, system),
+            self.cell(row, reference),
+        ) {
+            (Some(name), _, _) => name.to_owned(),
+            (None, Some(system), Some(reference)) => format!("{reference} in {system}"),
+            _ => String::new(),
+        };
         match kind {
-            Kind::Customers => cell("name").to_owned(),
-            Kind::Sites => format!("{} / {}", cell("customer"), cell("name")),
+            Kind::Customers => customer("name", "external_system", "external_name"),
+            Kind::Sites => format!(
+                "{} / {}",
+                customer(
+                    "customer",
+                    "customer_external_system",
+                    "customer_external_name"
+                ),
+                self.cell(row, "name").unwrap_or_default()
+            ),
         }
     }
 }
@@ -196,7 +230,7 @@ fn separator(content: &[u8]) -> u8 {
 fn read(kind: Kind, content: &[u8]) -> Result<Table> {
     let (known, required): (&[&str], &[&str]) = match kind {
         Kind::Customers => (CUSTOMER_COLUMNS, &["name"]),
-        Kind::Sites => (&[], &[]),
+        Kind::Sites => (SITE_COLUMNS, &["customer", "name", "address"]),
     };
     let bom = content.starts_with(BOM);
     let content = content.strip_prefix(BOM).unwrap_or(content);
@@ -313,8 +347,12 @@ fn line_at(content: &[u8], byte: usize) -> u64 {
 }
 
 /// Previews or applies an import of CSV files.
-pub async fn run(db: &PgPool, _grant: &Grant, mut files: Vec<File>, mode: Mode) -> Result<Report> {
+pub async fn run(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -> Result<Report> {
+    for file in &files {
+        grant.require(file.kind.permission())?;
+    }
     files.sort_by_key(|f| f.kind);
+
     if let Some(twice) = files.windows(2).find(|w| w[0].kind == w[1].kind) {
         return rule(format!(
             "an import takes one {} file",
@@ -336,7 +374,10 @@ pub async fn run(db: &PgPool, _grant: &Grant, mut files: Vec<File>, mode: Mode) 
         for row in &table.rows {
             // Each row on its own: one left out leaves nothing behind.
             let mut savepoint = tx.begin().await?;
-            let done = customer_row(&mut savepoint, table, row, &mut so_far).await;
+            let done = match kind {
+                Kind::Customers => customer_row(&mut savepoint, table, row, &mut so_far).await,
+                Kind::Sites => site_row(&mut savepoint, table, row, &mut so_far).await,
+            };
             let (outcome, changes, reason) = match left_out(done)? {
                 Ok(done) => {
                     savepoint.commit().await?;
@@ -344,6 +385,10 @@ pub async fn run(db: &PgPool, _grant: &Grant, mut files: Vec<File>, mode: Mode) 
                 }
                 Err(why) => {
                     savepoint.rollback().await?;
+                    if *kind == Kind::Customers {
+                        let keys = Keys::of(table, row, "name", "external_system", "external_name");
+                        so_far.customers_left_out.push((row.line, keys));
+                    }
                     (Outcome::LeftOut, Vec::new(), Some(why))
                 }
             };
@@ -390,6 +435,51 @@ fn left_out(done: Result<Done>) -> Result<std::result::Result<Done, String>> {
 struct SoFar {
     /// The customers imported, with the line of the row that did.
     customers: HashMap<Uuid, u64>,
+    /// The sites imported, with the line of the row that did.
+    sites: HashMap<Uuid, u64>,
+    /// The customer rows left out, with the line of each, for the rows that name them.
+    customers_left_out: Vec<(u64, Keys)>,
+}
+
+/// How a row names a customer: its name and an external reference, ignoring case.
+struct Keys {
+    name: Option<String>,
+    reference: Option<(String, String)>,
+}
+
+impl Keys {
+    fn of(table: &Table, row: &Line, name: &str, system: &str, reference: &str) -> Keys {
+        let lower = |column| table.cell(row, column).map(str::to_lowercase);
+        Keys {
+            name: lower(name),
+            reference: lower(system).zip(lower(reference)),
+        }
+    }
+
+    /// Whether both name the same customer, by name or by external reference.
+    fn meet(&self, other: &Keys) -> bool {
+        fn same<T: PartialEq>(a: &Option<T>, b: &Option<T>) -> bool {
+            a.is_some() && a == b
+        }
+        same(&self.name, &other.name) || same(&self.reference, &other.reference)
+    }
+}
+
+impl SoFar {
+    /// The line of the customer row left out that a site row names.
+    fn customer_left_out(&self, table: &Table, row: &Line) -> Option<u64> {
+        let keys = Keys::of(
+            table,
+            row,
+            "customer",
+            "customer_external_system",
+            "customer_external_name",
+        );
+        self.customers_left_out
+            .iter()
+            .find(|(_, left_out)| left_out.meet(&keys))
+            .map(|(line, _)| *line)
+    }
 }
 
 /// What a row did.
@@ -494,10 +584,8 @@ async fn recognise(
         {
             let owner = name_of(tx, id).await?;
             return rule(format!(
-                "{} in {} names {owner}, but {other} has the name {}",
-                reference.name,
-                reference.system,
-                name.unwrap_or_default()
+                "{} in {} names {owner}, not {other}",
+                reference.name, reference.system
             ));
         }
         return Ok(Some(id));
@@ -620,6 +708,106 @@ async fn customer_row(
     })
 }
 
+/// The customer a site row names, which must exist: by external reference, else by name.
+async fn site_customer(
+    tx: &mut Transaction<'_, Postgres>,
+    table: &Table,
+    row: &Line,
+) -> Result<Uuid> {
+    let name = table.cell(row, "customer");
+    let reference = reference(
+        table,
+        row,
+        "customer_external_system",
+        "customer_external_name",
+    )?;
+    if name.is_none() && reference.is_none() {
+        return rule("a site needs its customer");
+    }
+    if let Some(reference) = &reference
+        && named_by(tx, reference).await?.is_none()
+    {
+        return rule(format!(
+            "no customer has {} in {} as an external reference",
+            reference.name, reference.system
+        ));
+    }
+    let Some(id) = recognise(tx, name, reference.as_ref()).await? else {
+        return rule(format!("no customer is named {}", name.unwrap_or_default()));
+    };
+    let owner = name_of(tx, id).await?;
+    if let (Some(name), Some(reference)) = (name, &reference)
+        && owner.to_lowercase() != name.to_lowercase()
+    {
+        return rule(format!(
+            "{} in {} names {owner}, not {name}",
+            reference.name, reference.system
+        ));
+    }
+    not_offboarded(tx, id).await?;
+    Ok(id)
+}
+
+async fn site_row(
+    tx: &mut Transaction<'_, Postgres>,
+    table: &Table,
+    row: &Line,
+    so_far: &mut SoFar,
+) -> Result<Done> {
+    if let Some(line) = so_far.customer_left_out(table, row) {
+        return rule(format!(
+            "the row of its customer, line {line} of the customers file, is left out"
+        ));
+    }
+    let customer = site_customer(tx, table, row).await?;
+    let Some(name) = table.cell(row, "name") else {
+        return rule("a site needs a name");
+    };
+    let address = table.cell(row, "address");
+    // An active site first: retired ones have freed their names.
+    let found: Option<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT id, name, address FROM sites
+         WHERE customer_id = $1 AND lower(name) = lower($2) AND retired_at IS NULL",
+    )
+    .bind(customer)
+    .bind(name)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((id, before_name, before_address)) = found else {
+        let retired: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sites WHERE customer_id = $1 AND lower(name) = lower($2)
+             ORDER BY retired_at DESC LIMIT 1",
+        )
+        .bind(customer)
+        .bind(name)
+        .fetch_optional(&mut **tx)
+        .await?;
+        if let Some(retired) = retired {
+            return rule(format!(
+                "the site {retired} is retired: an import neither brings it back nor adds \
+                 another site with its name"
+            ));
+        }
+        let id = crate::sites::create_in(tx, customer, name, address.unwrap_or_default()).await?;
+        so_far.sites.insert(id, row.line);
+        return Ok(Done::created());
+    };
+    if let Some(line) = so_far.sites.get(&id) {
+        return rule(format!("line {line} already imports this site"));
+    }
+    let address = address.unwrap_or(&before_address);
+    crate::sites::update_in(tx, id, name, address).await?;
+    let mut changes = Vec::new();
+    if before_name != name {
+        changes.push("name");
+    }
+    if before_address != address {
+        changes.push("address");
+    }
+    so_far.sites.insert(id, row.line);
+    Ok(Done::updated(changes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -629,6 +817,95 @@ mod tests {
             kind: Kind::Customers,
             content: csv.as_bytes().to_vec(),
         }
+    }
+
+    fn sites(csv: &str) -> File {
+        File {
+            kind: Kind::Sites,
+            content: csv.as_bytes().to_vec(),
+        }
+    }
+
+    /// The customer's sites: name, address and whether retired.
+    async fn sites_of(db: &PgPool, customer: Uuid) -> Vec<(String, String, bool)> {
+        crate::sites::of(db, customer)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.name, s.address, s.retired_at.is_some()))
+            .collect()
+    }
+
+    async fn id_of(db: &PgPool, name: &str) -> Uuid {
+        crate::customers::list(db)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|c| c.name == name)
+            .unwrap()
+            .id
+    }
+
+    fn site(name: &str, address: &str) -> (String, String, bool) {
+        (name.to_owned(), address.to_owned(), false)
+    }
+
+    #[sqlx::test]
+    async fn sites_are_created_and_updated_within_their_customer(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        crate::sites::create(&db, brightfield, "Warehouse", "Strada delle Gru 4")
+            .await
+            .unwrap();
+        let customers_file = "name\nHarbor Lane\n";
+        let sites_file = "customer,name,address\n\
+            brightfield,head office,\"Via dei Tigli 1A\nValfiorita\"\n\
+            Brightfield,Warehouse,\n\
+            Brightfield,Lab,Via del Glicine 3\n\
+            Harbor Lane,Head office,Molo delle Reti 2\n";
+        let files = || vec![sites(sites_file), customers(customers_file)];
+
+        let preview = import(&db, files(), Mode::Preview).await;
+        assert_eq!(
+            preview.files.iter().map(|f| f.kind).collect::<Vec<_>>(),
+            [Kind::Customers, Kind::Sites],
+            "customers first, whatever order the files come in"
+        );
+        assert_eq!(
+            outcomes(&preview)[1],
+            [
+                (2, Outcome::Update, "brightfield / head office"),
+                (4, Outcome::Unchanged, "Brightfield / Warehouse"),
+                (5, Outcome::Create, "Brightfield / Lab"),
+                (6, Outcome::Create, "Harbor Lane / Head office"),
+            ],
+            "a site of a customer the customers file creates is created too"
+        );
+        assert_eq!(
+            preview.files[1].rows[0].changes,
+            ["name", "address"],
+            "a filled name sets the name as written"
+        );
+        assert_eq!(sites_of(&db, brightfield).await.len(), 2);
+
+        import(&db, files(), Mode::Apply).await;
+        assert_eq!(
+            sites_of(&db, brightfield).await,
+            [
+                site("head office", "Via dei Tigli 1A\nValfiorita"),
+                site("Lab", "Via del Glicine 3"),
+                site("Warehouse", "Strada delle Gru 4"),
+            ]
+        );
+        let harbor = id_of(&db, "Harbor Lane").await;
+        assert_eq!(
+            sites_of(&db, harbor).await,
+            [site("Head office", "Molo delle Reti 2")]
+        );
     }
 
     async fn import(db: &PgPool, files: Vec<File>, mode: Mode) -> Report {
@@ -831,6 +1108,10 @@ mod tests {
         assert!(reasons[0].1.contains("line 2"), "{reasons:?}");
         assert!(reasons[1].1.contains("line 4"), "{reasons:?}");
         assert!(reasons[2].1.contains("line 2"), "{reasons:?}");
+        assert_eq!(
+            report.files[0].rows[4].label, "hrb-0007 in Ledgerly",
+            "a row without a name is shown by its external reference"
+        );
 
         let shown = crate::customers::detail(&db, harbor).await.unwrap();
         assert_eq!(
@@ -924,6 +1205,210 @@ mod tests {
         );
     }
 
+    #[sqlx::test]
+    async fn a_site_whose_customer_row_is_left_out_is_left_out_too(db: PgPool) {
+        // Brightfield exists, but its row is left out: its sites wait for the corrected row.
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let customers_file = "name,external_system,external_name,tax_country\n\
+            Brightfield,,,IT\n\
+            Harbor Lane,Watchtower,HL,ITA\n\
+            Copperleaf,,,\n";
+        let sites_file = "customer;customer_external_system;customer_external_name;name;address\n\
+            Brightfield;;;Head office;Via dei Tigli 1\n\
+            ;Watchtower;HL;Head office;Molo delle Reti 2\n\
+            Copperleaf;;;Head office;Corso dei Mulini 9\n";
+        let report = import(
+            &db,
+            vec![customers(customers_file), sites(sites_file)],
+            Mode::Apply,
+        )
+        .await;
+        let reasons = reasons(&report.files[1]);
+        assert_eq!(
+            reasons.iter().map(|(line, _)| *line).collect::<Vec<_>>(),
+            [2, 3]
+        );
+        assert!(
+            reasons[0].1.contains("line 2 of the customers file"),
+            "{reasons:?}"
+        );
+        assert!(
+            reasons[1].1.contains("line 3 of the customers file"),
+            "{reasons:?}"
+        );
+        assert!(sites_of(&db, brightfield).await.is_empty());
+        let copperleaf = id_of(&db, "Copperleaf").await;
+        assert_eq!(
+            sites_of(&db, copperleaf).await,
+            [site("Head office", "Corso dei Mulini 9")]
+        );
+        let left_out = report.files[1].left_out.as_deref().unwrap();
+        assert!(
+            left_out.starts_with(
+                "customer;customer_external_system;customer_external_name;name;address;error\r\n\
+                 Brightfield;;;Head office;Via dei Tigli 1;"
+            ),
+            "{left_out}"
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_site_needs_a_customer_that_exists_and_is_served(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let harbor = crate::customers::create(&db, "Harbor Lane", &[])
+            .await
+            .unwrap();
+        crate::external_references::add(&db, harbor, "Watchtower", "HL")
+            .await
+            .unwrap();
+        crate::customers::create(&db, "Copperleaf", &[])
+            .await
+            .unwrap();
+        let gone = crate::customers::create(&db, "Ninefold", &[])
+            .await
+            .unwrap();
+        crate::customers::offboard(&db, gone).await.unwrap();
+
+        let file = "customer,customer_external_system,customer_external_name,name,address\n\
+            Nowhere,,,Lab,Via del Glicine 3\n\
+            ,Watchtower,ZZ,Lab,Via del Glicine 3\n\
+            Copperleaf,Watchtower,HL,Lab,Via del Glicine 3\n\
+            Ninefold,,,Lab,Via del Glicine 3\n\
+            Brightfield,,,,Via del Glicine 3\n\
+            ,,,Lab,Via del Glicine 3\n\
+            Brightfield,,,Lab,\n\
+            Brightfield,,,Lab,Via del Glicine 3\n\
+            Brightfield,,,LAB,Corso dei Mulini 9\n\
+            ,watchtower,hl,Head office,Molo delle Reti 2\n";
+        let report = import(&db, vec![sites(file)], Mode::Apply).await;
+        let reasons = reasons(&report.files[0]);
+        let expected = [
+            (2, "no customer is named Nowhere"),
+            (3, "no customer has ZZ in Watchtower"),
+            (4, "names Harbor Lane, not Copperleaf"),
+            (5, "offboarded"),
+            (6, "a site needs a name"),
+            (7, "a site needs its customer"),
+            (8, "a site needs an address"),
+            (10, "line 9 already imports this site"),
+        ];
+        assert_eq!(reasons.len(), expected.len(), "{reasons:?}");
+        for ((line, why), (expected_line, expected)) in reasons.iter().zip(expected) {
+            assert!(
+                *line == expected_line && why.contains(expected),
+                "line {line}: {why}"
+            );
+        }
+        assert_eq!(
+            sites_of(&db, brightfield).await,
+            [site("Lab", "Via del Glicine 3")]
+        );
+        assert_eq!(
+            sites_of(&db, harbor).await,
+            [site("Head office", "Molo delle Reti 2")]
+        );
+        assert!(sites_of(&db, gone).await.is_empty());
+    }
+
+    #[sqlx::test]
+    async fn a_site_named_like_a_retired_site_is_left_out(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let old = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        crate::sites::retire(&db, old).await.unwrap();
+
+        let file = "customer,name,address\nBrightfield,head office,Corso dei Mulini 9\n";
+        let report = import(&db, vec![sites(file)], Mode::Apply).await;
+        let reasons = reasons(&report.files[0]);
+        assert!(
+            reasons.len() == 1 && reasons[0].1.contains("retired"),
+            "an import neither brings a retired site back nor makes another one with its name: \
+             {reasons:?}"
+        );
+        assert_eq!(
+            sites_of(&db, brightfield).await,
+            [("Head office".to_owned(), "Via dei Tigli 1".to_owned(), true)]
+        );
+
+        // Beside an active site with that name, it is that one.
+        crate::sites::create(&db, brightfield, "Head office", "Corso dei Mulini 9")
+            .await
+            .unwrap();
+        let file = "customer,name,address\nBrightfield,Head office,Corso dei Mulini 9A\n";
+        let report = import(&db, vec![sites(file)], Mode::Apply).await;
+        assert_eq!(report.files[0].rows[0].outcome, Outcome::Update);
+    }
+
+    #[sqlx::test]
+    async fn importing_needs_managing_customers(db: PgPool) {
+        let others: Vec<Permission> = Permission::ALL
+            .into_iter()
+            .filter(|p| *p != Permission::ManageCustomers)
+            .collect();
+        let without = Grant {
+            administrator: false,
+            permissions: others,
+        };
+        for mode in [Mode::Preview, Mode::Apply] {
+            for file in [
+                customers("name\nBrightfield\n"),
+                sites("customer,name,address\n"),
+            ] {
+                assert!(
+                    matches!(
+                        run(&db, &without, vec![file], mode).await,
+                        Err(Error::Forbidden(_))
+                    ),
+                    "{mode:?}"
+                );
+            }
+        }
+        let with = Grant {
+            administrator: false,
+            permissions: vec![Permission::ManageCustomers],
+        };
+        run(
+            &db,
+            &with,
+            vec![customers("name\nBrightfield\n")],
+            Mode::Apply,
+        )
+        .await
+        .unwrap();
+        assert_eq!(names(&db).await, ["Brightfield"]);
+    }
+
+    /// Applying does everything again against the database as it is then: a preview is no promise.
+    #[sqlx::test]
+    async fn applying_checks_everything_again(db: PgPool) {
+        let file = "name,phone\nBrightfield,000 000 0100\n";
+        let preview = import(&db, vec![customers(file)], Mode::Preview).await;
+        assert_eq!(outcomes(&preview), [[(2, Outcome::Create, "Brightfield")]]);
+
+        // Meanwhile an agent adds the customer by hand.
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let applied = import(&db, vec![customers(file)], Mode::Apply).await;
+        assert_eq!(outcomes(&applied), [[(2, Outcome::Update, "Brightfield")]]);
+        assert_eq!(names(&db).await, ["Brightfield"]);
+        assert_eq!(
+            crate::customers::detail(&db, brightfield)
+                .await
+                .unwrap()
+                .phone
+                .as_deref(),
+            Some("000 000 0100")
+        );
+    }
+
     async fn names(db: &PgPool) -> Vec<String> {
         let mut names: Vec<String> = crate::customers::list(db)
             .await
@@ -999,6 +1484,19 @@ mod tests {
         assert!(why.contains("\"name\""), "{why}");
         let why = refused(&db, vec![customers("name,Name\nBrightfield,Harbor Lane\n")]).await;
         assert!(why.contains("twice"), "{why}");
+        // A later file's columns stop the earlier files too.
+        let why = refused(
+            &db,
+            vec![
+                customers("name\nBrightfield\n"),
+                sites("customer,name\nBrightfield,Lab\n"),
+            ],
+        )
+        .await;
+        assert!(
+            why.contains("sites file") && why.contains("\"address\""),
+            "{why}"
+        );
         assert!(names(&db).await.is_empty());
 
         // Column names ignore case and the spaces around them.
