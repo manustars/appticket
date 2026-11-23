@@ -1813,6 +1813,80 @@ mod tests {
         );
     }
 
+    #[sqlx::test]
+    async fn an_asset_needs_a_kind_a_site_and_a_holder_that_exist(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let harbor = crate::customers::create(&db, "Harbor Lane", &[])
+            .await
+            .unwrap();
+        crate::sites::create(&db, harbor, "Quay office", "Molo delle Reti 2")
+            .await
+            .unwrap();
+        let old = crate::sites::create(&db, brightfield, "Old lab", "Via del Glicine 3")
+            .await
+            .unwrap();
+        crate::sites::retire(&db, old).await.unwrap();
+        crate::testing::requester(&db, harbor, "cleo@harbor.test").await;
+        let lena = crate::testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        crate::requesters::depart(&db, lena).await.unwrap();
+        let gone = crate::customers::create(&db, "Ninefold", &[])
+            .await
+            .unwrap();
+        crate::customers::offboard(&db, gone).await.unwrap();
+        crate::testing::asset_kind(&db, "Laptop").await;
+        crate::testing::asset(&db, brightfield, "Laptop", "PC-0042").await;
+
+        let file = "customer,name,serial_number,kind,site,holder\n\
+            Nowhere,PC-0001,,laptop,,\n\
+            Ninefold,PC-0002,,laptop,,\n\
+            ,PC-0003,,laptop,,\n\
+            Brightfield,,,laptop,,\n\
+            Brightfield,PC-0004,,,,\n\
+            Brightfield,,SN-0005,laptop,,\n\
+            Brightfield,PC-0006,,Tablet,,\n\
+            Brightfield,PC-0007,,laptop,Quay office,\n\
+            Brightfield,PC-0008,,laptop,old lab,\n\
+            Brightfield,PC-0009,,laptop,,cleo@harbor.test\n\
+            Brightfield,PC-0010,,laptop,,lena@brightfield.test\n\
+            Brightfield,PC-0011,,laptop,,nobody@brightfield.test\n\
+            Brightfield,PC-0012,,laptop,,ada@brightfield.test bo@brightfield.test\n\
+            Brightfield,pc-0042,,,,lena@brightfield.test\n\
+            Brightfield,PC-0013,,laptop,,\n\
+            Brightfield,pc-0013,SN-0013,,,\n";
+        let report = import(&db, vec![assets(file)], Mode::Apply).await;
+        assert_reasons(
+            &report.files[0],
+            &[
+                (2, "no customer is named Nowhere"),
+                (3, "Ninefold is offboarded"),
+                (4, "an asset needs its customer"),
+                (5, "an asset needs a name or a serial number"),
+                (6, "a new asset needs a kind"),
+                (7, "a new asset needs a name"),
+                (8, "there is no asset kind called Tablet"),
+                (9, "Brightfield has no site named Quay office"),
+                (10, "the site Old lab is retired"),
+                (11, "the holder cleo@harbor.test is a requester of Harbor Lane"),
+                (12, "the holder lena@brightfield.test has departed"),
+                (13, "no requester has the address nobody@brightfield.test"),
+                (14, "is not an e-mail address"),
+                (15, "the holder lena@brightfield.test has departed"),
+                (17, "line 16 already imports this asset"),
+            ],
+        );
+        assert_eq!(
+            assets_of(&db, brightfield).await,
+            [
+                shown("PC-0013", None, "Laptop", None, None),
+                shown("PC-0042", None, "Laptop", None, None),
+            ]
+        );
+        assert!(assets_of(&db, harbor).await.is_empty());
+        assert!(assets_of(&db, gone).await.is_empty());
+    }
+
     /// The customer's requesters, as their pages show them.
     async fn requesters_of(db: &PgPool, customer: Uuid) -> Vec<crate::requesters::RequesterDetail> {
         let mut shown = Vec::new();
