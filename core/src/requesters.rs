@@ -1367,6 +1367,33 @@ mod tests {
         assert!(refused(ada, harbor).await.contains("offboarded"));
     }
 
+    /// A requester that remained from one merge can be merged in turn: everything ends with the
+    /// last one that remains.
+    #[sqlx::test]
+    async fn merges_can_follow_one_another(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let twin = testing::requester(&db, brightfield, "a.ferrini@home.test").await;
+        let third = testing::requester(&db, brightfield, "ada.f@studio.test").await;
+        let n = testing::ticket(&db, brightfield, Some(twin), "t1@home.test").await;
+
+        merge(&db, ada, twin).await.unwrap();
+        merge(&db, third, ada).await.unwrap();
+        assert_eq!(
+            addresses(&db, third).await.unwrap(),
+            [
+                "ada.f@studio.test",
+                "ada@brightfield.test",
+                "a.ferrini@home.test"
+            ]
+        );
+        for gone in [ada, twin] {
+            assert!(matches!(detail(&db, gone).await, Err(Error::NotFound(_))));
+        }
+        let requester = crate::tickets::detail(&db, n).await.unwrap().requester;
+        assert_eq!(requester.map(|r| r.id), Some(third));
+    }
+
     /// The requester that remains keeps their details and takes those they lack from the merged
     /// one, so that nothing about the person is lost.
     #[sqlx::test]
@@ -1503,9 +1530,9 @@ Prefers phone calls."
                 tx.commit().await
             }
         };
-        testing::ticket(&db, harbor, Some(ivo), "i1@harbor.test").await;
-
-        assert!(by_hand(ada, ivo, true).await.is_err(), "across customers");
+        // Ivo has no tickets, so only the merge's own check can refuse him.
+        let across = by_hand(ada, ivo, true).await.unwrap_err().to_string();
+        assert!(across.contains("same customer"), "{across}");
         assert!(by_hand(ada, ada, true).await.is_err(), "with themselves");
         assert!(
             by_hand(ada, twin, false).await.is_err(),
