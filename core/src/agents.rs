@@ -40,9 +40,29 @@ pub async fn list(db: &PgPool) -> Result<Vec<AgentAccount>> {
     .await?)
 }
 
+/// An e-mail address as agents' addresses are kept: trimmed and in lower case.
+pub fn normalized_email(email: &str) -> String {
+    email.trim().to_lowercase()
+}
+
+/// Whether an agent other than `except` has the (normalized) address `email`.
+pub async fn email_taken(
+    db: impl sqlx::PgExecutor<'_>,
+    email: &str,
+    except: Option<Uuid>,
+) -> sqlx::Result<bool> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM agents WHERE email = $1 AND id IS DISTINCT FROM $2)",
+    )
+    .bind(email)
+    .bind(except)
+    .fetch_one(db)
+    .await
+}
+
 pub async fn id_by_email(db: &PgPool, email: &str) -> Result<Uuid> {
     sqlx::query_scalar("SELECT id FROM agents WHERE email = $1")
-        .bind(email.trim().to_lowercase())
+        .bind(normalized_email(email))
         .fetch_optional(db)
         .await?
         .ok_or(Error::NotFound("agent"))
@@ -105,11 +125,7 @@ pub async fn add(
     };
     let (grant, _) = roles::grant_of(&mut tx, role).await?;
     by.require_covers(&grant, "give a role")?;
-    let taken: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM agents WHERE email = $1)")
-        .bind(&email)
-        .fetch_one(&mut *tx)
-        .await?;
-    if taken {
+    if email_taken(&mut *tx, &email, None).await? {
         return rule(format!(
             "there is already an agent with the address {email}"
         ));
@@ -136,7 +152,7 @@ pub async fn add(
 
 /// The e-mail address, in lower case, and the name, trimmed, of an agent.
 fn email_and_name<'a>(email: &str, name: &'a str) -> Result<(String, &'a str)> {
-    let email = email.trim().to_lowercase();
+    let email = normalized_email(email);
     if !email.contains('@') || email.starts_with('@') || email.ends_with('@') {
         return rule("an agent needs an e-mail address");
     }
@@ -171,13 +187,7 @@ pub async fn edit(db: &PgPool, by: &Grant, agent: Uuid, email: &str, name: &str)
              come from",
         );
     }
-    let taken: bool =
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM agents WHERE email = $1 AND id <> $2)")
-            .bind(&email)
-            .bind(agent)
-            .fetch_one(&mut *tx)
-            .await?;
-    if taken {
+    if email_taken(&mut *tx, &email, Some(agent)).await? {
         return rule(format!(
             "there is already an agent with the address {email}"
         ));
