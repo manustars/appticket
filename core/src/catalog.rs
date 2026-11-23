@@ -237,50 +237,52 @@ impl StoredAsset {
     }
 }
 
-/// The [`StoredAsset`]s picked by the end of the query, on `assets`.
+/// The [`StoredAsset`]s picked by the end of the query, on `assets`, given in pieces.
 macro_rules! stored_assets {
-    ($rest:literal) => {
+    ($($rest:literal),+) => {
         concat!(
             "SELECT id, kind_id, name, serial_number, site_id, holder_id, source_addon,
                     retired_at IS NOT NULL AS retired
              FROM assets ",
-            $rest
+            $($rest),+
         )
     };
 }
 
-/// The customer's assets with that serial number, ignoring case, retired ones too: active ones
-/// first, then the most recently retired. Nothing is locked.
-pub(crate) async fn assets_with_serial_number<'e>(
-    db: impl sqlx::PgExecutor<'e>,
-    customer: Uuid,
-    serial_number: &str,
-) -> Result<Vec<StoredAsset>> {
-    Ok(sqlx::query_as(stored_assets!(
-        "WHERE customer_id = $1 AND lower(serial_number) = lower($2)
-         ORDER BY retired_at DESC NULLS FIRST, created_at, id"
-    ))
-    .bind(customer)
-    .bind(serial_number)
-    .fetch_all(db)
-    .await?)
+/// What an asset of a customer is recognised by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AssetKey {
+    SerialNumber,
+    Name,
 }
 
-/// The customer's assets with that name, ignoring case, retired ones too: active ones first, then
-/// the most recently retired. Nothing is locked.
-pub(crate) async fn assets_named<'e>(
+/// The customer's assets whose serial number or name is `value`, ignoring case, retired ones
+/// too: active ones first, then the most recently retired. Nothing is locked.
+pub(crate) async fn assets_by<'e>(
     db: impl sqlx::PgExecutor<'e>,
     customer: Uuid,
-    name: &str,
+    key: AssetKey,
+    value: &str,
 ) -> Result<Vec<StoredAsset>> {
-    Ok(sqlx::query_as(stored_assets!(
-        "WHERE customer_id = $1 AND lower(name) = lower($2)
-         ORDER BY retired_at DESC NULLS FIRST, created_at, id"
-    ))
-    .bind(customer)
-    .bind(name)
-    .fetch_all(db)
-    .await?)
+    macro_rules! whose {
+        ($column:literal) => {
+            stored_assets!(
+                "WHERE customer_id = $1 AND lower(",
+                $column,
+                ") = lower($2)
+                 ORDER BY retired_at DESC NULLS FIRST, created_at, id"
+            )
+        };
+    }
+    let query = match key {
+        AssetKey::SerialNumber => whose!("serial_number"),
+        AssetKey::Name => whose!("name"),
+    };
+    Ok(sqlx::query_as(query)
+        .bind(customer)
+        .bind(value)
+        .fetch_all(db)
+        .await?)
 }
 
 /// The asset as stored, locked against changes (`FOR NO KEY UPDATE`, so that a ticket being
