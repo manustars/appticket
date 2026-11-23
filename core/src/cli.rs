@@ -416,10 +416,10 @@ import moves, merges and brings back no one, and marks no one departed:
   notes               Internal notes, seen only by agents; they replace the ones there.
 
 Assets file (--assets); an asset is recognised by its serial number within its customer, else
-by its name, ignoring case. A row is about one
-asset entered by hand and not retired: a row matching an asset an add-on is the source of, a
-retired asset, or two assets, is left out, as is a row found by name whose asset has another
-serial number. An import replaces no serial number, and never retires or brings back an asset:
+by its name, ignoring case. A row is about one asset entered by hand and not retired: a row
+matching an asset an add-on is the source of, a retired asset, or two assets, is left out, as
+is a row found by name whose asset has another serial number. An import replaces no serial
+number, and never retires or brings back an asset:
   customer            The asset's customer, by name.
   customer_external_system
   customer_external_name
