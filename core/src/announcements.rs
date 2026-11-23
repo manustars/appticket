@@ -400,4 +400,67 @@ mod tests {
                 .unwrap();
         assert_eq!(queued, 0);
     }
+
+    /// Writes an announcement from ticket `number` straight to the database, with one recipient
+    /// at `address` when it is given; returns the database's refusal, if any.
+    async fn write(
+        db: &PgPool,
+        number: i64,
+        to: Option<(Uuid, &str)>,
+    ) -> std::result::Result<(), String> {
+        let mut tx = db.begin().await.unwrap();
+        let id = Uuid::new_v4();
+        let wrote = async {
+            sqlx::query(
+                "INSERT INTO announcements (id, ticket_id, author_id, subject, body)
+                 SELECT $1, t.id, (SELECT id FROM agents LIMIT 1), 'Outage', 'Still down.'
+                 FROM tickets t WHERE t.number = $2",
+            )
+            .bind(id)
+            .bind(number)
+            .execute(&mut *tx)
+            .await?;
+            if let Some((requester, address)) = to {
+                sqlx::query(
+                    "INSERT INTO announcement_recipients
+                         (announcement_id, requester_id, customer_id, address)
+                     SELECT $1, id, customer_id, $3 FROM requesters WHERE id = $2",
+                )
+                .bind(id)
+                .bind(requester)
+                .bind(address)
+                .execute(&mut *tx)
+                .await?;
+            }
+            tx.commit().await
+        };
+        wrote.await.map_err(|e| e.to_string())
+    }
+
+    /// The database refuses an announcement from a closed ticket, from a child and from a
+    /// ticket of a customer, also when the code is bypassed.
+    #[sqlx::test]
+    async fn the_database_keeps_announcements_from_parents_that_are_not_closed(db: PgPool) {
+        let own = testing::help_desk(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        crate::key_requesters::mark(&db, ada, None).await.unwrap();
+        testing::agent(&db, "marco@northgate.test").await;
+        let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
+        let child = testing::ticket(&db, brightfield, None, "a@brightfield.test").await;
+        attach(&db, child, outage).await.unwrap();
+        let other = testing::ticket(&db, brightfield, None, "b@brightfield.test").await;
+        let to = Some((ada, "ada@brightfield.test"));
+
+        let why = write(&db, child, to).await.unwrap_err();
+        assert!(why.contains("from a parent ticket"), "{why}");
+        let why = write(&db, other, to).await.unwrap_err();
+        assert!(why.contains("from a parent ticket"), "{why}");
+        write(&db, outage, to).await.unwrap();
+        tickets::set_state(&db, outage, tickets::TicketState::Closed)
+            .await
+            .unwrap();
+        let why = write(&db, outage, to).await.unwrap_err();
+        assert!(why.contains("closed"), "{why}");
+    }
 }

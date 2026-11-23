@@ -16,6 +16,34 @@ CREATE TABLE announcements (
 
 CREATE INDEX announcements_ticket ON announcements (ticket_id, created_at);
 
+-- An announcement is sent from a parent ticket that is not closed: a ticket of the help desk's own
+-- organization that is not a child. The ticket is locked, so that one being closed or attached at
+-- the same time is seen.
+CREATE FUNCTION announcements_come_from_parents_not_closed() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+DECLARE
+    ticket record;
+BEGIN
+    SELECT t.state, t.parent_id, c.is_help_desk INTO ticket
+    FROM tickets t JOIN customers c ON c.id = t.customer_id
+    WHERE t.id = NEW.ticket_id
+    FOR SHARE OF t;
+    IF NOT ticket.is_help_desk OR ticket.parent_id IS NOT NULL THEN
+        RAISE EXCEPTION 'an announcement is sent from a parent ticket, of the help desk''s own organization'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    IF ticket.state = 'closed' THEN
+        RAISE EXCEPTION 'a closed ticket sends no announcements'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER announcements_come_from_parents_not_closed
+    AFTER INSERT OR UPDATE OF ticket_id ON announcements
+    FOR EACH ROW EXECUTE FUNCTION announcements_come_from_parents_not_closed();
+
 -- Who an announcement went to, as they were when it was sent: the list does not change when a
 -- recipient later changes their contact address, stops being a key requester, moves or is merged
 -- away (which removes the requester, so there is no key on them).
