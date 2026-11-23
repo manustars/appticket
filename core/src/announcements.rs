@@ -425,6 +425,83 @@ mod tests {
         assert_eq!(queued, 0);
     }
 
+    /// Announcements are sent as often as needed, from a parent in any state but closed, and
+    /// change the state of neither the parent nor its children; a closed child still counts. Each
+    /// stays listed as it was sent, whatever happens to its recipients afterwards.
+    #[sqlx::test]
+    async fn announcements_change_no_state_and_stay_as_sent(db: PgPool) {
+        let own = testing::help_desk(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let delta = testing::customer(&db, "Delta Works").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        crate::requesters::add_address(&db, ada, "ada@home.test")
+            .await
+            .unwrap();
+        crate::key_requesters::mark(&db, ada, Some("ada@brightfield.test"))
+            .await
+            .unwrap();
+        let ivo = testing::requester(&db, harbor, "ivo@harbor.test").await;
+        let nora = testing::requester(&db, delta, "nora@delta.test").await;
+        for key in [ivo, nora] {
+            crate::key_requesters::mark(&db, key, None).await.unwrap();
+        }
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
+        let mut children = Vec::new();
+        for (customer, id, state) in [
+            (brightfield, "a@brightfield.test", TicketState::Waiting),
+            (harbor, "b@harbor.test", TicketState::Resolved),
+            (delta, "d@delta.test", TicketState::Closed),
+        ] {
+            let child = testing::ticket(&db, customer, None, id).await;
+            attach(&db, child, outage).await.unwrap();
+            tickets::set_state(&db, child, state).await.unwrap();
+            children.push(child);
+        }
+        tickets::set_state(&db, outage, TicketState::Resolved)
+            .await
+            .unwrap();
+        let sender = testing::sender();
+
+        send(&db, &sender, outage, agent, "Mail is down.")
+            .await
+            .unwrap();
+        crate::key_requesters::mark(&db, ada, Some("ada@home.test"))
+            .await
+            .unwrap();
+        crate::key_requesters::unmark(&db, ivo).await.unwrap();
+        send(&db, &sender, outage, agent, "Mail is back.")
+            .await
+            .unwrap();
+
+        let listed = listed(&db, outage).await;
+        let bodies: Vec<&str> = listed.iter().map(|a| a.body.as_str()).collect();
+        assert_eq!(bodies, ["Mail is down.", "Mail is back."]);
+        assert_eq!(
+            to_whom(&listed[0]),
+            [
+                ("Brightfield", "ada@brightfield.test"),
+                ("Delta Works", "nora@delta.test"),
+                ("Harbor Lane", "ivo@harbor.test")
+            ]
+        );
+        assert_eq!(
+            to_whom(&listed[1]),
+            [
+                ("Brightfield", "ada@home.test"),
+                ("Delta Works", "nora@delta.test")
+            ]
+        );
+        assert_eq!(testing::state(&db, outage).await, "resolved");
+        let states = [
+            testing::state(&db, children[0]).await,
+            testing::state(&db, children[1]).await,
+            testing::state(&db, children[2]).await,
+        ];
+        assert_eq!(states, ["waiting", "resolved", "closed"]);
+    }
+
     /// An offboarded customer is no longer served: an announcement does not go to its key
     /// requesters, whether it has a child of the parent or uses one of its services.
     #[sqlx::test]
