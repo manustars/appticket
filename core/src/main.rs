@@ -95,8 +95,8 @@ enum Command {
             value_parser = clap::value_parser!(u64).range(1..=86_400))]
         sign_in_window_seconds: u64,
         /// Reverse proxies, as addresses or networks separated by commas (192.0.2.10,
-        /// 198.51.100.0/24), whose X-Forwarded-For gives the client's address. Without them the
-        /// header is ignored and the connection's address is the client's.
+        /// 198.51.100.0/24), whose X-Forwarded-For gives the address a sign-in counts under.
+        /// Without them the header is ignored and a sign-in counts under its connection's address.
         #[arg(long, env = "HD_TRUSTED_PROXIES", default_value = "", hide_default_value = true,
             value_parser = http::parse_proxies)]
         trusted_proxies: http::TrustedProxies,

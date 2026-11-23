@@ -78,7 +78,7 @@ small staging install with the test mail server. The most common settings:
 | `core.mail.from`, `core.mail.fromName` | The help desk's own address and display name, for replies. |
 | `core.mail.imap/smtp.existingSecret` | The mail Secrets above. |
 | `ingress.*` | Host, class, annotations and TLS (see [HTTPS](#https)). |
-| `core.signIn.*` | Limits on failed sign-ins and the trusted reverse proxies (see [Failed sign-ins](#failed-sign-ins)). |
+| `core.signIn.*` | Failed sign-in limits and trusted proxies (see [Failed sign-ins](#failed-sign-ins)). |
 | `dumps.*` | Scheduled database dumps to a volume (see [Backups](#backups)). |
 | `postgresql.*` | Instances, storage size and class, backups. |
 | `assistant.*` | See [The Assistant](#the-assistant). |
@@ -105,8 +105,8 @@ To send plain HTTP to HTTPS with ingress-nginx, add the annotation
 
 ### Failed sign-ins
 
-Repeated failed sign-ins are slowed, then refused for a while, per account and per client
-address, so that guessing at the sign-in page cannot lock a person out of their organization's
+Repeated failed sign-ins are slowed, then refused for a while, per account and per address, so
+that guessing at the sign-in page cannot lock a person out of their organization's
 directory once agents sign in through it. After `core.signIn.failures` failures
 (`HD_SIGN_IN_FAILURES`, default 5) within `core.signIn.windowSeconds`
 (`HD_SIGN_IN_WINDOW_SECONDS`, default 900, that is 15 minutes), the next four attempts wait 1, 2,
@@ -115,13 +115,14 @@ checking it until a window has passed since the last failure. The sign-in page t
 again later. At most `failures` + 4 passwords are checked per account within a window: keep that
 below the directory's own lockout threshold.
 
-The client's address is the connection's. Behind the chart's Ingress every connection comes from
-the ingress controller, which passes the client's address on in `X-Forwarded-For`; the core
-believes that header only from the proxies listed in `core.signIn.trustedProxies`
-(`HD_TRUSTED_PROXIES`, addresses or networks separated by commas). With the list empty, the
-header is ignored and every agent is counted under the controller's address, so that a handful
-of failures by anyone (nine with the defaults) refuse everyone for a while. List the addresses the ingress controller's pods
-connect from, usually the cluster's pod network:
+A sign-in counts under the address of the connection it comes on. Behind the chart's Ingress
+every connection comes from the ingress controller, which passes the browser's address on in
+`X-Forwarded-For`; the core believes that header only from the proxies listed in
+`core.signIn.trustedProxies` (`HD_TRUSTED_PROXIES`, addresses or networks separated by commas).
+With the list empty, the header is ignored and every agent is counted under the controller's
+address, so that a handful of failures by anyone (nine with the defaults) refuse everyone for a
+while. List the addresses the ingress controller's pods connect from, usually the cluster's pod
+network:
 
 ```yaml
 core:
@@ -131,10 +132,10 @@ core:
 ```
 
 The core reads the header from the right and takes the first address that is not a trusted
-proxy; what the client itself wrote on the left is never believed. With a load balancer in front
+proxy; what the browser itself wrote on the left is never believed. With a load balancer in front
 of the ingress controller that adds to `X-Forwarded-For` too, list its addresses as well, and
 make sure the ingress controller passes on what the load balancer added. List only proxies that
-you run: any client that connects from a listed address can say it is anyone.
+you run: anything that connects from a listed address can say it is anyone.
 
 ## First steps
 
