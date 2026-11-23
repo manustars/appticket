@@ -12,6 +12,11 @@ core:
   mail:
     # The test mail server below provides the mailbox; the replies come from its address.
     pollSeconds: 5
+  signIn:
+    # The addresses the ingress controller connects from, so that failed sign-ins count per
+    # client rather than all under the controller (docs/deploy.md, "Failed sign-ins").
+    trustedProxies:
+      - 10.0.0.0/8                         # your cluster's pod network
 
 ingress:
   enabled: true

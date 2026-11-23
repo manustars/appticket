@@ -130,12 +130,11 @@ core:
       - 10.0.0.0/8          # your cluster's pod network
 ```
 
-List every proxy between the clients and the core: a load balancer in front of the ingress
-controller that adds to `X-Forwarded-For` too, and the ingress controller set to keep what it
-adds (with ingress-nginx, `use-forwarded-headers`). The core reads the header from the right and
-takes the first address that is not a trusted proxy; what the client itself wrote on the left is
-never believed. List only proxies that you run: any client that connects from a listed address
-can say it is anyone.
+The core reads the header from the right and takes the first address that is not a trusted
+proxy; what the client itself wrote on the left is never believed. With a load balancer in front
+of the ingress controller that adds to `X-Forwarded-For` too, list its addresses as well, and
+make sure the ingress controller passes on what the load balancer added. List only proxies that
+you run: any client that connects from a listed address can say it is anyone.
 
 ## First steps
 
