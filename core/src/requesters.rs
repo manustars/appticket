@@ -135,6 +135,50 @@ pub async fn create(
     Ok(id)
 }
 
+/// Adds a requester of `customer`, which the caller has locked, with `addresses`: clean, belonging
+/// to nobody yet, and registered in their order. An import takes no address from anyone.
+pub(crate) async fn create_with_new_addresses(
+    tx: &mut Transaction<'_, Postgres>,
+    customer: Uuid,
+    addresses: &[String],
+) -> Result<Uuid> {
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO requesters (id, customer_id) VALUES ($1, $2)")
+        .bind(id)
+        .bind(customer)
+        .execute(&mut **tx)
+        .await?;
+    for address in addresses {
+        add_new_address_in(tx, id, address).await?;
+    }
+    Ok(id)
+}
+
+/// Gives `requester`, whom the caller has locked, a clean address that belongs to nobody yet,
+/// registered after the ones they have.
+pub(crate) async fn add_new_address_in(
+    tx: &mut Transaction<'_, Postgres>,
+    requester: Uuid,
+    address: &str,
+) -> Result<()> {
+    let given = sqlx::query(
+        "INSERT INTO requester_addresses (address, requester_id, created_at)
+         SELECT $1, $2, greatest(now(), max(created_at) + interval '1 microsecond')
+         FROM requester_addresses WHERE requester_id = $2",
+    )
+    .bind(address)
+    .bind(requester)
+    .execute(&mut **tx)
+    .await;
+    match given {
+        Err(e) if taken(&e) => rule(format!(
+            "the address {address} already belongs to a requester"
+        )),
+        Err(e) => Err(e.into()),
+        Ok(_) => Ok(()),
+    }
+}
+
 /// The requester of `customer` the address belongs to, registered with `name` if new; an address
 /// of another customer's requester is refused unless they departed, and a departed requester of
 /// `customer` is refused too. A known requester without a name takes `name`.
@@ -620,6 +664,18 @@ fn filled(text: Option<&str>) -> Option<&str> {
 /// Corrects a requester's details. Their site must be one of their customer's that is not
 /// retired.
 pub async fn update(db: &PgPool, id: Uuid, details: &RequesterDetails) -> Result<()> {
+    let mut tx = db.begin().await?;
+    update_in(&mut tx, id, details).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`update`], inside the caller's transaction.
+pub(crate) async fn update_in(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    details: &RequesterDetails,
+) -> Result<()> {
     let mut phone_numbers = Vec::new();
     for number in &details.phone_numbers {
         match filled(Some(number)) {
@@ -627,15 +683,14 @@ pub async fn update(db: &PgPool, id: Uuid, details: &RequesterDetails) -> Result
             None => return rule("a phone number cannot be blank"),
         }
     }
-    let mut tx = db.begin().await?;
-    let customer = lock_with_customer(&mut tx, id).await?;
+    let customer = lock_with_customer(tx, id).await?;
     if let Some(site) = details.site_id {
         let retired: Option<bool> = sqlx::query_scalar(
             "SELECT retired_at IS NOT NULL FROM sites WHERE id = $1 AND customer_id = $2",
         )
         .bind(site)
         .bind(customer)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?;
         match retired {
             None => return rule("the site is not one of the requester's customer"),
@@ -654,9 +709,8 @@ pub async fn update(db: &PgPool, id: Uuid, details: &RequesterDetails) -> Result
     .bind(filled(details.job_title.as_deref()))
     .bind(details.notes.trim())
     .bind(details.site_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 
