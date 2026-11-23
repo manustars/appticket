@@ -7,7 +7,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use openidconnect::{ClientId, ClientSecret, IssuerUrl, RedirectUrl};
+use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType};
+use openidconnect::{
+    AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet,
+    EndpointNotSet, EndpointSet, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
+    RedirectUrl, Scope, TokenResponse,
+};
+use serde::Deserialize;
+use sqlx::PgPool;
+use utoipa::IntoParams;
+
+use crate::auth;
+use crate::identities::Identity;
 
 /// Where the provider sends the browser back to, under the core's public URL.
 pub const CALLBACK_PATH: &str = "/api/session/identity-provider/callback";
@@ -161,6 +172,169 @@ impl Provider {
     pub fn label(&self) -> &str {
         &self.config.label
     }
+
+    /// How long a session opened through the provider lasts.
+    pub fn session(&self) -> time::Duration {
+        self.config.session
+    }
+
+    /// The provider's endpoints and keys, read from its discovery document every time: a sign-in
+    /// is rare enough, and a key the provider rotated is seen at once.
+    async fn client(&self) -> anyhow::Result<Client> {
+        let http = |request| send(self.http.clone(), request);
+        let metadata = CoreProviderMetadata::discover_async(self.config.issuer.clone(), &http)
+            .await
+            .context("reading the identity provider's configuration")?;
+        Ok(CoreClient::from_provider_metadata(
+            metadata,
+            self.config.client_id.clone(),
+            Some(self.config.client_secret.clone()),
+        )
+        .set_redirect_uri(self.config.redirect.clone()))
+    }
+
+    /// Sets a sign-in out: where to send the browser, and the state it must bring back.
+    pub async fn begin(&self, db: &PgPool) -> anyhow::Result<Begun> {
+        let client = self.client().await?;
+        let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
+        let (url, state, nonce) = client
+            .authorize_url(
+                AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
+                CsrfToken::new_random,
+                Nonce::new_random,
+            )
+            .add_scope(Scope::new("email".to_owned()))
+            .add_scope(Scope::new("profile".to_owned()))
+            .set_pkce_challenge(challenge)
+            .url();
+        sqlx::query("DELETE FROM identity_provider_sign_ins WHERE expires_at <= now()")
+            .execute(db)
+            .await?;
+        sqlx::query(
+            "INSERT INTO identity_provider_sign_ins (state_hash, nonce, pkce_verifier, expires_at)
+             VALUES ($1, $2, $3, now() + make_interval(secs => $4))",
+        )
+        .bind(auth::token_hash(state.secret()))
+        .bind(nonce.secret())
+        .bind(verifier.secret())
+        .bind(SIGN_IN_TIME.as_secs_f64())
+        .execute(db)
+        .await?;
+        Ok(Begun {
+            url,
+            state: state.secret().clone(),
+        })
+    }
+
+    /// Checks the browser's return from the provider and the ID token it leads to: who signed
+    /// in. `kept_state` is the state the browser kept from [`Provider::begin`].
+    pub async fn finish(
+        &self,
+        db: &PgPool,
+        kept_state: Option<&str>,
+        back: &Return,
+    ) -> anyhow::Result<Identity> {
+        if let Some(error) = &back.error {
+            bail!("the identity provider answered {error}");
+        }
+        let (Some(code), Some(state)) = (&back.code, &back.state) else {
+            bail!("the identity provider's answer has no code or state");
+        };
+        if kept_state != Some(state.as_str()) {
+            bail!("the state is not the one this browser set out with");
+        }
+        let pending: Option<(String, String)> = sqlx::query_as(
+            "DELETE FROM identity_provider_sign_ins
+             WHERE state_hash = $1 AND expires_at > now()
+             RETURNING nonce, pkce_verifier",
+        )
+        .bind(auth::token_hash(state))
+        .fetch_optional(db)
+        .await?;
+        let Some((nonce, verifier)) = pending else {
+            bail!("the sign-in is unknown, used or expired");
+        };
+        let client = self.client().await?;
+        let http = |request| send(self.http.clone(), request);
+        let tokens = client
+            .exchange_code(AuthorizationCode::new(code.clone()))?
+            .set_pkce_verifier(PkceCodeVerifier::new(verifier))
+            .request_async(&http)
+            .await
+            .context("exchanging the code at the identity provider")?;
+        let id_token = tokens
+            .id_token()
+            .context("the identity provider sent no ID token")?;
+        let claims = id_token
+            .claims(&client.id_token_verifier(), &Nonce::new(nonce))
+            .context("checking the ID token")?;
+        let name = claims
+            .name()
+            .and_then(|name| name.get(None))
+            .map(|name| name.to_string())
+            .or_else(|| {
+                let given = claims.given_name().and_then(|n| n.get(None));
+                let family = claims.family_name().and_then(|n| n.get(None));
+                let parts: Vec<String> =
+                    [given.map(|n| n.to_string()), family.map(|n| n.to_string())]
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                (!parts.is_empty()).then(|| parts.join(" "))
+            });
+        Ok(Identity {
+            issuer: self.config.issuer.as_str().to_owned(),
+            subject: claims.subject().as_str().to_owned(),
+            email: claims.email().map(|email| email.as_str().to_owned()),
+            email_verified: claims.email_verified() == Some(true),
+            name,
+        })
+    }
+}
+
+/// How long the browser has to come back from the provider.
+const SIGN_IN_TIME: Duration = Duration::from_secs(10 * 60);
+
+/// A sign-in set out.
+pub struct Begun {
+    /// The provider's page to send the browser to.
+    pub url: url::Url,
+    /// The state the browser keeps until it comes back.
+    pub state: String,
+}
+
+/// What the provider sends the browser back with.
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct Return {
+    pub code: Option<String>,
+    pub state: Option<String>,
+    /// The provider's refusal, such as `access_denied`.
+    pub error: Option<String>,
+}
+
+type Client = openidconnect::core::CoreClient<
+    EndpointSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointMaybeSet,
+    EndpointMaybeSet,
+>;
+
+/// Sends the request of the OpenID Connect library through the core's HTTP client.
+async fn send(
+    http: reqwest::Client,
+    request: openidconnect::HttpRequest,
+) -> Result<openidconnect::HttpResponse, reqwest::Error> {
+    let response = http.execute(request.try_into()?).await?;
+    let mut answer = openidconnect::http::Response::builder().status(response.status());
+    for (name, value) in response.headers() {
+        answer = answer.header(name, value);
+    }
+    let body = response.bytes().await?.to_vec();
+    Ok(answer
+        .body(body)
+        .expect("a response with the provider's status and headers"))
 }
 
 /// Refuses a URL that is not https://, but for a server on this machine.

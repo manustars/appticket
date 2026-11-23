@@ -1,0 +1,80 @@
+{
+  "realm": "helpdesk",
+  "displayName": "Help desk test identity provider",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": true,
+  "bruteForceProtected": false,
+  "clients": [
+    {
+      "clientId": "hd-core",
+      "name": "Help desk (development and CI only)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "dev-only-client-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "consentRequired": false,
+      "redirectUris": [
+        "http://127.0.0.1:8080/api/session/identity-provider/callback",
+        "http://localhost:8080/api/session/identity-provider/callback",
+        "http://127.0.0.1:5173/api/session/identity-provider/callback",
+        "http://localhost:5173/api/session/identity-provider/callback"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "users": [
+    {
+      "id": "6f1c2a0e-8d3b-4c55-9a41-0b7e2d6f3a01",
+      "username": "lena",
+      "enabled": true,
+      "email": "lena.marsh@example.com",
+      "emailVerified": true,
+      "firstName": "Lena",
+      "lastName": "Marsh",
+      "credentials": [{ "type": "password", "value": "lena-dev-password", "temporary": false }]
+    },
+    {
+      "id": "6f1c2a0e-8d3b-4c55-9a41-0b7e2d6f3a02",
+      "username": "otto",
+      "enabled": true,
+      "email": "otto.vale@example.com",
+      "emailVerified": false,
+      "firstName": "Otto",
+      "lastName": "Vale",
+      "credentials": [{ "type": "password", "value": "otto-dev-password", "temporary": false }]
+    },
+    {
+      "id": "6f1c2a0e-8d3b-4c55-9a41-0b7e2d6f3a03",
+      "username": "nadia",
+      "enabled": true,
+      "email": "nadia.quist@example.com",
+      "emailVerified": true,
+      "firstName": "Nadia",
+      "lastName": "Quist",
+      "credentials": [{ "type": "password", "value": "nadia-dev-password", "temporary": false }]
+    },
+    {
+      "id": "6f1c2a0e-8d3b-4c55-9a41-0b7e2d6f3a04",
+      "username": "piet",
+      "enabled": true,
+      "email": "piet.oak@example.com",
+      "emailVerified": true,
+      "firstName": "Piet",
+      "lastName": "Oak",
+      "credentials": [{ "type": "password", "value": "piet-dev-password", "temporary": false }]
+    }
+  ]
+}

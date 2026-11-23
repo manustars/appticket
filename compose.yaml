@@ -33,5 +33,20 @@ services:
       - "127.0.0.1:55025:3025"
       - "127.0.0.1:55143:3143"
 
+  # Test identity provider (OpenID Connect) on host port 55080, for development and CI only. The
+  # realm in dev/keycloak is imported at start: issuer http://127.0.0.1:55080/realms/helpdesk,
+  # client hd-core with secret dev-only-client-secret, and test users such as lena (password
+  # lena-dev-password). Nothing is kept: a new container starts from the realm file again.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.2
+    command: ["start-dev", "--import-realm"]
+    environment:
+      # The issuer is the same for the core and the browser, whichever address reaches it.
+      KC_HOSTNAME: http://127.0.0.1:55080
+    ports:
+      - "127.0.0.1:55080:8080"
+    volumes:
+      - ./dev/keycloak:/opt/keycloak/data/import:ro
+
 volumes:
   db-data:
