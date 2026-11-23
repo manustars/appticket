@@ -971,7 +971,7 @@ async fn named_customer(
 }
 
 /// Refuses a site or requester row whose customer row is left out.
-fn waits_for_customer(line: u64) -> Result<Done> {
+fn waits_for_customer<T>(line: u64) -> Result<T> {
     rule(format!(
         "the row of its customer, line {line} of the customers file, is left out"
     ))
@@ -1044,41 +1044,15 @@ async fn site_row(
     Ok(Done::updated(changes))
 }
 
-/// The requester an address of a row belongs to.
-#[derive(sqlx::FromRow)]
-struct AddressOwner {
-    address: String,
-    requester_id: Uuid,
-    customer_id: Uuid,
-    customer_name: String,
-    departed: bool,
-}
-
-/// Who the addresses belong to, those that belong to someone, in their order; nothing is locked,
-/// so that a row that changes nothing waits for no one.
-async fn owners(
-    tx: &mut Transaction<'_, Postgres>,
-    addresses: &[String],
-) -> Result<Vec<AddressOwner>> {
-    Ok(sqlx::query_as(
-        "SELECT a.address, a.requester_id, r.customer_id, c.name AS customer_name,
-                r.departed_at IS NOT NULL AS departed
-         FROM requester_addresses a
-         JOIN requesters r ON r.id = a.requester_id
-         JOIN customers c ON c.id = r.customer_id
-         WHERE a.address = ANY($1)
-         ORDER BY array_position($1, a.address)",
-    )
-    .bind(addresses)
-    .fetch_all(&mut **tx)
-    .await?)
-}
-
 /// The requester of `customer` a row is about, by the owners of its addresses; none for a new
 /// one. A row is about one requester of its customer who has not departed: an import moves,
 /// merges and brings back no one, and takes no address from anyone, not even from a requester
 /// who departed from another customer.
-fn recognised(customer: Uuid, owners: &[AddressOwner], so_far: &SoFar) -> Result<Option<Uuid>> {
+fn recognised(
+    customer: Uuid,
+    owners: &[crate::requesters::Owner],
+    so_far: &SoFar,
+) -> Result<Option<Uuid>> {
     if let Some(line) = owners
         .iter()
         .find_map(|o| so_far.requesters.get(&o.requester_id))
@@ -1121,26 +1095,6 @@ fn recognised(customer: Uuid, owners: &[AddressOwner], so_far: &SoFar) -> Result
     Ok(Some(first.requester_id))
 }
 
-/// A requester's details as they are stored.
-async fn requester_details(
-    tx: &mut Transaction<'_, Postgres>,
-    id: Uuid,
-) -> Result<RequesterDetails> {
-    let (name, phone_numbers, job_title, notes, site_id) = sqlx::query_as(
-        "SELECT name, phone_numbers, job_title, notes, site_id FROM requesters WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(&mut **tx)
-    .await?;
-    Ok(RequesterDetails {
-        name,
-        phone_numbers,
-        job_title,
-        notes,
-        site_id,
-    })
-}
-
 /// The row's filled cells over a requester's details: phone numbers are added to theirs.
 fn requester_merged(
     before: &RequesterDetails,
@@ -1170,7 +1124,7 @@ fn requester_merged(
     after
 }
 
-/// The columns whose values differ, in the file's order of columns.
+/// The columns whose values differ, in the order of the columns of a requesters file.
 fn requester_changes(before: &RequesterDetails, after: &RequesterDetails) -> Vec<&'static str> {
     [
         ("name", before.name == after.name),
@@ -1235,12 +1189,35 @@ async fn requester_site(
     }
 }
 
+/// A requester row as recognised, before anything is locked.
+struct RequesterFound {
+    customer: Uuid,
+    /// The existing requester the row is about; none for a new one.
+    requester: Option<Uuid>,
+    /// The row's addresses, clean, in their order.
+    addresses: Vec<String>,
+    /// Those that belong to nobody yet, which the requester gets.
+    to_add: Vec<String>,
+    site: Option<Uuid>,
+}
+
 async fn requester_row(
     tx: &mut Transaction<'_, Postgres>,
     table: &Table,
     row: &Row,
     so_far: &mut SoFar,
 ) -> Result<Done> {
+    let found = recognise_requester(tx, table, row, so_far).await?;
+    write_requester(tx, table, row, so_far, found).await
+}
+
+/// What a requester row is about, read without locking anything.
+async fn recognise_requester(
+    tx: &mut Transaction<'_, Postgres>,
+    table: &Table,
+    row: &Row,
+    so_far: &SoFar,
+) -> Result<RequesterFound> {
     if let Some(line) = so_far.new_customer_left_out(table, row) {
         return waits_for_customer(line);
     }
@@ -1258,15 +1235,40 @@ async fn requester_row(
     if addresses.is_empty() {
         return rule("a requester needs an e-mail address");
     }
-    let owners = owners(tx, &addresses).await?;
-    let found = recognised(customer, &owners, so_far)?;
+    let owners = crate::requesters::owners(&mut **tx, &addresses).await?;
+    let requester = recognised(customer, &owners, so_far)?;
     let site = requester_site(tx, table, row, customer, so_far).await?;
-    // The addresses that belong to nobody yet, which the requester gets.
-    let to_add: Vec<&String> = addresses
+    let to_add = addresses
         .iter()
         .filter(|a| !owners.iter().any(|o| o.address == **a))
+        .cloned()
         .collect();
-    let Some(id) = found else {
+    Ok(RequesterFound {
+        customer,
+        requester,
+        addresses,
+        to_add,
+        site,
+    })
+}
+
+/// Creates or updates the requester a row was recognised as; an existing one is locked and read
+/// again first, and only when the row changes them.
+async fn write_requester(
+    tx: &mut Transaction<'_, Postgres>,
+    table: &Table,
+    row: &Row,
+    so_far: &mut SoFar,
+    found: RequesterFound,
+) -> Result<Done> {
+    let RequesterFound {
+        customer,
+        requester,
+        addresses,
+        to_add,
+        site,
+    } = found;
+    let Some(id) = requester else {
         crate::customers::lock_active(tx, customer).await?;
         let id = crate::requesters::create_with_new_addresses(tx, customer, &addresses).await?;
         let details = requester_merged(&RequesterDetails::default(), table, row, site);
@@ -1281,35 +1283,44 @@ async fn requester_row(
         }
         changes
     };
-    let mut done = changes(&requester_details(tx, id).await?);
+    let Some((before, _)) = crate::requesters::stored(&mut **tx, id).await? else {
+        return merged_meanwhile();
+    };
+    let mut changed_columns = changes(&before);
     // Only a requester that changes is written, and locked; they are read again under the lock,
     // so that a change made meanwhile is kept and the report says what is written.
-    if !done.is_empty() {
+    if !changed_columns.is_empty() {
+        let locked = match crate::requesters::lock_with_customer(tx, id).await {
+            Err(Error::NotFound(_)) => return merged_meanwhile(),
+            locked => locked?,
+        };
         // Moved to another customer since they were recognised: about another customer now.
-        if crate::requesters::lock_with_customer(tx, id).await? != customer {
+        if locked != customer {
             return rule("the requester has just moved to another customer; reload and try again");
         }
-        let departed: bool =
-            sqlx::query_scalar("SELECT departed_at IS NOT NULL FROM requesters WHERE id = $1")
-                .bind(id)
-                .fetch_one(&mut **tx)
-                .await?;
+        let Some((before, departed)) = crate::requesters::stored(&mut **tx, id).await? else {
+            return merged_meanwhile();
+        };
         if departed {
             return rule(
                 "the requester has just departed: bring them back from their page first; an \
                  import does not",
             );
         }
-        let before = requester_details(tx, id).await?;
-        done = changes(&before);
-        for address in to_add {
+        changed_columns = changes(&before);
+        for address in &to_add {
             crate::requesters::add_new_address_in(tx, id, address).await?;
         }
         let after = requester_merged(&before, table, row, site);
         crate::requesters::update_in(tx, id, &after).await?;
     }
     so_far.requesters.insert(id, row.line);
-    Ok(Done::updated(done))
+    Ok(Done::updated(changed_columns))
+}
+
+/// A requester recognised a moment before was merged into another meanwhile, and is gone.
+fn merged_meanwhile<T>() -> Result<T> {
+    Err(Error::NotFound("requester"))
 }
 
 #[cfg(test)]
