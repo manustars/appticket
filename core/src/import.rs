@@ -385,8 +385,11 @@ pub async fn run(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -
         for row in &table.rows {
             // Each row on its own: one left out leaves nothing behind.
             let mut savepoint = tx.begin().await?;
+            let mut candidates = Vec::new();
             let done = match kind {
-                Kind::Customers => customer_row(&mut savepoint, table, row, &mut so_far).await,
+                Kind::Customers => {
+                    customer_row(&mut savepoint, table, row, &mut so_far, &mut candidates).await
+                }
                 Kind::Sites => site_row(&mut savepoint, table, row, &mut so_far).await,
             };
             let (outcome, changes, reason) = match left_out(done)? {
@@ -402,8 +405,11 @@ pub async fn run(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -
                 Err(why) => {
                     savepoint.rollback().await?;
                     if *kind == Kind::Customers {
-                        let keys = Keys::of_customer(table, row);
-                        so_far.customers_left_out.push((row.line, keys));
+                        so_far.customers_left_out.push(CustomerLeftOut {
+                            line: row.line,
+                            customers: candidates,
+                            keys: Keys::of_customer(table, row),
+                        });
                     }
                     (Outcome::LeftOut, Vec::new(), Some(why))
                 }
@@ -453,10 +459,20 @@ struct SoFar {
     customers: HashMap<Uuid, u64>,
     /// The sites imported, with the line of the row that did.
     sites: HashMap<Uuid, u64>,
-    /// The customer rows left out, with the line of each, for the rows that name them.
-    customers_left_out: Vec<(u64, Keys)>,
+    /// The customer rows left out, for the rows that name their customers.
+    customers_left_out: Vec<CustomerLeftOut>,
     /// The customer rows imported.
     customers_imported: Vec<Keys>,
+}
+
+/// A customer row left out.
+struct CustomerLeftOut {
+    line: u64,
+    /// The existing customers the row was found to be about: one, or several when it could be
+    /// any of them. None for a row that would have created its customer.
+    customers: Vec<Uuid>,
+    /// How the row names its customer, for a customer it would have created.
+    keys: Keys,
 }
 
 /// How a row names a customer: its name and an external reference, ignoring case.
@@ -489,9 +505,9 @@ impl Keys {
 }
 
 impl SoFar {
-    /// The line of the customer row left out that a site row names, unless another row imported
-    /// that customer, as when a second row of a customer is left out.
-    fn customer_left_out(&self, table: &Table, row: &Line) -> Option<u64> {
+    /// The line of a customer row left out that would have created the customer a site row
+    /// names, unless another row imported that customer.
+    fn new_customer_left_out(&self, table: &Table, row: &Line) -> Option<u64> {
         let keys = Keys::of(
             table,
             row,
@@ -504,8 +520,20 @@ impl SoFar {
         }
         self.customers_left_out
             .iter()
-            .find(|(_, left_out)| left_out.meet(&keys))
-            .map(|(line, _)| *line)
+            .find(|left_out| left_out.customers.is_empty() && left_out.keys.meet(&keys))
+            .map(|left_out| left_out.line)
+    }
+
+    /// The line of a customer row left out that was about `customer`, an existing customer,
+    /// unless another row imported it, as when a second row of a customer is left out.
+    fn existing_customer_left_out(&self, customer: Uuid) -> Option<u64> {
+        if self.customers.contains_key(&customer) {
+            return None;
+        }
+        self.customers_left_out
+            .iter()
+            .find(|left_out| left_out.customers.contains(&customer))
+            .map(|left_out| left_out.line)
     }
 }
 
@@ -593,18 +621,26 @@ async fn name_of(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<String>
 }
 
 /// The customer a row is about: the one its external reference names, else the one with its
-/// name. A row that could be two customers is about neither.
+/// name. A row that could be two customers is about neither. Every customer the row could be
+/// about goes into `candidates`, even when it is refused.
 async fn recognise(
     tx: &mut Transaction<'_, Postgres>,
     name: Option<&str>,
     reference: Option<&Reference<'_>>,
+    candidates: &mut Vec<Uuid>,
 ) -> Result<Option<Uuid>> {
     let named = match name {
         Some(name) => with_name(tx, name).await?,
         None => Vec::new(),
     };
+    candidates.extend(named.iter().map(|(id, _)| *id));
+    let by_reference = match reference {
+        Some(reference) => named_by(tx, reference).await?,
+        None => None,
+    };
+    candidates.extend(by_reference);
     if let Some(reference) = reference
-        && let Some(id) = named_by(tx, reference).await?
+        && let Some(id) = by_reference
     {
         if let Some((_, other)) = named.first()
             && !named.iter().any(|(n, _)| *n == id)
@@ -677,10 +713,11 @@ async fn customer_row(
     table: &Table,
     row: &Line,
     so_far: &mut SoFar,
+    candidates: &mut Vec<Uuid>,
 ) -> Result<Done> {
     let name = table.cell(row, "name");
     let reference = reference(table, row, "external_system", "external_name")?;
-    let found = recognise(tx, name, reference.as_ref()).await?;
+    let found = recognise(tx, name, reference.as_ref(), candidates).await?;
     if let Some(line) = found.and_then(|id| so_far.customers.get(&id)) {
         return rule(format!("line {line} already imports this customer"));
     }
@@ -759,7 +796,7 @@ async fn site_customer(
             reference.name, reference.system
         ));
     }
-    let Some(id) = recognise(tx, name, reference.as_ref()).await? else {
+    let Some(id) = recognise(tx, name, reference.as_ref(), &mut Vec::new()).await? else {
         return rule(format!("no customer is named {}", name.unwrap_or_default()));
     };
     let owner = name_of(tx, id).await?;
@@ -781,12 +818,18 @@ async fn site_row(
     row: &Line,
     so_far: &mut SoFar,
 ) -> Result<Done> {
-    if let Some(line) = so_far.customer_left_out(table, row) {
-        return rule(format!(
+    let waits = |line| {
+        rule(format!(
             "the row of its customer, line {line} of the customers file, is left out"
-        ));
+        ))
+    };
+    if let Some(line) = so_far.new_customer_left_out(table, row) {
+        return waits(line);
     }
     let customer = site_customer(tx, table, row).await?;
+    if let Some(line) = so_far.existing_customer_left_out(customer) {
+        return waits(line);
+    }
     let Some(name) = table.cell(row, "name") else {
         return rule("a site needs a name");
     };
@@ -1229,6 +1272,83 @@ mod tests {
             Some(
                 "name,error,website\r\nNinefold,a website starts with http:// or https://,ftp://ninefold.test\r\n"
             )
+        );
+    }
+
+    /// Brightfield, with its reference BF-01 in Watchtower, then an import of a customer row left
+    /// out (its country is wrong) and a site row: why the site row is left out, if it is.
+    async fn site_after_a_customer_row_left_out(
+        db: &PgPool,
+        customer_row: &str,
+        site_row: &str,
+    ) -> Option<String> {
+        let brightfield = crate::customers::create(db, "Brightfield", &[])
+            .await
+            .unwrap();
+        crate::external_references::add(db, brightfield, "Watchtower", "BF-01")
+            .await
+            .unwrap();
+        let customers_file =
+            format!("name,external_system,external_name,tax_country\n{customer_row}\n");
+        let sites_file = format!(
+            "customer,customer_external_system,customer_external_name,name,address\n{site_row}\n"
+        );
+        let report = import(
+            db,
+            vec![customers(&customers_file), sites(&sites_file)],
+            Mode::Apply,
+        )
+        .await;
+        assert_eq!(report.files[0].rows[0].outcome, Outcome::LeftOut);
+        assert!(sites_of(db, brightfield).await.is_empty());
+        report.files[1].rows[0].reason.clone()
+    }
+
+    #[sqlx::test]
+    async fn a_site_waits_for_a_customer_row_left_out_that_named_it_by_reference(db: PgPool) {
+        let why = site_after_a_customer_row_left_out(
+            &db,
+            ",Watchtower,BF-01,ITA",
+            "Brightfield,,,Head office,Via dei Tigli 1",
+        )
+        .await;
+        assert!(
+            why.as_deref()
+                .unwrap_or_default()
+                .contains("line 2 of the customers file"),
+            "{why:?}"
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_site_naming_by_reference_waits_for_a_customer_row_left_out(db: PgPool) {
+        let why = site_after_a_customer_row_left_out(
+            &db,
+            "Brightfield,,,ITA",
+            ",Watchtower,BF-01,Head office,Via dei Tigli 1",
+        )
+        .await;
+        assert!(
+            why.as_deref()
+                .unwrap_or_default()
+                .contains("line 2 of the customers file"),
+            "{why:?}"
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_site_naming_the_old_name_waits_for_a_renaming_row_left_out(db: PgPool) {
+        let why = site_after_a_customer_row_left_out(
+            &db,
+            "Brightfield Labs,Watchtower,BF-01,ITA",
+            "Brightfield,,,Head office,Via dei Tigli 1",
+        )
+        .await;
+        assert!(
+            why.as_deref()
+                .unwrap_or_default()
+                .contains("line 2 of the customers file"),
+            "{why:?}"
         );
     }
 
