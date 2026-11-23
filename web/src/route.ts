@@ -14,10 +14,12 @@ export interface TicketFilters {
   assignee: string
   /** '' for every customer, else a customer's id. */
   customer: string
+  /** '' for every site, else a site's id: the tickets at that site. */
+  site: string
   q: string
 }
 
-export const defaultFilters: TicketFilters = { states: notClosed, assignee: '', customer: '', q: '' }
+export const defaultFilters: TicketFilters = { states: notClosed, assignee: '', customer: '', site: '', q: '' }
 
 export type Route =
   | { view: 'tickets'; filters: TicketFilters }
@@ -58,6 +60,7 @@ export function ticketsHref(filters: TicketFilters = defaultFilters): string {
   }
   if (filters.assignee) parts.push(`assignee=${encodeURIComponent(filters.assignee)}`)
   if (filters.customer) parts.push(`customer=${encodeURIComponent(filters.customer)}`)
+  if (filters.site) parts.push(`site=${encodeURIComponent(filters.site)}`)
   if (filters.q) parts.push(`q=${encodeURIComponent(filters.q)}`)
   return parts.length ? `#/tickets?${parts.join('&')}` : '#/tickets'
 }
@@ -68,6 +71,7 @@ export function ticketQuery(filters: TicketFilters): TicketQuery {
     state: sameStates(filters.states, allStates) ? undefined : filters.states.join(','),
     assignee: filters.assignee || undefined,
     customer: filters.customer || undefined,
+    site: filters.site || undefined,
     q: filters.q || undefined,
   }
 }
@@ -83,6 +87,7 @@ function parseFilters(search: string): TicketFilters {
     states: states.length ? states : notClosed,
     assignee: params.get('assignee')?.trim() ?? '',
     customer: params.get('customer')?.trim() ?? '',
+    site: params.get('site')?.trim() ?? '',
     q: params.get('q')?.trim() ?? '',
   }
 }

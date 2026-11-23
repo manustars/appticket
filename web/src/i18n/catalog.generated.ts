@@ -73,6 +73,7 @@ export interface Messages {
   "tickets.number": { plural: false; placeholders: never; tags: never }
   "tickets.title": { plural: false; placeholders: never; tags: never }
   "tickets.customer": { plural: false; placeholders: never; tags: never }
+  "tickets.sites": { plural: false; placeholders: never; tags: never }
   "tickets.requester": { plural: false; placeholders: never; tags: never }
   "tickets.assignee": { plural: false; placeholders: never; tags: never }
   "tickets.state": { plural: false; placeholders: never; tags: never }
@@ -97,6 +98,9 @@ export interface Messages {
   "filters.customer": { plural: false; placeholders: never; tags: never }
   "filters.allCustomers": { plural: false; placeholders: never; tags: never }
   "filters.offboarded": { plural: false; placeholders: never; tags: never }
+  "filters.site": { plural: false; placeholders: never; tags: never }
+  "filters.allSites": { plural: false; placeholders: never; tags: never }
+  "filters.retiredSites": { plural: false; placeholders: never; tags: never }
   "filters.search": { plural: false; placeholders: never; tags: never }
   "filters.searchPlaceholder": { plural: false; placeholders: never; tags: never }
   "filters.reset": { plural: false; placeholders: never; tags: never }
