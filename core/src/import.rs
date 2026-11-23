@@ -475,8 +475,12 @@ pub async fn run(db: &PgPool, grant: &Grant, files: Vec<File>, mode: Mode) -> Re
 }
 
 async fn import(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -> Result<Report> {
-    // Importing needs managing customers, whatever the files.
+    // Importing needs managing customers, whatever the files, and managing the catalog for
+    // assets.
     grant.require(Permission::ManageCustomers)?;
+    if files.iter().any(|f| f.kind == Kind::Assets) {
+        grant.require(Permission::ManageCatalog)?;
+    }
     if files.is_empty() {
         return rule("an import needs at least one file");
     }
@@ -3181,6 +3185,7 @@ mod tests {
                 customers("name\nBrightfield\n"),
                 sites("customer,name,address\n"),
                 requesters("customer,email_addresses\n"),
+                assets("customer,name,kind\n"),
             ] {
                 assert!(
                     matches!(
@@ -3204,6 +3209,41 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(names(&db).await, ["Brightfield"]);
+    }
+
+    /// An assets file needs managing the catalog too; without it the whole import is refused,
+    /// the files of other kinds with it.
+    #[sqlx::test]
+    async fn importing_assets_needs_managing_the_catalog_too(db: PgPool) {
+        crate::testing::asset_kind(&db, "Laptop").await;
+        let files = || {
+            vec![
+                customers("name\nBrightfield\n"),
+                assets("customer,name,kind\nBrightfield,PC-0042,Laptop\n"),
+            ]
+        };
+        let grant = |permissions: &[Permission]| Grant {
+            administrator: false,
+            permissions: permissions.to_vec(),
+        };
+        for mode in [Mode::Preview, Mode::Apply] {
+            let customers_only = grant(&[Permission::ManageCustomers]);
+            assert!(
+                matches!(
+                    run(&db, &customers_only, files(), mode).await,
+                    Err(Error::Forbidden(_))
+                ),
+                "{mode:?}"
+            );
+        }
+        assert!(names(&db).await.is_empty());
+
+        let both = grant(&[Permission::ManageCustomers, Permission::ManageCatalog]);
+        let report = run(&db, &both, files(), Mode::Apply).await.unwrap();
+        assert_eq!(
+            outcomes(&report)[1],
+            [(2, Outcome::Create, "Brightfield / PC-0042")]
+        );
     }
 
     /// A spreadsheet takes a cell starting with = + - or @ for a formula: a reason that starts
