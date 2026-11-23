@@ -186,8 +186,10 @@ Administrator.
 Agents can sign in through the organization's OpenID Connect identity provider (such as
 Keycloak, Authentik or Google) next to their local password
 ([ADR 0008](adr/0008-identity-providers-authenticate-the-product-authorizes.md)). The sign-in
-page then shows a "Sign in with …" button. Only existing agents sign in this way: someone the
-provider knows who is not an agent of the help desk is refused.
+page then shows a "Sign in with …" button. Without an [authorized group](#the-authorized-group)
+only existing agents sign in this way: someone the provider knows who is not an agent of the help
+desk is refused. With one, only the provider's users in that group sign in, and someone in it who
+is not an agent yet becomes one at their first sign-in.
 
 At the provider, register a confidential client for the help desk (authorization code flow; the
 core uses PKCE with S256) with the redirect URI `<public URL>/api/session/identity-provider/callback`,
@@ -209,15 +211,19 @@ core:
     existingSecret: hd-oidc
     label: Northgate                        # the button reads "Sign in with Northgate"
     sessionHours: 12
+    authorizedGroup: helpdesk-agents        # empty: only existing agents sign in
+    groupClaim: groups
 ```
 
 Outside the chart the same settings are environment variables: `HD_OIDC_ISSUER`,
 `HD_OIDC_CLIENT_ID`, `HD_OIDC_CLIENT_SECRET` or `HD_OIDC_CLIENT_SECRET_FILE` (a file holding
 the secret, such as a mounted Secret), `HD_PUBLIC_URL`, `HD_OIDC_LABEL` (default `OpenID
-Connect`) and `HD_OIDC_SESSION_HOURS` (default 12, at most 24). The issuer and the public URL
+Connect`), `HD_OIDC_SESSION_HOURS` (default 12, at most 24), `HD_OIDC_AUTHORIZED_GROUP` (none by
+default) and `HD_OIDC_GROUP_CLAIM` (default `groups`). The issuer and the public URL
 must be `https://` addresses; `http://` is accepted only for a server on the core's own machine
 (`localhost` or a loopback address), as for the mail servers. Without an issuer, client id and
-secret nothing changes; with only some of them the core does not start, and says which are
+secret nothing changes; with only some of them, or an authorized group without them, the core
+does not start, and says which are
 missing (the chart already refuses an issuer without a public URL). The core reads the provider's
 configuration and keys when an agent signs in, not at startup, so a provider that is down does
 not keep the core or local passwords from working.
@@ -230,23 +236,83 @@ after 10 minutes.
 
 How the provider's sign-in finds the agent:
 
+- With an authorized group, only someone in it goes further, at every sign-in: anyone else is
+  refused, even an agent.
 - The first time, by e-mail, and only when the provider says the address is verified (the
   `email_verified` claim of the ID token; the core asks for the `openid`, `email` and `profile`
   scopes). The identity is then linked to that agent. A provider that does not send
-  `email_verified: true` in the ID token links nobody: check that yours does.
+  `email_verified: true` in the ID token links no existing agent: check that yours does.
+- The first time, when no agent has the address and the person is in the authorized group: they
+  become an agent with the default role (never the Administrator role, not even on an
+  installation without agents), linked to the identity and without a local password, with the
+  name and e-mail the provider sends (the e-mail, verified or not, names them when there is no
+  name). Without an e-mail there is nobody to link and nothing to make an agent with.
 - From then on, by the provider's stable identifier (`sub`), even after the address changed
   there. The agent's name and e-mail follow the provider at every sign-in, the e-mail whether or
   not the provider says it is verified (that matters only the first time). When the provider
   sends no name or no e-mail, the agent keeps the one they have. A linked agent's name and e-mail
   cannot be edited in the help desk.
-- Refused, with the reason on the sign-in page: an unverified e-mail with no link yet, someone who
-  is not an agent, a deactivated agent (signing in never reactivates one), and an e-mail, verified
+- Refused, with the reason on the sign-in page: someone not in the authorized group, an
+  unverified or missing e-mail with no link yet (an unverified address never picks an existing
+  agent), someone who is not an agent while no authorized group is set, a deactivated agent
+  (signing in never reactivates or recreates one, in the group or not), and an e-mail, verified
   or not, that belongs to another agent, including the first time an agent already linked to
   another identity of the provider.
 
 A session opened through the provider lasts `sessionHours`, so that an account disabled there
 loses access within hours; one opened with a local password lasts 14 days. Signing out ends the
-help desk's session only, not the one at the provider. Linked agents keep their local password.
+help desk's session only, not the one at the provider. Existing agents keep their local password
+when they are linked. Agents made by a first sign-in have none: a password typed for them on the
+sign-in page is refused as a wrong one is (and counts as a [failed sign-in](#failed-sign-ins)),
+and `hd agent set-password` or Administration can give them one.
+
+#### The authorized group
+
+`authorizedGroup` (`HD_OIDC_AUTHORIZED_GROUP`) is a value the provider sends in the ID token
+claim `groupClaim` (`HD_OIDC_GROUP_CLAIM`, default `groups`) for those who may sign in. The claim
+must be in the ID token itself, at its top level, as a list of strings or a single string; the
+value is compared exactly, case included. A token without the claim, or without the value in it,
+is refused. Being in the group says who may enter, not what they may do: an agent's role is
+always managed in the help desk ([ADR 0007](adr/0007-roles-and-permissions.md)), and no group of
+the provider maps to a role.
+
+With Keycloak, add a "Group Membership" mapper to the client with the token claim name
+`groups`, "Full group path" off and "Add to ID token" on; `authorizedGroup` is then the group's
+name.
+
+#### Microsoft Entra ID
+
+The recommended setup sends an app role in the `roles` claim rather than the group in `groups`:
+`groups` carries the groups' object IDs rather than their names, needs a groups claim configured
+on the app, and is left out of the token for users in many groups, so the authorized group could
+go missing for exactly those users. An app role is in the ID token whenever it is assigned.
+
+1. In App registrations, register the help desk (accounts in this organizational directory only)
+   with a Web redirect URI `<public URL>/api/session/identity-provider/callback`, and create a
+   client secret under Certificates & secrets for the `hd-oidc` Secret.
+2. Under App roles, create a role for users and groups, such as "Help desk agent" with the value
+   `Helpdesk.Agent`.
+3. In Enterprise applications, open the help desk and assign the role to the group of agents
+   under Users and groups (assigning groups needs Entra ID P1 or P2; otherwise assign users).
+   Only the group's direct members get the role: nested groups do not count. Setting
+   "Assignment required" under Properties also keeps everyone else from signing in at Entra ID.
+4. Set the values:
+
+```yaml
+core:
+  oidc:
+    issuer: https://login.microsoftonline.com/<tenant id>/v2.0
+    clientId: <application (client) id>
+    existingSecret: hd-oidc
+    label: Microsoft
+    authorizedGroup: Helpdesk.Agent
+    groupClaim: roles
+```
+
+Entra ID sends the `email` claim for the `email` scope the core asks for, for users with an
+address. Its ID tokens carry no `email_verified` claim, though, so no existing agent is linked by
+e-mail: people in the group become new agents at their first sign-in, and one whose address an
+existing agent already has is refused (`email_not_verified`) until that agent's address changes.
 
 #### Switching local sign-in off
 

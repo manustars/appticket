@@ -116,6 +116,12 @@ spec:
             {{- end }}
             - name: HD_OIDC_SESSION_HOURS
               value: {{ .sessionHours | quote }}
+            {{- with .authorizedGroup }}
+            - name: HD_OIDC_AUTHORIZED_GROUP
+              value: {{ . | quote }}
+            {{- end }}
+            - name: HD_OIDC_GROUP_CLAIM
+              value: {{ .groupClaim | default "groups" | quote }}
             {{- end }}
             {{- end }}
             - name: HD_LOG
