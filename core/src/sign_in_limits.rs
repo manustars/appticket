@@ -93,6 +93,12 @@ impl SignInLimits {
     async fn reserve(&self, db: &PgPool, account: &str, address: &str) -> anyhow::Result<Reserved> {
         let now = self.clock.now();
         let mut tx = db.begin().await?;
+        // A refusal rests on failures up to a window before the last one, itself within the
+        // window: older ones no longer matter.
+        sqlx::query("DELETE FROM sign_in_failures WHERE failed_at <= $1")
+            .bind(now - 2 * self.window_span())
+            .execute(&mut *tx)
+            .await?;
         sqlx::query("SELECT pg_advisory_xact_lock(1, hashtext($1))")
             .bind(account)
             .execute(&mut *tx)
@@ -147,8 +153,12 @@ impl SignInLimits {
     }
 
     /// What the failures of one account or address, newest first, allow now.
+    fn window_span(&self) -> time::Duration {
+        time::Duration::try_from(self.window).unwrap_or(time::Duration::MAX)
+    }
+
     fn verdict(&self, newest_first: &[OffsetDateTime], now: OffsetDateTime) -> Verdict {
-        let window = time::Duration::try_from(self.window).unwrap_or(time::Duration::MAX);
+        let window = self.window_span();
         let Some(&last) = newest_first.first() else {
             return Verdict::Allowed {
                 delay: Duration::ZERO,
@@ -411,6 +421,29 @@ mod tests {
             wrong(&db, &limits, "bo@example.com", "::ffff:203.0.113.7").await,
             Guarded::Refused { .. }
         ));
+    }
+
+    #[sqlx::test]
+    async fn failures_older_than_the_window_are_deleted(db: PgPool) {
+        let limits = SignInLimits::for_tests(5, 15 * MINUTE);
+        wrong(&db, &limits, "ada@example.com", "203.0.113.7").await;
+        wrong(&db, &limits, "bo@example.com", "198.51.100.4").await;
+        // A refusal can rest on failures up to a window before the last one: they are kept for
+        // two windows.
+        limits.clock().advance(29 * MINUTE);
+        wrong(&db, &limits, "cy@example.com", "192.0.2.9").await;
+        let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM sign_in_failures")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(kept, 3);
+        limits.clock().advance(MINUTE);
+        wrong(&db, &limits, "cy@example.com", "192.0.2.9").await;
+        let kept: Vec<String> = sqlx::query_scalar("SELECT account FROM sign_in_failures")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+        assert_eq!(kept, ["cy@example.com", "cy@example.com"]);
     }
 
     /// Signing in proves the person knows the account's password, not that nobody at their
