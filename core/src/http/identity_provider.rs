@@ -10,7 +10,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use super::{ApiError, AppState};
 use crate::identities::{self, Refusal};
-use crate::oidc::Return;
+use crate::oidc::CallbackQuery;
 
 /// The cookie that keeps a sign-in's state in the browser that set out, until it comes back.
 const STATE_COOKIE: &str = "hd_sign_in_state";
@@ -42,15 +42,15 @@ async fn begin(
         .as_ref()
         .ok_or(ApiError::NotFound("identity provider"))?;
     match provider.begin(&state.db).await {
-        Ok(begun) => {
-            let cookie = Cookie::build((STATE_COOKIE, begun.state))
+        Ok(redirect) => {
+            let cookie = Cookie::build((STATE_COOKIE, redirect.state))
                 .path(BEGIN_PATH)
                 .http_only(true)
                 .secure(true)
                 // Lax: sent along when the provider sends the browser back.
                 .same_site(SameSite::Lax)
                 .max_age(time::Duration::minutes(10));
-            Ok((jar.add(cookie), Redirect::to(begun.url.as_str())))
+            Ok((jar.add(cookie), Redirect::to(redirect.url.as_str())))
         }
         Err(error) => {
             tracing::warn!(
@@ -66,7 +66,7 @@ async fn begin(
 /// the help desk, or back to the sign-in page with `sign_in_error` saying why not:
 /// `email_of_another_agent`, `email_not_verified`, `not_an_agent`, `deactivated` or `failed`.
 #[utoipa::path(get, path = "/api/session/identity-provider/callback", tag = "session",
-    params(Return),
+    params(CallbackQuery),
     responses((status = SEE_OTHER, description = "To the help desk, signed in, or to the \
         sign-in page with the reason"),
         (status = NOT_FOUND, body = super::Problem, description = "No identity provider is \
@@ -74,15 +74,18 @@ async fn begin(
 async fn callback(
     State(state): State<AppState>,
     jar: CookieJar,
-    Query(back): Query<Return>,
+    Query(query): Query<CallbackQuery>,
 ) -> Result<(CookieJar, Redirect), ApiError> {
     let provider = state
         .identity_provider
         .as_ref()
         .ok_or(ApiError::NotFound("identity provider"))?;
-    let kept = jar.get(STATE_COOKIE).map(|c| c.value().to_owned());
+    let state_cookie = jar.get(STATE_COOKIE).map(|c| c.value().to_owned());
     let jar = jar.remove(Cookie::build(STATE_COOKIE).path(BEGIN_PATH));
-    let identity = match provider.finish(&state.db, kept.as_deref(), &back).await {
+    let identity = match provider
+        .finish(&state.db, state_cookie.as_deref(), &query)
+        .await
+    {
         Ok(identity) => identity,
         Err(error) => {
             tracing::warn!(
