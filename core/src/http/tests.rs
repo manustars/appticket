@@ -1152,32 +1152,16 @@ async fn external_references_are_managed_through_the_api(db: PgPool) {
     let (uri, body) = add(harbor, "Watchtower", "Harbor");
     let (status, _) = rita.call("POST", &uri, Some(body)).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    let (status, _) = rita
-        .call(
-            "DELETE",
-            &format!("/api/external-references/{offices}"),
-            None,
-        )
-        .await;
+    let remove_offices = format!("/api/external-references/{offices}");
+    let (status, _) = rita.call("DELETE", &remove_offices, None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
-    let (status, _) = api
-        .call(
-            "DELETE",
-            &format!("/api/external-references/{offices}"),
-            None,
-        )
-        .await;
+    let remove = || api.call("DELETE", &remove_offices, None);
+    let (status, _) = remove().await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     let page = api.get(&format!("/api/customers/{brightfield}")).await;
     assert_eq!(page["external_references"].as_array().unwrap().len(), 1);
-    let (status, _) = api
-        .call(
-            "DELETE",
-            &format!("/api/external-references/{offices}"),
-            None,
-        )
-        .await;
+    let (status, _) = remove().await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (uri, body) = add(harbor, "Watchtower", "Brightfield/Offices");
     let (status, _) = api.call("POST", &uri, Some(body)).await;
@@ -1186,6 +1170,58 @@ async fn external_references_are_managed_through_the_api(db: PgPool) {
         StatusCode::CREATED,
         "the removed name is free again"
     );
+}
+
+/// The System field offers the systems in use across all customers, one spelling each.
+#[sqlx::test]
+async fn the_systems_in_use_are_offered_through_the_api(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let harbor = testing::customer(&db, "Harbor Lane").await;
+    crate::external_references::add(&db, brightfield, "Watchtower", "Brightfield/Offices")
+        .await
+        .unwrap();
+    crate::external_references::add(&db, harbor, "WATCHTOWER", "Harbor")
+        .await
+        .unwrap();
+    crate::external_references::add(&db, harbor, "Ledgerly", "HRB-0007")
+        .await
+        .unwrap();
+
+    let systems = api.get("/api/external-references/systems").await;
+    assert_eq!(systems, serde_json::json!(["Ledgerly", "Watchtower"]));
+}
+
+/// An offboarded customer's external references do not change: adding and removing are refused.
+#[sqlx::test]
+async fn an_offboarded_customer_s_external_references_are_refused_through_the_api(db: PgPool) {
+    let api = Client::new(&db).await;
+    let harbor = crate::customers::create(&db, "Harbor Lane", &[])
+        .await
+        .unwrap();
+    let reference = crate::external_references::add(&db, harbor, "Watchtower", "Harbor")
+        .await
+        .unwrap();
+    crate::customers::offboard(&db, harbor).await.unwrap();
+
+    let (status, json) = api
+        .call(
+            "POST",
+            &format!("/api/customers/{harbor}/external-references"),
+            Some(serde_json::json!({ "system": "Watchtower", "name": "Harbor/Docks" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    let (status, json) = api
+        .call(
+            "DELETE",
+            &format!("/api/external-references/{reference}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    let page = api.get(&format!("/api/customers/{harbor}")).await;
+    assert_eq!(page["external_references"].as_array().unwrap().len(), 1);
 }
 
 /// Add-ons with `directory:read` read the external references of the customers they see, so that

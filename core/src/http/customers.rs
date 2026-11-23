@@ -36,6 +36,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(retire_site))
         .routes(routes!(add_external_reference))
         .routes(routes!(remove_external_reference))
+        .routes(routes!(external_systems))
         .routes(routes!(offboard))
         .routes(routes!(bring_back))
 }
@@ -367,6 +368,17 @@ async fn add_external_reference(
         StatusCode::CREATED,
         Json(CreatedExternalReference { id: reference }),
     ))
+}
+
+/// The systems external references are in, across all customers: one spelling per system,
+/// ignoring case, offered so that a system is spelled alike everywhere.
+#[utoipa::path(get, path = "/api/external-references/systems", tag = "customers",
+    responses((status = OK, body = Vec<String>), (status = UNAUTHORIZED, body = Problem)))]
+async fn external_systems(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+) -> Result<Json<Vec<String>>, ApiError> {
+    Ok(Json(external_references::systems(&state.db).await?))
 }
 
 /// Takes an external reference from its customer; its name is free again in its system.

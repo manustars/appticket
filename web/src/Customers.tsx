@@ -12,6 +12,7 @@ import {
   listAssetKinds,
   listCustomerAssets,
   listCustomerServices,
+  listExternalSystems,
   listServices,
   offboardCustomer,
   removeDomain,
@@ -397,8 +398,9 @@ function ExternalReferences({ customer: c, readOnly, onChanged, onSignedOut }: P
   const [system, setSystem] = useState('')
   const [name, setName] = useState('')
   const id = useId()
-  // The systems this customer already names, offered so that the same one is spelled alike.
-  const systems = useMemo(() => [...new Set(c.external_references.map((r) => r.system))], [c.external_references])
+  // The systems in use across all customers, offered so that the same one is spelled alike.
+  const systems = useLoad(listExternalSystems, onSignedOut)
+  const { reload: reloadSystems } = systems
 
   function add(event: FormEvent) {
     event.preventDefault()
@@ -406,12 +408,14 @@ function ExternalReferences({ customer: c, readOnly, onChanged, onSignedOut }: P
     void action.run(() => addExternalReference(c.id, system.trim(), name.trim())).then(async (ok) => {
       if (!ok) return
       setName('')
-      await onChanged()
+      await Promise.all([onChanged(), reloadSystems()])
     })
   }
 
   function remove(referenceId: string) {
-    void action.run(() => removeExternalReference(referenceId)).then(async (ok) => { if (ok) await onChanged() })
+    void action.run(() => removeExternalReference(referenceId)).then(async (ok) => {
+      if (ok) await Promise.all([onChanged(), reloadSystems()])
+    })
   }
 
   return (
@@ -454,7 +458,7 @@ function ExternalReferences({ customer: c, readOnly, onChanged, onSignedOut }: P
             <input required value={system} list={`${id}-systems`} onChange={(e) => setSystem(e.target.value)} />
           </label>
           <datalist id={`${id}-systems`}>
-            {systems.map((s) => <option key={s} value={s} />)}
+            {(systems.data ?? []).map((s) => <option key={s} value={s} />)}
           </datalist>
           <label>
             {t('externalReferences.name')}

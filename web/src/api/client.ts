@@ -334,6 +334,11 @@ export async function addExternalReference(customer: string, system: string, nam
   await call('POST', `${customerPath(customer)}/external-references`, request)
 }
 
+/** The systems external references are in, across all customers, one spelling each. */
+export function listExternalSystems(): Promise<string[]> {
+  return json('GET', '/api/external-references/systems')
+}
+
 /** Takes an external reference from its customer; its name is free again in its system. */
 export async function removeExternalReference(id: string): Promise<void> {
   await call('DELETE', `/api/external-references/${encodeURIComponent(id)}`)

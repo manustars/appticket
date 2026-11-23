@@ -1,6 +1,8 @@
 //! A customer's external references. Rules are in docs/domain-rules.md ("Customers, assets and
 //! services", "Add-ons").
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 use sqlx::PgPool;
 use utoipa::ToSchema;
@@ -18,10 +20,25 @@ pub struct ExternalReference {
     pub name: String,
 }
 
-/// The customer's external references, by system and name.
-pub async fn of(db: &PgPool, customer: Uuid) -> Result<Vec<ExternalReference>> {
+/// An external reference as add-ons read it: a name in a system, without the core's id.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct NameInSystem {
+    pub system: String,
+    pub name: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct Row {
+    customer_id: Uuid,
+    #[sqlx(flatten)]
+    reference: ExternalReference,
+}
+
+/// External references by system and name: every customer's, or only `customer`'s.
+async fn list(db: &PgPool, customer: Option<Uuid>) -> Result<Vec<Row>> {
     Ok(sqlx::query_as(
-        "SELECT id, system, name FROM external_references WHERE customer_id = $1
+        "SELECT customer_id, id, system, name FROM external_references
+         WHERE $1::uuid IS NULL OR customer_id = $1
          ORDER BY lower(system), lower(name), created_at",
     )
     .bind(customer)
@@ -29,11 +46,38 @@ pub async fn of(db: &PgPool, customer: Uuid) -> Result<Vec<ExternalReference>> {
     .await?)
 }
 
-/// Every external reference, with its customer's id, by system and name.
-pub async fn all(db: &PgPool) -> Result<Vec<(Uuid, String, String)>> {
-    Ok(sqlx::query_as(
-        "SELECT customer_id, system, name FROM external_references
-         ORDER BY lower(system), lower(name), created_at",
+/// The customer's external references, by system and name.
+pub async fn of(db: &PgPool, customer: Uuid) -> Result<Vec<ExternalReference>> {
+    Ok(list(db, Some(customer))
+        .await?
+        .into_iter()
+        .map(|row| row.reference)
+        .collect())
+}
+
+/// Every customer's external references, by system and name, keyed by the customer's id.
+pub async fn by_customer(db: &PgPool) -> Result<HashMap<Uuid, Vec<NameInSystem>>> {
+    let mut grouped: HashMap<Uuid, Vec<NameInSystem>> = HashMap::new();
+    for row in list(db, None).await? {
+        grouped
+            .entry(row.customer_id)
+            .or_default()
+            .push(NameInSystem {
+                system: row.reference.system,
+                name: row.reference.name,
+            });
+    }
+    Ok(grouped)
+}
+
+/// The systems external references are in, across all customers, so that a system is spelled
+/// alike everywhere: one spelling per system, ignoring case, the first one given.
+pub async fn systems(db: &PgPool) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT system FROM (
+             SELECT DISTINCT ON (lower(system)) system FROM external_references
+             ORDER BY lower(system), created_at) first
+         ORDER BY lower(system)",
     )
     .fetch_all(db)
     .await?)
@@ -65,16 +109,24 @@ pub async fn add(db: &PgPool, customer: Uuid, system: &str, name: &str) -> Resul
     .await?
     .rows_affected();
     if added == 0 {
-        let (taken_system, taken, owner): (String, String, String) = sqlx::query_as(
+        let taken: Option<(String, String, String)> = sqlx::query_as(
             "SELECT r.system, r.name, c.name FROM external_references r
              JOIN customers c ON c.id = r.customer_id
              WHERE lower(r.system) = lower($1) AND lower(r.name) = lower($2)",
         )
         .bind(system)
         .bind(name)
-        .fetch_one(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
-        return rule(format!("{taken} in {taken_system} already names {owner}"));
+        return match taken {
+            Some((taken_system, taken, owner)) => {
+                rule(format!("{taken} in {taken_system} already names {owner}"))
+            }
+            // The reference that held the name was removed in the meantime.
+            None => rule(format!(
+                "{name} in {system} was in use a moment ago: try again"
+            )),
+        };
     }
     tx.commit().await?;
     Ok(id)
@@ -157,7 +209,22 @@ mod tests {
         }
         // The same name in another system is another reference.
         add(&db, harbor, "Ledgerly", "Offices").await.unwrap();
-        assert!(of(&db, harbor).await.unwrap().len() == 1);
+        assert_eq!(of(&db, harbor).await.unwrap().len(), 1);
+    }
+
+    #[sqlx::test]
+    async fn the_systems_in_use_are_offered_once_each(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        assert!(systems(&db).await.unwrap().is_empty());
+        add(&db, brightfield, "Watchtower", "Offices")
+            .await
+            .unwrap();
+        add(&db, harbor, "watchtower", "Harbor").await.unwrap();
+        add(&db, harbor, "Ledgerly", "HRB-0007").await.unwrap();
+
+        // One spelling per system, the first one given.
+        assert_eq!(systems(&db).await.unwrap(), ["Ledgerly", "Watchtower"]);
     }
 
     #[sqlx::test]
@@ -250,7 +317,7 @@ mod tests {
         assert!(insert(brightfield, "Watchtower", "Lab").await.is_ok());
         assert!(insert(brightfield, "", "Store").await.is_err(), "no system");
         assert!(
-            insert(brightfield, "Watchtower", "	").await.is_err(),
+            insert(brightfield, "Watchtower", "\t").await.is_err(),
             "a blank name"
         );
         assert!(
@@ -258,14 +325,7 @@ mod tests {
             "untrimmed system"
         );
         assert!(
-            insert(
-                brightfield,
-                "Watchtower",
-                "Store
-"
-            )
-            .await
-            .is_err(),
+            insert(brightfield, "Watchtower", "Store\n").await.is_err(),
             "untrimmed name"
         );
         assert!(
