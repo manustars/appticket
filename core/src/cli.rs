@@ -208,7 +208,8 @@ and that agent signs in with the password.";
 const SIGN_IN_CHECK_HELP: &str = "\
 Reads the identity provider's configuration and keys from <issuer>/.well-known/openid-configuration
 as a sign-in does, then asks its token endpoint, with the client id and secret, to exchange a code
-it never issued: a provider that accepts the client refuses only the code (invalid_grant). It needs
+it never issued: a provider that checks the client first, as Keycloak does, and accepts it refuses
+only the code (invalid_grant); with other providers, sign in once to confirm. It needs
 no database, and fails, exiting with 1, when the provider cannot be reached, answers for another
 issuer or for none, rejects the client, or answers in a way that says neither; also when no
 identity provider is configured. The secret is never shown. The provider may log the code it

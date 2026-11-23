@@ -2,10 +2,11 @@
 //! before any agent tries to sign in.
 //!
 //! The client is checked with a code the provider never issued, sent with the client's id and
-//! secret exactly as a sign-in sends them: a provider authenticates the client before it looks at
-//! the code, so it answers `invalid_grant` to a client it accepts, and `invalid_client` (or, as
-//! Keycloak does for a wrong secret, `unauthorized_client`) to one it does not. The client
-//! credentials grant would tell the same only for a client allowed to use it, which a sign-in
+//! secret exactly as a sign-in sends them. A provider that authenticates the client before it
+//! looks at the code, as Keycloak does, answers `invalid_grant` to a client it accepts, and
+//! `invalid_client` (or, as Keycloak does for a wrong secret, `unauthorized_client`) to one it
+//! does not; one that looked at the code first would answer `invalid_grant` to a wrong secret too.
+//! The client credentials grant would tell only for a client allowed to use it, which a sign-in
 //! client usually is not.
 
 use openidconnect::core::CoreErrorResponseType;
