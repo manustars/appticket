@@ -108,6 +108,17 @@ button.danger { color: var(--danger); }
   padding: 1.5rem;
 }
 .sign-in label { display: block; color: var(--muted); font-size: 0.9rem; }
+.sign-in a.provider {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 0.5rem 0.8rem;
+  color: var(--accent);
+  background: var(--surface);
+}
+.sign-in a.provider:hover { background: var(--accent); color: var(--on-accent); }
 .error { color: var(--danger); margin: 0; }
 .empty { color: var(--muted); }
 

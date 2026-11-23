@@ -3,10 +3,12 @@ import { Account } from './Account'
 import { Admin } from './Admin'
 import {
   currentAgent,
+  identityProviderSignIn,
   listInbox,
   listTickets,
   Refused,
   signIn,
+  signInOptions,
   signOut,
   Unauthorized,
   type Agent,
@@ -58,12 +60,44 @@ function App() {
 /** The same agent with the same role, as far as the screen shows it. */
 const sameAgent = (a: Agent, b: Agent) => JSON.stringify(a) === JSON.stringify(b)
 
+/** Why a sign-in through the identity provider did not open a session, as the core says it. */
+const providerErrors = {
+  email_of_another_agent: 'signIn.refused.emailOfAnotherAgent',
+  email_not_verified: 'signIn.refused.emailNotVerified',
+  not_an_agent: 'signIn.refused.notAnAgent',
+  deactivated: 'signIn.refused.deactivated',
+  failed: 'signIn.refused.failed',
+} as const
+type ProviderError = keyof typeof providerErrors
+
+/** The reason the core sent the browser back with, taken out of the address so a reload drops it. */
+function takeProviderError(): ProviderError | null {
+  const params = new URLSearchParams(window.location.search)
+  const reason = params.get('sign_in_error')
+  if (reason === null) return null
+  params.delete('sign_in_error')
+  const query = params.toString()
+  window.history.replaceState(null, '', window.location.pathname + (query ? `?${query}` : '') + window.location.hash)
+  return reason in providerErrors ? (reason as ProviderError) : 'failed'
+}
+
+/** Taken once, when the page loads; shown by the first sign-in page only. */
+let pendingProviderError = takeProviderError()
+
 function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
   const { t } = useI18n()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [failed, setFailed] = useState<'wrong' | 'tooManyFailures' | 'unreachable' | null>(null)
   const [busy, setBusy] = useState(false)
+  const [providerError] = useState(() => pendingProviderError)
+  const [provider, setProvider] = useState<string | null>(null)
+
+  useEffect(() => {
+    pendingProviderError = null
+    // Without an answer the page offers the password only, as without a provider.
+    signInOptions().then((options) => setProvider(options.identity_provider?.label ?? null), () => {})
+  }, [])
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -88,6 +122,13 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
     <main className="center">
       <form className="sign-in" onSubmit={submit}>
         <h1>{t('app.title')}</h1>
+        {providerError && <p className="error" role="alert">{t(providerErrors[providerError])}</p>}
+        {provider !== null && (
+          <>
+            <a className="button provider" href={identityProviderSignIn}>{t('signIn.with', { provider })}</a>
+            <p className="hint">{t('signIn.orPassword')}</p>
+          </>
+        )}
         <label>
           {t('signIn.email')}
           <input type="email" autoComplete="username" required value={email}
