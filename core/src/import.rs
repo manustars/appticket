@@ -23,13 +23,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// What importing this kind needs.
-    fn permission(self) -> Permission {
-        match self {
-            Kind::Customers | Kind::Sites => Permission::ManageCustomers,
-        }
-    }
-
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Customers => "customers",
@@ -128,7 +121,7 @@ pub(crate) const SITE_COLUMNS: &[&str] = &[
 struct Table {
     /// Where each known column is, by its name.
     columns: HashMap<&'static str, usize>,
-    rows: Vec<Line>,
+    rows: Vec<Row>,
     /// The header as written.
     header: Vec<String>,
     /// Where the error column is, when the file has one.
@@ -138,8 +131,8 @@ struct Table {
     bom: bool,
 }
 
-/// One row of a file.
-struct Line {
+/// One row of a file, with the line it starts on.
+struct Row {
     /// The line of the file the row starts on.
     line: u64,
     cells: Vec<String>,
@@ -147,7 +140,7 @@ struct Line {
 
 impl Table {
     /// The row's cell in `column`, trimmed; `None` when the column is absent or the cell blank.
-    fn cell<'a>(&self, row: &'a Line, column: &str) -> Option<&'a str> {
+    fn cell<'a>(&self, row: &'a Row, column: &str) -> Option<&'a str> {
         let at = *self.columns.get(column)?;
         row.cells
             .get(at)
@@ -156,7 +149,7 @@ impl Table {
     }
 
     /// The rows left out as a file like this one, each with its reason in the error column.
-    fn left_out(&self, rows: &[(&Line, &str)]) -> Result<Option<String>> {
+    fn left_out(&self, rows: &[(&Row, &str)]) -> Result<Option<String>> {
         if rows.is_empty() {
             return Ok(None);
         }
@@ -189,7 +182,7 @@ impl Table {
     }
 
     /// What the row is about, as the report shows it.
-    fn label(&self, kind: Kind, row: &Line) -> String {
+    fn label(&self, kind: Kind, row: &Row) -> String {
         // A customer by its name, else by its external reference.
         let customer = |name, system, reference| match (
             self.cell(row, name),
@@ -365,7 +358,7 @@ fn read(kind: Kind, content: &[u8]) -> Result<Table> {
                 kind.as_str()
             ));
         }
-        rows.push(Line {
+        rows.push(Row {
             line,
             cells: record.iter().map(str::to_owned).collect(),
         });
@@ -399,11 +392,8 @@ fn line_at(content: &[u8], byte: usize) -> u64 {
 
 /// Previews or applies an import of CSV files.
 pub async fn run(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -> Result<Report> {
-    // Importing needs managing customers, whatever the files; some kinds need more.
+    // Importing needs managing customers, whatever the files.
     grant.require(Permission::ManageCustomers)?;
-    for file in &files {
-        grant.require(file.kind.permission())?;
-    }
     if files.is_empty() {
         return rule("an import needs at least one file");
     }
@@ -471,7 +461,7 @@ pub async fn run(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -
                 reason,
             });
         }
-        let left_out: Vec<(&Line, &str)> = table
+        let left_out: Vec<(&Row, &str)> = table
             .rows
             .iter()
             .zip(&rows)
@@ -541,7 +531,7 @@ struct Keys {
 }
 
 impl Keys {
-    fn of(table: &Table, row: &Line, name: &str, system: &str, reference: &str) -> Keys {
+    fn of(table: &Table, row: &Row, name: &str, system: &str, reference: &str) -> Keys {
         let lower = |column| table.cell(row, column).map(str::to_lowercase);
         Keys {
             name: lower(name),
@@ -550,7 +540,7 @@ impl Keys {
     }
 
     /// How a row of a customers file names its customer.
-    fn of_customer(table: &Table, row: &Line) -> Keys {
+    fn of_customer(table: &Table, row: &Row) -> Keys {
         Keys::of(table, row, "name", "external_system", "external_name")
     }
 
@@ -566,7 +556,7 @@ impl Keys {
 impl SoFar {
     /// The line of a customer row left out that would have created the customer a site row
     /// names, unless another row imported that customer.
-    fn new_customer_left_out(&self, table: &Table, row: &Line) -> Option<u64> {
+    fn new_customer_left_out(&self, table: &Table, row: &Row) -> Option<u64> {
         let keys = Keys::of(
             table,
             row,
@@ -632,7 +622,7 @@ struct Reference<'a> {
 /// The external reference of a row, in two columns: both filled, or neither.
 fn reference<'a>(
     table: &Table,
-    row: &'a Line,
+    row: &'a Row,
     system: &str,
     name: &str,
 ) -> Result<Option<Reference<'a>>> {
@@ -770,7 +760,7 @@ fn customer_changes(before: &CustomerDetails, after: &CustomerDetails) -> Vec<&'
 async fn customer_row(
     tx: &mut Transaction<'_, Postgres>,
     table: &Table,
-    row: &Line,
+    row: &Row,
     so_far: &mut SoFar,
     candidates: &mut Vec<Uuid>,
 ) -> Result<Done> {
@@ -839,7 +829,7 @@ async fn customer_row(
 async fn site_customer(
     tx: &mut Transaction<'_, Postgres>,
     table: &Table,
-    row: &Line,
+    row: &Row,
 ) -> Result<Uuid> {
     let name = table.cell(row, "customer");
     let reference = reference(
@@ -878,7 +868,7 @@ async fn site_customer(
 async fn site_row(
     tx: &mut Transaction<'_, Postgres>,
     table: &Table,
-    row: &Line,
+    row: &Row,
     so_far: &mut SoFar,
 ) -> Result<Done> {
     let waits = |line| {
@@ -947,6 +937,57 @@ async fn site_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The UI and the deployment docs list the columns these files are read with.
+    #[test]
+    fn the_ui_and_the_docs_list_the_columns_of_each_file() {
+        let ui = include_str!("../../web/src/Import.tsx");
+        let docs = include_str!("../../docs/deploy.md");
+        let quoted = |text: &str, quote: char| -> Vec<String> {
+            text.split(quote)
+                .skip(1)
+                .step_by(2)
+                .map(str::to_owned)
+                .collect()
+        };
+        for (kind, columns, section, next) in [
+            (
+                "customers",
+                CUSTOMER_COLUMNS,
+                "Customers file.",
+                "Sites file.",
+            ),
+            (
+                "sites",
+                SITE_COLUMNS,
+                "Sites file.",
+                "From the command line",
+            ),
+        ] {
+            let listed = ui
+                .split(&format!("kind: '{kind}'"))
+                .nth(1)
+                .and_then(|after| after.split("columns: [").nth(1))
+                .and_then(|list| list.split(']').next())
+                .unwrap_or_else(|| panic!("the UI lists no columns for {kind}"));
+            assert_eq!(quoted(listed, '\''), columns, "the UI's {kind} columns");
+
+            let documented = docs
+                .split(section)
+                .nth(1)
+                .and_then(|after| after.split(next).next())
+                .unwrap_or_else(|| panic!("the docs have no {section}"));
+            let mut in_table: Vec<String> = documented
+                .lines()
+                .filter(|line| line.starts_with("| `"))
+                .flat_map(|line| quoted(line.split(" | ").next().unwrap(), '`'))
+                .collect();
+            let mut expected: Vec<String> = columns.iter().map(|c| (*c).to_owned()).collect();
+            in_table.sort();
+            expected.sort();
+            assert_eq!(in_table, expected, "the docs' {kind} columns");
+        }
+    }
 
     fn customers(csv: &str) -> File {
         File {

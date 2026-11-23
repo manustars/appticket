@@ -8,8 +8,9 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use super::{ApiError, AppState, Problem};
 use crate::auth::SignedIn;
 use crate::import::{self, Kind, Mode, Report};
+use crate::roles::Permission;
 
-/// The largest request an import takes, all its files together.
+/// The largest request an import takes: the JSON body, all its files together.
 pub const BODY_LIMIT: usize = 10 * 1024 * 1024;
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -32,15 +33,25 @@ pub struct ImportFile {
     content: String,
 }
 
-fn files(request: ImportRequest) -> Vec<import::File> {
-    request
+/// Previews or applies the request's files for the agent.
+async fn import(
+    state: &AppState,
+    agent: &SignedIn,
+    request: ImportRequest,
+    mode: Mode,
+) -> Result<Json<Report>, ApiError> {
+    agent.grant.require(Permission::ManageCustomers)?;
+    let files = request
         .files
         .into_iter()
         .map(|file| import::File {
             kind: file.kind,
             content: file.content.into_bytes(),
         })
-        .collect()
+        .collect();
+    Ok(Json(
+        import::run(&state.db, &agent.grant, files, mode).await?,
+    ))
 }
 
 /// What importing the files would create, update and leave out, with the reason of each row
@@ -54,9 +65,7 @@ async fn preview(
     agent: SignedIn,
     Json(request): Json<ImportRequest>,
 ) -> Result<Json<Report>, ApiError> {
-    Ok(Json(
-        import::run(&state.db, &agent.grant, files(request), Mode::Preview).await?,
-    ))
+    import(&state, &agent, request, Mode::Preview).await
 }
 
 /// Imports the files: the rows that break no rule are created or update what exists, checked
@@ -72,7 +81,5 @@ async fn apply(
     agent: SignedIn,
     Json(request): Json<ImportRequest>,
 ) -> Result<Json<Report>, ApiError> {
-    Ok(Json(
-        import::run(&state.db, &agent.grant, files(request), Mode::Apply).await?,
-    ))
+    import(&state, &agent, request, Mode::Apply).await
 }
