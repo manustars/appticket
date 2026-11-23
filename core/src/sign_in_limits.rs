@@ -14,7 +14,7 @@ use uuid::Uuid;
 pub struct SignInLimits {
     /// Failures within the window after which attempts are slowed.
     failures: u32,
-    window: Duration,
+    window: time::Duration,
     clock: Clock,
 }
 
@@ -31,10 +31,15 @@ pub enum Guarded<T> {
 
 impl SignInLimits {
     pub fn new(failures: u32, window: Duration) -> SignInLimits {
+        SignInLimits::with_clock(failures, window, Clock::system())
+    }
+
+    fn with_clock(failures: u32, window: Duration, clock: Clock) -> SignInLimits {
         SignInLimits {
             failures,
-            window,
-            clock: Clock::system(),
+            window: time::Duration::try_from(window)
+                .expect("the window is at most a day (HD_SIGN_IN_WINDOW_SECONDS, 1 to 86400)"),
+            clock,
         }
     }
 
@@ -96,7 +101,7 @@ impl SignInLimits {
         // A refusal rests on failures up to a window before the last one, itself within the
         // window: older ones no longer matter.
         sqlx::query("DELETE FROM sign_in_failures WHERE failed_at <= $1")
-            .bind(now - 2 * self.window_span())
+            .bind(now - 2 * self.window)
             .execute(&mut *tx)
             .await?;
         sqlx::query("SELECT pg_advisory_xact_lock(1, hashtext($1))")
@@ -153,12 +158,8 @@ impl SignInLimits {
     }
 
     /// What the failures of one account or address, newest first, allow now.
-    fn window_span(&self) -> time::Duration {
-        time::Duration::try_from(self.window).unwrap_or(time::Duration::MAX)
-    }
-
     fn verdict(&self, newest_first: &[OffsetDateTime], now: OffsetDateTime) -> Verdict {
-        let window = self.window_span();
+        let window = self.window;
         let Some(&last) = newest_first.first() else {
             return Verdict::Allowed {
                 delay: Duration::ZERO,
@@ -328,11 +329,7 @@ impl Clock {
 impl SignInLimits {
     /// The limits measured by a test clock.
     pub fn for_tests(failures: u32, window: Duration) -> SignInLimits {
-        SignInLimits {
-            failures,
-            window,
-            clock: Clock::test(),
-        }
+        SignInLimits::with_clock(failures, window, Clock::test())
     }
 
     pub fn clock(&self) -> &Clock {
