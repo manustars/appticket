@@ -11,7 +11,7 @@ export interface Messages {
   "signIn.password": { plural: false; placeholders: never; tags: never }
   "signIn.submit": { plural: false; placeholders: never; tags: never }
   "signIn.wrong": { plural: false; placeholders: never; tags: never }
-  "signIn.later": { plural: false; placeholders: never; tags: never }
+  "signIn.tooManyFailures": { plural: false; placeholders: never; tags: never }
   "desk.tickets": { plural: false; placeholders: never; tags: never }
   "desk.inbox": { plural: false; placeholders: never; tags: never }
   "desk.customers": { plural: false; placeholders: never; tags: never }

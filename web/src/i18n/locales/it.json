@@ -7,7 +7,7 @@
   "signIn.password": "Password",
   "signIn.submit": "Accedi",
   "signIn.wrong": "E-mail o password errati.",
-  "signIn.later": "Troppi accessi non riusciti. Riprova più tardi.",
+  "signIn.tooManyFailures": "Troppi accessi non riusciti. Riprova più tardi.",
   "desk.tickets": "Ticket",
   "desk.inbox": "Posta in arrivo",
   "desk.customers": "Clienti",
