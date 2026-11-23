@@ -121,13 +121,20 @@ pub enum AgentCommand {
     },
 }
 
-fn password_from_env() -> Option<String> {
+/// The password `hd agent add` and `hd agent set-password` set, when one is given.
+pub fn password_from_env() -> Option<String> {
     std::env::var("HD_AGENT_PASSWORD")
         .ok()
         .filter(|password| !password.is_empty())
 }
 
-pub async fn agent(db: &PgPool, command: AgentCommand) -> anyhow::Result<()> {
+/// Runs an agent command; `password` is the one to set (HD_AGENT_PASSWORD), generated and printed
+/// when `None`.
+pub async fn agent(
+    db: &PgPool,
+    command: AgentCommand,
+    password: Option<String>,
+) -> anyhow::Result<()> {
     let fail = |e: crate::error::Error| anyhow::anyhow!("{e}");
     let cli = Grant::command_line();
     match command {
@@ -136,7 +143,6 @@ pub async fn agent(db: &PgPool, command: AgentCommand) -> anyhow::Result<()> {
                 Some(role) => Some(roles::id_by_name(db, &role).await.map_err(fail)?),
                 None => None,
             };
-            let password = password_from_env();
             let added = agents::add(db, &cli, &email, &name, role, password.as_deref())
                 .await
                 .map_err(fail)?;
@@ -164,7 +170,6 @@ pub async fn agent(db: &PgPool, command: AgentCommand) -> anyhow::Result<()> {
         }
         AgentCommand::SetPassword { email } => {
             let agent = agents::id_by_email(db, &email).await.map_err(fail)?;
-            let password = password_from_env();
             if let Some(generated) = agents::reset_password(db, &cli, agent, password.as_deref())
                 .await
                 .map_err(fail)?
