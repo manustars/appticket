@@ -8,7 +8,7 @@ use sqlx::{Acquire, PgPool, Postgres, Transaction};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::catalog::AssetKey;
+use crate::catalog::{AssetFields, AssetKey, StoredAsset};
 use crate::customers::CustomerDetails;
 use crate::error::{Error, Result, rule};
 use crate::requesters::RequesterDetails;
@@ -1443,7 +1443,7 @@ async fn recognised_asset(
     customer: Uuid,
     name: Option<&str>,
     serial_number: Option<&str>,
-) -> Result<Option<crate::catalog::StoredAsset>> {
+) -> Result<Option<StoredAsset>> {
     let mut found = None;
     if let Some(serial_number) = serial_number {
         let assets =
@@ -1487,7 +1487,7 @@ enum Look {
 
 /// Refuses an asset an import does not change: one an add-on is the source of, or a retired
 /// one.
-fn changeable(asset: &crate::catalog::StoredAsset, look: Look) -> Result<()> {
+fn changeable(asset: &StoredAsset, look: Look) -> Result<()> {
     let (comes, is) = match look {
         Look::Recognising => ("comes", "is"),
         Look::UnderTheLock => ("has just come", "has just been"),
@@ -1510,7 +1510,7 @@ fn changeable(asset: &crate::catalog::StoredAsset, look: Look) -> Result<()> {
 /// Refuses a row whose serial number would replace the one the asset has: an import replaces no
 /// serial number.
 fn keeps_its_serial_number(
-    asset: &crate::catalog::StoredAsset,
+    asset: &StoredAsset,
     serial_number: Option<&str>,
     look: Look,
 ) -> Result<()> {
@@ -1536,10 +1536,10 @@ fn keeps_its_serial_number(
 async fn one_of(
     tx: &mut Transaction<'_, Postgres>,
     customer: Uuid,
-    assets: Vec<crate::catalog::StoredAsset>,
+    assets: Vec<StoredAsset>,
     what: &str,
     value: &str,
-) -> Result<Option<crate::catalog::StoredAsset>> {
+) -> Result<Option<StoredAsset>> {
     let active = assets.iter().filter(|a| !a.retired).count();
     if active > 1 {
         return rule(format!(
@@ -1608,7 +1608,7 @@ async fn named_holder(
 struct AssetFound {
     customer: Uuid,
     /// The existing asset the row is about; none for a new one.
-    asset: Option<crate::catalog::StoredAsset>,
+    asset: Option<StoredAsset>,
     kind: Option<Uuid>,
     site: Option<Uuid>,
     holder: Option<Uuid>,
@@ -1616,12 +1616,7 @@ struct AssetFound {
 
 impl AssetFound {
     /// The row's filled cells over the asset's details.
-    fn merged(
-        &self,
-        before: &crate::catalog::AssetFields,
-        table: &Table,
-        row: &Row,
-    ) -> crate::catalog::AssetFields {
+    fn merged(&self, before: &AssetFields, table: &Table, row: &Row) -> AssetFields {
         let mut after = before.clone();
         if let Some(kind) = self.kind {
             after.kind_id = kind;
@@ -1643,10 +1638,7 @@ impl AssetFound {
 }
 
 /// The columns whose values differ, in the order of the columns of an assets file.
-fn asset_changes(
-    before: &crate::catalog::AssetFields,
-    after: &crate::catalog::AssetFields,
-) -> Vec<&'static str> {
+fn asset_changes(before: &AssetFields, after: &AssetFields) -> Vec<&'static str> {
     [
         ("name", before.name == after.name),
         ("serial_number", before.serial_number == after.serial_number),
@@ -1735,7 +1727,7 @@ async fn write_asset(
             Err(error) => return Err(error),
         }
         // A new asset has a kind and a name: a row without them was refused.
-        let fields = crate::catalog::AssetFields {
+        let fields = AssetFields {
             kind_id: found.kind.unwrap_or_default(),
             name: String::new(),
             serial_number: None,
