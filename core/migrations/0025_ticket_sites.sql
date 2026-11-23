@@ -23,6 +23,14 @@ CREATE TABLE closed_ticket_sites (
     PRIMARY KEY (ticket_id, site_id)
 );
 
+-- The tickets closed before now stay at the sites they are at by the rule today, the nearest to
+-- where they were when they were closed that is known.
+INSERT INTO closed_ticket_sites (ticket_id, site_id)
+    SELECT r.ticket_id, r.site_id
+    FROM ticket_sites_by_rule r
+    JOIN tickets t ON t.id = r.ticket_id
+    WHERE t.state = 'closed';
+
 -- Closing a ticket keeps the sites it is at by the rule, read in one statement: the close comes
 -- either before or after a change to its assets or requester, never halfway through one. A ticket
 -- that stops being closed, which only a change bypassing the core can do, follows the rule again.

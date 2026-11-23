@@ -1339,6 +1339,111 @@ mod tests {
         }
     }
 
+    /// The database keeps the sites of a closed ticket also when the code is bypassed: closing it
+    /// keeps them, closing it again changes nothing, and one that stops being closed follows the
+    /// rule again.
+    #[sqlx::test]
+    async fn the_database_keeps_the_sites_of_closed_tickets(db: PgPool) {
+        let c = testing::customer(&db, "Brightfield").await;
+        let head = site(&db, c, "Head office").await;
+        let lab = site(&db, c, "Lab").await;
+        let ada = testing::requester(&db, c, "ada@brightfield.test").await;
+        put_at(&db, ada, Some(head)).await;
+        let n = testing::ticket(&db, c, Some(ada), "a1@brightfield.test").await;
+        let set_state = |state: &'static str| {
+            let db = db.clone();
+            async move {
+                sqlx::query("UPDATE tickets SET state = $2 WHERE number = $1")
+                    .bind(n)
+                    .bind(state)
+                    .execute(&db)
+                    .await
+                    .unwrap();
+            }
+        };
+
+        set_state("closed").await;
+        put_at(&db, ada, Some(lab)).await;
+        assert_eq!(at(&db, n).await, ["Head office"]);
+        set_state("closed").await;
+        assert_eq!(at(&db, n).await, ["Head office"], "closed again");
+        set_state("open").await;
+        assert_eq!(at(&db, n).await, ["Lab"], "no longer closed");
+        put_at(&db, ada, None).await;
+        set_state("closed").await;
+        put_at(&db, ada, Some(lab)).await;
+        assert_eq!(at(&db, n).await, Vec::<String>::new(), "closed at no site");
+    }
+
+    /// A requester identified with the wrong customer moves with all their tickets: the closed
+    /// ones stay at the sites they were closed at, the others follow the rule, and the requester
+    /// leaves their site.
+    #[sqlx::test]
+    async fn a_closed_ticket_keeps_its_sites_when_its_requester_moves(db: PgPool) {
+        let c = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let head = site(&db, c, "Head office").await;
+        let ada = testing::requester(&db, c, "ada@brightfield.test").await;
+        put_at(&db, ada, Some(head)).await;
+        let closed = testing::ticket(&db, c, Some(ada), "a1@brightfield.test").await;
+        set_state(&db, closed, TicketState::Closed).await.unwrap();
+        let open = testing::ticket(&db, c, Some(ada), "a2@brightfield.test").await;
+
+        crate::requesters::move_to_customer(&db, ada, harbor)
+            .await
+            .unwrap();
+        assert_eq!(at(&db, closed).await, ["Head office"]);
+        assert_eq!(at(&db, open).await, Vec::<String>::new());
+    }
+
+    /// The tickets already closed when the sites of tickets came in stay at the sites they were at
+    /// then, by their assets or their requester.
+    #[sqlx::test(migrations = false)]
+    async fn tickets_closed_before_keep_the_sites_they_had(db: PgPool) {
+        let migrator = sqlx::migrate!();
+        let this = migrator
+            .iter()
+            .find(|m| &*m.description == "ticket sites")
+            .unwrap()
+            .version;
+        migrator.run_to(this - 1, &db).await.unwrap();
+        let c = testing::customer(&db, "Brightfield").await;
+        let head = site(&db, c, "Head office").await;
+        let lab = site(&db, c, "Lab").await;
+        let ada = testing::requester(&db, c, "ada@brightfield.test").await;
+        put_at(&db, ada, Some(head)).await;
+        let printer = testing::asset_kind(&db, "Printer").await;
+        let printer_2f = crate::catalog::create_asset(
+            &db,
+            c,
+            &testing::asset_details(printer, "Printer 2F", None, Some(lab), None),
+        )
+        .await
+        .unwrap();
+        let by_asset = testing::ticket(&db, c, Some(ada), "a1@brightfield.test").await;
+        crate::catalog::link_asset(&db, by_asset, printer_2f, true)
+            .await
+            .unwrap();
+        let by_requester = testing::ticket(&db, c, Some(ada), "a2@brightfield.test").await;
+        let open = testing::ticket(&db, c, Some(ada), "a3@brightfield.test").await;
+        for n in [by_asset, by_requester] {
+            set_state(&db, n, TicketState::Closed).await.unwrap();
+        }
+
+        migrator.run(&db).await.unwrap();
+        put_at(&db, ada, Some(lab)).await;
+        crate::catalog::update_asset(
+            &db,
+            printer_2f,
+            &testing::asset_details(printer, "Printer 2F", None, Some(head), None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(at(&db, by_asset).await, ["Lab"]);
+        assert_eq!(at(&db, by_requester).await, ["Head office"]);
+        assert_eq!(at(&db, open).await, ["Lab"]);
+    }
+
     #[test]
     fn reply_subjects_do_not_stack() {
         assert_eq!(
