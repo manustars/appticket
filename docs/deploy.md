@@ -183,8 +183,8 @@ Administrator.
 
 ### Signing in through an identity provider
 
-Agents can sign in through the organization's OpenID Connect identity provider (Keycloak, Entra
-ID, Google, Authentik…) next to their local password
+Agents can sign in through the organization's OpenID Connect identity provider (such as
+Keycloak, Authentik or Google) next to their local password
 ([ADR 0008](adr/0008-identity-providers-authenticate-the-product-authorizes.md)). The sign-in
 page then shows a "Sign in with …" button. Only existing agents sign in this way: someone the
 provider knows who is not an agent of the help desk is refused.
@@ -224,7 +224,8 @@ How the provider's sign-in finds the agent:
 
 - The first time, by e-mail, and only when the provider says the address is verified (the
   `email_verified` claim of the ID token; the core asks for the `openid`, `email` and `profile`
-  scopes). The identity is then linked to that agent.
+  scopes). The identity is then linked to that agent. A provider that does not send
+  `email_verified: true` in the ID token links nobody: check that yours does.
 - From then on, by the provider's stable identifier (`sub`), even after the address changed
   there. The agent's name and verified e-mail follow the provider at every sign-in, and cannot be
   edited in the help desk.
