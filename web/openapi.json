@@ -3926,7 +3926,7 @@
           "session"
         ],
         "summary": "Signs an agent in and sets the session cookie.",
-        "description": "Repeated failures for the e-mail or from the client's address are slowed, then refused for a\nwhile (`Retry-After` says how long) without the password being checked.",
+        "description": "Repeated failures for the e-mail or from the same address are slowed, then refused for a\nwhile (`Retry-After` says how long) without the password being checked.",
         "operationId": "sign_in",
         "requestBody": {
           "content": {

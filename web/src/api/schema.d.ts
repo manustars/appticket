@@ -1132,7 +1132,7 @@ export interface paths {
         put?: never;
         /**
          * Signs an agent in and sets the session cookie.
-         * @description Repeated failures for the e-mail or from the client's address are slowed, then refused for a
+         * @description Repeated failures for the e-mail or from the same address are slowed, then refused for a
          *     while (`Retry-After` says how long) without the password being checked.
          */
         post: operations["sign_in"];
