@@ -46,9 +46,15 @@ CREATE TRIGGER agent_identities_for_active_agents
 -- A sign-in through the OpenID Connect identity provider under way, for a few minutes: what the
 -- browser's return from the provider is checked against, once. Only a hash of the state is kept;
 -- the state itself travels in the provider's redirect and in a cookie of the browser that set out.
+-- Anyone can set a sign-in out, so an address (as failed sign-ins count it) has a bounded number
+-- under way.
 CREATE TABLE identity_provider_sign_ins (
     state_hash     bytea PRIMARY KEY,
     nonce          text NOT NULL,
     pkce_verifier  text NOT NULL,
+    address        text NOT NULL,
     expires_at     timestamptz NOT NULL
 );
+
+CREATE INDEX identity_provider_sign_ins_address ON identity_provider_sign_ins (address, expires_at);
+CREATE INDEX identity_provider_sign_ins_expiry ON identity_provider_sign_ins (expires_at);

@@ -2,6 +2,7 @@
 //! with PKCE, state and nonce checked, the ID token validated against the provider's keys
 //! (docs/domain-rules.md, "Signing in"; ADR 0008).
 
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +20,7 @@ use utoipa::IntoParams;
 
 use crate::auth;
 use crate::identities::Identity;
+use crate::sign_in_limits::AddressKey;
 
 /// Where the provider sends the browser back to, under the core's public URL.
 pub const CALLBACK_PATH: &str = "/api/session/identity-provider/callback";
@@ -179,37 +181,75 @@ impl Provider {
         .set_redirect_uri(self.config.redirect.clone()))
     }
 
-    /// Sets a sign-in out: where to send the browser, and the state it must bring back.
-    pub async fn begin(&self, db: &PgPool) -> anyhow::Result<ProviderRedirect> {
-        let client = self.client().await?;
+    /// Sets a sign-in out from `address`: where to send the browser, and the state it must
+    /// bring back; or, with too many sign-ins under way from that address, how long until one
+    /// ends. The provider is asked only for a sign-in allowed to set out.
+    pub async fn begin(&self, db: &PgPool, address: IpAddr) -> anyhow::Result<Begin> {
+        forget_ended_sign_ins(db).await;
+        let address = AddressKey::new(address).0;
+        let state = CsrfToken::new_random();
+        let nonce = Nonce::new_random();
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
-        let (url, state, nonce) = client
+        let state_hash = auth::token_hash(state.secret());
+        let mut tx = db.begin().await?;
+        // One address at a time, so that sign-ins set out at once are all counted.
+        sqlx::query("SELECT pg_advisory_xact_lock($1, hashtext($2))")
+            .bind(ADDRESS_LOCK_CLASS)
+            .bind(&address)
+            .execute(&mut *tx)
+            .await?;
+        let (under_way, first_ends_in): (i64, Option<f64>) = sqlx::query_as(
+            "SELECT count(*), extract(epoch FROM min(expires_at) - now())::float8
+             FROM identity_provider_sign_ins WHERE address = $1 AND expires_at > now()",
+        )
+        .bind(&address)
+        .fetch_one(&mut *tx)
+        .await?;
+        if under_way >= UNDER_WAY_PER_ADDRESS {
+            let wait = first_ends_in.unwrap_or_default().max(1.0);
+            return Ok(Begin::TooMany {
+                retry_after: Duration::from_secs_f64(wait),
+            });
+        }
+        sqlx::query(
+            "INSERT INTO identity_provider_sign_ins
+                 (state_hash, nonce, pkce_verifier, address, expires_at)
+             VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5))",
+        )
+        .bind(&state_hash)
+        .bind(nonce.secret())
+        .bind(verifier.secret())
+        .bind(&address)
+        .bind(SIGN_IN_TIME.as_secs_f64())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        let client = match self.client().await {
+            Ok(client) => client,
+            Err(error) => {
+                // Nothing will come back: it does not count as under way.
+                let _ = sqlx::query("DELETE FROM identity_provider_sign_ins WHERE state_hash = $1")
+                    .bind(&state_hash)
+                    .execute(db)
+                    .await;
+                return Err(error);
+            }
+        };
+        let state_kept = state.secret().clone();
+        let (url, _, _) = client
             .authorize_url(
                 AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
-                CsrfToken::new_random,
-                Nonce::new_random,
+                move || state,
+                move || nonce,
             )
             .add_scope(Scope::new("email".to_owned()))
             .add_scope(Scope::new("profile".to_owned()))
             .set_pkce_challenge(challenge)
             .url();
-        sqlx::query("DELETE FROM identity_provider_sign_ins WHERE expires_at <= now()")
-            .execute(db)
-            .await?;
-        sqlx::query(
-            "INSERT INTO identity_provider_sign_ins (state_hash, nonce, pkce_verifier, expires_at)
-             VALUES ($1, $2, $3, now() + make_interval(secs => $4))",
-        )
-        .bind(auth::token_hash(state.secret()))
-        .bind(nonce.secret())
-        .bind(verifier.secret())
-        .bind(SIGN_IN_TIME.as_secs_f64())
-        .execute(db)
-        .await?;
-        Ok(ProviderRedirect {
+        Ok(Begin::Redirect(ProviderRedirect {
             url,
-            state: state.secret().clone(),
-        })
+            state: state_kept,
+        }))
     }
 
     /// Checks the browser's return from the provider and the ID token it leads to: who signed
@@ -280,6 +320,34 @@ impl Provider {
 
 /// How long the browser has to come back from the provider.
 const SIGN_IN_TIME: Duration = Duration::from_secs(10 * 60);
+/// How many sign-ins may be under way from one address at once.
+const UNDER_WAY_PER_ADDRESS: i64 = 20;
+/// The advisory lock class of an address setting sign-ins out (sign_in_limits uses 1 and 2).
+const ADDRESS_LOCK_CLASS: i32 = 3;
+
+/// What setting a sign-in out gives.
+pub enum Begin {
+    Redirect(ProviderRedirect),
+    /// Too many sign-ins under way from the address; the first ends after `retry_after`.
+    TooMany {
+        retry_after: Duration,
+    },
+}
+
+/// Deletes sign-ins that ended, without waiting for a row another request holds. A failure is
+/// only logged: the next sign-in tries again.
+async fn forget_ended_sign_ins(db: &PgPool) {
+    let deleted = sqlx::query(
+        "DELETE FROM identity_provider_sign_ins WHERE state_hash IN (
+             SELECT state_hash FROM identity_provider_sign_ins WHERE expires_at <= now()
+             LIMIT 1000 FOR UPDATE SKIP LOCKED)",
+    )
+    .execute(db)
+    .await;
+    if let Err(error) = deleted {
+        tracing::warn!(%error, "deleting ended sign-ins through the identity provider");
+    }
+}
 
 /// Where to send the browser to sign in at the provider, and the state it must bring back.
 pub struct ProviderRedirect {
