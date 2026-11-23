@@ -613,6 +613,9 @@ pub enum TimelineEntry {
     Message(MessageEntry),
     /// An internal remark, seen only by agents.
     Note(NoteEntry),
+    /// An announcement sent from a parent ticket to the key requesters of the customers the
+    /// failure affects.
+    Announcement(crate::announcements::Announcement),
 }
 
 /// Whether the help desk received a message or sent it.
@@ -699,7 +702,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
                 a.name AS author_name, m.subject, m.body_text, m.created_at, m.sent_at, m.last_error,
                 (m.direction = 'outbound' AND m.sent_at IS NULL AND m.send_attempts >= $2) AS gave_up
          FROM messages m LEFT JOIN agents a ON a.id = m.author_id
-         WHERE m.ticket_id = $1",
+         WHERE m.ticket_id = $1 AND m.announcement_id IS NULL",
     )
     .bind(row.id)
     .bind(crate::outbound::MAX_ATTEMPTS)
@@ -713,6 +716,8 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
     .bind(row.id)
     .fetch_all(db)
     .await?;
+    // An announcement's messages are listed as the announcement, with its recipients.
+    let announcements = crate::announcements::of_ticket(db, row.id).await?;
     let mut timeline: Vec<(OffsetDateTime, TimelineEntry)> = messages
         .into_iter()
         .map(|m| (m.created_at, TimelineEntry::Message(m)))
@@ -720,6 +725,11 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
             notes
                 .into_iter()
                 .map(|n| (n.created_at, TimelineEntry::Note(n))),
+        )
+        .chain(
+            announcements
+                .into_iter()
+                .map(|a| (a.created_at, TimelineEntry::Announcement(a))),
         )
         .collect();
     timeline.sort_by_key(|(at, _)| *at);
@@ -952,6 +962,7 @@ mod tests {
                 TimelineEntry::Message(m) if m.direction == Direction::Inbound => "in",
                 TimelineEntry::Message(_) => "out",
                 TimelineEntry::Note(_) => "note",
+                TimelineEntry::Announcement(_) => "announcement",
             })
             .collect();
         assert_eq!(kinds, ["in", "note", "out"]);
