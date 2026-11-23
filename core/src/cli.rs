@@ -185,6 +185,82 @@ pub async fn agent(db: &PgPool, command: AgentCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
+const LOCAL_SIGN_IN_HELP: &str = "\
+Local sign-in is on until switched off. Switching it off ends every session opened with a local
+password and keeps those opened through the identity provider; the sign-in page then offers only
+the identity provider. It is refused while no identity provider is configured: run the command
+with the core's environment (HD_OIDC_ISSUER, HD_OIDC_CLIENT_ID, HD_OIDC_CLIENT_SECRET or
+HD_OIDC_CLIENT_SECRET_FILE, HD_PUBLIC_URL), such as inside the core's container.
+
+Switching it on needs nothing but the database. When the identity provider cannot be reached
+while local sign-in is off:
+
+  hd sign-in local on
+  hd agent set-password <e-mail>     # generated and printed, or from HD_AGENT_PASSWORD
+
+and that agent signs in with the password.";
+
+#[derive(Subcommand)]
+pub enum SignInCommand {
+    /// Show whether agents can sign in with a local password, or switch it on or off (--help
+    /// says how to recover when the identity provider cannot be reached).
+    #[command(after_long_help = LOCAL_SIGN_IN_HELP)]
+    Local {
+        #[command(subcommand)]
+        switch: Option<LocalSignIn>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum LocalSignIn {
+    /// Let agents sign in with their local password again.
+    On,
+    /// Agents sign in only through the identity provider; every session opened with a local
+    /// password ends. Refused while no identity provider is configured.
+    Off {
+        #[command(flatten, next_help_heading = "Identity provider (as for serve)")]
+        identity_provider: crate::oidc::Settings,
+        /// The core's public URL, as for serve.
+        #[arg(long, env = "HD_PUBLIC_URL")]
+        public_url: Option<String>,
+    },
+}
+
+pub async fn sign_in(
+    db: &PgPool,
+    command: SignInCommand,
+    out: &mut impl Write,
+) -> anyhow::Result<()> {
+    let fail = |e: crate::error::Error| anyhow::anyhow!("{e}");
+    let SignInCommand::Local { switch } = command;
+    match switch {
+        None => {
+            let on = crate::local_sign_in::is_on(db).await?;
+            writeln!(out, "local sign-in is {}", if on { "on" } else { "off" })?;
+        }
+        Some(LocalSignIn::On) => {
+            crate::local_sign_in::switch_on(db).await.map_err(fail)?;
+            writeln!(out, "local sign-in is on")?;
+        }
+        Some(LocalSignIn::Off {
+            identity_provider,
+            public_url,
+        }) => {
+            let config =
+                crate::oidc::Config::from_settings(identity_provider, public_url.as_deref())?;
+            let ended = crate::local_sign_in::switch_off(db, config.as_ref())
+                .await
+                .map_err(fail)?;
+            let sessions = if ended == 1 { "session" } else { "sessions" };
+            writeln!(
+                out,
+                "local sign-in is off; {ended} {sessions} opened with a local password ended"
+            )?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Subcommand)]
 pub enum RoleCommand {
     /// List roles with their permissions.
@@ -625,6 +701,84 @@ mod tests {
                 "{column} is not described"
             );
         }
+    }
+
+    /// The identity provider's settings as the deployment gives them: none, some, or all.
+    fn provider_settings(given: &[&str]) -> (crate::oidc::Settings, Option<String>) {
+        let has = |name: &str| given.contains(&name);
+        let settings = crate::oidc::Settings {
+            issuer: has("issuer").then(|| "https://login.example.com/realms/staff".to_owned()),
+            client_id: has("client_id").then(|| "helpdesk".to_owned()),
+            client_secret: has("client_secret").then(|| "invented-secret".to_owned()),
+            client_secret_file: None,
+            label: None,
+            session_hours: 12,
+        };
+        let public_url = has("public_url").then(|| "https://helpdesk.example.com".to_owned());
+        (settings, public_url)
+    }
+
+    fn off(given: &[&str]) -> SignInCommand {
+        let (identity_provider, public_url) = provider_settings(given);
+        SignInCommand::Local {
+            switch: Some(LocalSignIn::Off {
+                identity_provider,
+                public_url,
+            }),
+        }
+    }
+
+    async fn run_sign_in(db: &PgPool, command: SignInCommand) -> anyhow::Result<String> {
+        let mut out = Vec::new();
+        sign_in(db, command, &mut out).await?;
+        Ok(String::from_utf8(out).unwrap())
+    }
+
+    const ALL: &[&str] = &["issuer", "client_id", "client_secret", "public_url"];
+
+    #[sqlx::test]
+    async fn local_sign_in_is_switched_off_and_on_from_the_command_line(db: PgPool) {
+        let status = || SignInCommand::Local { switch: None };
+        let shown = run_sign_in(&db, status()).await.unwrap();
+        assert_eq!(shown, "local sign-in is on\n");
+
+        let agent = crate::testing::agent(&db, "ada@northgate.test").await;
+        for opened_with in [
+            crate::auth::OpenedWith::Password,
+            crate::auth::OpenedWith::OpenIdConnect,
+        ] {
+            crate::auth::open_session(&db, agent, opened_with, time::Duration::hours(1))
+                .await
+                .unwrap();
+        }
+        let shown = run_sign_in(&db, off(ALL)).await.unwrap();
+        assert_eq!(
+            shown,
+            "local sign-in is off; 1 session opened with a local password ended\n"
+        );
+        let shown = run_sign_in(&db, status()).await.unwrap();
+        assert_eq!(shown, "local sign-in is off\n");
+
+        let on = SignInCommand::Local {
+            switch: Some(LocalSignIn::On),
+        };
+        let shown = run_sign_in(&db, on).await.unwrap();
+        assert_eq!(shown, "local sign-in is on\n");
+        assert!(crate::local_sign_in::is_on(&db).await.unwrap());
+    }
+
+    #[sqlx::test]
+    async fn the_command_line_keeps_local_sign_in_on_without_an_identity_provider(db: PgPool) {
+        let why = run_sign_in(&db, off(&[])).await.unwrap_err().to_string();
+        assert!(why.contains("no identity provider is configured"), "{why}");
+        // One configured in part is no identity provider either, and the message says what is
+        // missing.
+        let why = run_sign_in(&db, off(&["issuer", "client_id", "client_secret"]))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(why.contains("HD_PUBLIC_URL"), "{why}");
+        assert!(crate::local_sign_in::is_on(&db).await.unwrap());
     }
 
     #[sqlx::test]
