@@ -14,8 +14,10 @@ use uuid::Uuid;
 
 use super::{ApiError, AppState, Problem};
 use crate::addons::{self, Caller, DIRECTORY_READ, PROPOSALS_WRITE, TICKETS_READ};
+use crate::catalog::Asset;
 use crate::external_references::{self, NameInSystem};
 use crate::proposals::{self, Content, Target};
+use crate::requesters::SiteRef;
 use crate::tickets::{self, Priority, TicketDetail, TicketState};
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -133,7 +135,8 @@ async fn customers(
     Ok(Json(customers))
 }
 
-/// An asset as add-ons read it: without its holder, who is a person.
+/// An asset as add-ons read it: what an add-on can be the source of, with its own site, but not
+/// its holder, who is a person, nor the site it is at through them.
 #[derive(Serialize, ToSchema)]
 pub struct AddonAsset {
     id: Uuid,
@@ -143,10 +146,30 @@ pub struct AddonAsset {
     /// The name of its asset kind: laptop, printer, application, licence…
     kind: String,
     name: String,
+    serial_number: Option<String>,
+    /// Its own site, one of its customer's.
+    site: Option<SiteRef>,
     /// The add-on it came from, when an add-on supplies it.
     source_addon: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     retired_at: Option<OffsetDateTime>,
+}
+
+impl From<Asset> for AddonAsset {
+    fn from(a: Asset) -> AddonAsset {
+        AddonAsset {
+            id: a.id,
+            customer_id: a.customer_id,
+            customer_name: a.customer_name,
+            kind_id: a.kind_id,
+            kind: a.kind,
+            name: a.name,
+            serial_number: a.serial_number,
+            site: a.site,
+            source_addon: a.source_addon,
+            retired_at: a.retired_at,
+        }
+    }
 }
 
 /// A customer's active assets. Scope `directory:read`.
@@ -165,16 +188,7 @@ async fn customer_assets(
         assets
             .into_iter()
             .filter(|a| a.retired_at.is_none())
-            .map(|a| AddonAsset {
-                id: a.id,
-                customer_id: a.customer_id,
-                customer_name: a.customer_name,
-                kind_id: a.kind_id,
-                kind: a.kind,
-                name: a.name,
-                source_addon: a.source_addon,
-                retired_at: a.retired_at,
-            })
+            .map(AddonAsset::from)
             .collect(),
     ))
 }

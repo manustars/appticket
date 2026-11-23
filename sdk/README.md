@@ -91,6 +91,11 @@ written on it; `last_picked` is then the address an agent picked for the last re
 `email`, there and in `requester_email` of the ticket lists, is the address a reply goes to:
 `reply_to` when there is one, else `last_picked`, else the first address.
 
+An asset, in a customer's asset list, has its `kind` (a name from the help desk's list of asset
+kinds) and `name`, its `serial_number` and its own `site` (`{"id", "name"}`, one of its customer's
+sites) when it has them, and `source_addon`, the add-on it came from, if any. Add-ons are not told
+its holder, the requester it has been given to, nor the site it is at through them.
+
 A customer's `external_references` are the names other systems use for it, each a `system` and a
 `name` in it, such as a group in a monitoring tool: `[{"system": "Watchtower", "name":
 "Brightfield/Offices"}]`. A customer can have several in the same system, and a name names exactly

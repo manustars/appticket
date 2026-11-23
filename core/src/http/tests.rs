@@ -309,13 +309,36 @@ async fn an_asset_s_details_are_set_through_the_api(db: PgPool) {
     }
 }
 
-/// Add-ons that read a customer's assets are not told who holds them.
+/// Add-ons that read a customer's assets get their serial number and own site, which an add-on
+/// can be the source of, but are not told who holds them, nor where their holder is.
 #[sqlx::test]
-async fn add_ons_do_not_read_holders(db: PgPool) {
+async fn add_ons_read_an_asset_s_serial_number_and_site_but_not_its_holder(db: PgPool) {
     let api = Client::new(&db).await;
     let brightfield = testing::customer(&db, "Brightfield").await;
+    let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+        .await
+        .unwrap();
+    let lab = crate::sites::create(&db, brightfield, "Lab", "Via del Glicine 3")
+        .await
+        .unwrap();
     let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
-    testing::held_asset(&db, brightfield, "Laptop", "PC-0042", ada).await;
+    let at_lab = crate::requesters::RequesterDetails {
+        site_id: Some(lab),
+        ..Default::default()
+    };
+    crate::requesters::update(&db, ada, &at_lab).await.unwrap();
+    let laptop = crate::asset_kinds::create(&db, "Laptop", true)
+        .await
+        .unwrap();
+    let fields = crate::catalog::AssetFields {
+        serial_number: Some("SN-0042".into()),
+        site_id: Some(head),
+        holder_id: Some(ada),
+        ..testing::asset_fields(laptop, "PC-0042")
+    };
+    crate::catalog::create_asset(&db, brightfield, &fields)
+        .await
+        .unwrap();
     let reader = crate::addons::register(
         &db,
         "reader",
@@ -331,8 +354,15 @@ async fn add_ons_do_not_read_holders(db: PgPool) {
         .get(&format!("/api/addon/customers/{brightfield}/assets"))
         .await;
     assert_eq!(seen[0]["name"], "PC-0042");
+    assert_eq!(seen[0]["serial_number"], "SN-0042");
+    assert_eq!(
+        seen[0]["site"],
+        serde_json::json!({"id": head, "name": "Head office"})
+    );
     assert!(seen[0].get("holder").is_none(), "{seen}");
-    assert!(!seen.to_string().contains(&ada.to_string()), "{seen}");
+    for hidden in [ada.to_string(), lab.to_string(), "Lab\"".into()] {
+        assert!(!seen.to_string().contains(&hidden), "{hidden} in {seen}");
+    }
 }
 
 #[sqlx::test]
