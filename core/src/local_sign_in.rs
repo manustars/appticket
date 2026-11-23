@@ -77,6 +77,33 @@ pub async fn switch_on(db: &PgPool) -> Result<()> {
     Ok(())
 }
 
+/// What the core does about local sign-in as it starts: with local sign-in off, it ends any
+/// session opened with a password still there, and says so when no identity provider is
+/// configured, since then nobody can sign in until the command line switches local sign-in back
+/// on. It does not switch it on itself: that is the command line's to do. Returns how many
+/// sessions ended.
+pub async fn at_startup(db: &PgPool, identity_provider_configured: bool) -> anyhow::Result<u64> {
+    if is_on(db).await? {
+        return Ok(0);
+    }
+    if identity_provider_configured {
+        tracing::info!("local sign-in is off: agents sign in through the identity provider");
+    } else {
+        tracing::error!(
+            "local sign-in is off and no identity provider is configured: nobody can sign in \
+             until `hd sign-in local on` switches local sign-in back on"
+        );
+    }
+    let ended = sqlx::query("DELETE FROM agent_sessions WHERE opened_with = 'password'")
+        .execute(db)
+        .await?
+        .rows_affected();
+    if ended > 0 {
+        tracing::info!(ended, "sessions opened with a local password ended");
+    }
+    Ok(ended)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use sqlx::PgPool;
@@ -250,6 +277,40 @@ pub(crate) mod tests {
             "{refused:?}"
         );
         assert!(super::is_on(&db).await.unwrap());
+        assert_eq!(sessions(&db).await, ["openid_connect", "password"]);
+    }
+
+    /// The core starting with local sign-in off ends any session opened with a password that is
+    /// still there, such as one restored with the database's triggers off.
+    #[sqlx::test]
+    async fn the_core_starting_with_local_sign_in_off_ends_password_sessions(db: PgPool) {
+        sqlx::query("ALTER TABLE agent_sessions DISABLE TRIGGER USER")
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE installation_settings SET local_sign_in = false")
+            .execute(&db)
+            .await
+            .unwrap();
+        agent_with_sessions(&db).await;
+        sqlx::query("ALTER TABLE agent_sessions ENABLE TRIGGER USER")
+            .execute(&db)
+            .await
+            .unwrap();
+        assert_eq!(sessions(&db).await, ["openid_connect", "password"]);
+
+        assert_eq!(super::at_startup(&db, true).await.unwrap(), 1);
+        assert_eq!(sessions(&db).await, ["openid_connect"]);
+        // Without an identity provider any more, local sign-in stays off: the command line
+        // switches it back on.
+        assert_eq!(super::at_startup(&db, false).await.unwrap(), 0);
+        assert!(!super::is_on(&db).await.unwrap());
+    }
+
+    #[sqlx::test]
+    async fn the_core_starting_with_local_sign_in_on_ends_no_session(db: PgPool) {
+        agent_with_sessions(&db).await;
+        assert_eq!(super::at_startup(&db, false).await.unwrap(), 0);
         assert_eq!(sessions(&db).await, ["openid_connect", "password"]);
     }
 
