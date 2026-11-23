@@ -254,10 +254,11 @@ impl<'a> Outgoing<'a> {
                 .bind(ticket)
                 .fetch_one(&mut **tx)
                 .await?;
-        // The conversation so far, newest last.
+        // The conversation so far, newest last; announcements sent from the ticket are not part of
+        // it.
         let mut messages: Vec<(String, String)> = sqlx::query_as(
             "SELECT rfc_message_id, direction FROM messages
-             WHERE ticket_id = $1 AND rfc_message_id IS NOT NULL
+             WHERE ticket_id = $1 AND rfc_message_id IS NOT NULL AND announcement_id IS NULL
              ORDER BY created_at DESC LIMIT 20",
         )
         .bind(ticket)

@@ -502,6 +502,96 @@ mod tests {
         assert_eq!(states, ["waiting", "resolved", "closed"]);
     }
 
+    /// Announcements stay out of the parent's own conversation with its requester: sending one to
+    /// the requester's contact address as a key requester picks no address for replies there, and
+    /// a reply there neither answers nor refers to an announcement. A recipient who answers an
+    /// announcement writes back to the parent, as any reply comes back to its ticket.
+    #[sqlx::test]
+    async fn announcements_stay_out_of_the_parents_conversation(db: PgPool) {
+        let own = testing::help_desk(&db).await;
+        let sara = testing::requester(&db, own, "sara@northgate.test").await;
+        crate::requesters::add_address(&db, sara, "sara@home.test")
+            .await
+            .unwrap();
+        crate::key_requesters::mark(&db, sara, Some("sara@home.test"))
+            .await
+            .unwrap();
+        let mail = crate::catalog::create_service(&db, "Hosted mail", "")
+            .await
+            .unwrap();
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        let outage = testing::ticket(&db, own, Some(sara), "outage@northgate.test").await;
+        crate::catalog::link_service(&db, outage, mail, true)
+            .await
+            .unwrap();
+        let sender = testing::sender();
+
+        send(&db, &sender, outage, agent, "Mail is down.")
+            .await
+            .unwrap();
+        let ticket = tickets::detail(&db, outage).await.unwrap();
+        assert_eq!(ticket.requester.unwrap().last_picked, None);
+        let Err(Error::Rule(_)) = tickets::reply(
+            &db,
+            &sender,
+            outage,
+            agent,
+            "Which address?",
+            None,
+            TicketState::Waiting,
+        )
+        .await
+        else {
+            panic!("the announcement picked the address of a reply");
+        };
+        tickets::reply(
+            &db,
+            &sender,
+            outage,
+            agent,
+            "We are on it.",
+            Some("sara@northgate.test"),
+            TicketState::Waiting,
+        )
+        .await
+        .unwrap();
+        let (in_reply_to, references): (Option<String>, Vec<String>) = sqlx::query_as(
+            r#"SELECT in_reply_to, "references" FROM messages
+               WHERE direction = 'outbound' AND announcement_id IS NULL"#,
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(in_reply_to.as_deref(), Some("outage@northgate.test"));
+        assert_eq!(references, ["outage@northgate.test"]);
+
+        let announced: String = sqlx::query_scalar(
+            "SELECT rfc_message_id FROM messages WHERE announcement_id IS NOT NULL",
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        let answer = crate::mail::Incoming {
+            rfc_message_id: Some("answer@home.test".into()),
+            in_reply_to: vec![announced],
+            references: Vec::new(),
+            from_address: "sara@home.test".into(),
+            from_name: None,
+            subject: "Re: Printer jams".into(),
+            body_text: "Thanks.".into(),
+            raw: Vec::new(),
+        };
+        let mut tx = db.begin().await.unwrap();
+        let routed = crate::mail::route(&mut tx, &answer).await.unwrap();
+        tx.commit().await.unwrap();
+        let parent: Uuid = sqlx::query_scalar("SELECT id FROM tickets WHERE number = $1")
+            .bind(outage)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(routed, crate::mail::Routed::Reply { ticket_id: parent });
+    }
+
     /// An offboarded customer is no longer served: an announcement does not go to its key
     /// requesters, whether it has a child of the parent or uses one of its services.
     #[sqlx::test]
