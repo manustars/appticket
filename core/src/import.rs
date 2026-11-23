@@ -444,7 +444,13 @@ fn line_at(content: &[u8], byte: usize) -> u64 {
 }
 
 /// Previews or applies an import of CSV files.
-pub async fn run(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -> Result<Report> {
+pub async fn run(db: &PgPool, grant: &Grant, files: Vec<File>, mode: Mode) -> Result<Report> {
+    import(db, grant, files, mode)
+        .await
+        .map_err(changed_meanwhile)
+}
+
+async fn import(db: &PgPool, grant: &Grant, mut files: Vec<File>, mode: Mode) -> Result<Report> {
     // Importing needs managing customers, whatever the files.
     grant.require(Permission::ManageCustomers)?;
     if files.is_empty() {
@@ -552,22 +558,49 @@ fn left_out(done: Result<Done>) -> Result<std::result::Result<Done, String>> {
     match done {
         Ok(done) => Ok(Ok(done)),
         Err(Error::Rule(why)) => Ok(Err(why)),
-        // Someone else took a name the import was given a moment before, between its check and
-        // its write: the whole import is refused, to be run again on the data as it is now.
-        Err(Error::Internal(error))
-            if error
-                .downcast_ref::<sqlx::Error>()
-                .and_then(|e| e.as_database_error())
-                .is_some_and(|e| e.is_unique_violation()) =>
-        {
-            rule("the help desk's data changed during the import: reload and try again")
-        }
-        // Likewise a requester found a moment before and merged into another meanwhile, now gone.
-        Err(Error::NotFound(_)) => {
-            rule("the help desk's data changed during the import: reload and try again")
-        }
         Err(error) => Err(error),
     }
+}
+
+/// The help desk's data changed under the import, between a check and a write.
+#[derive(Debug)]
+struct Overtaken;
+
+impl std::fmt::Display for Overtaken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the help desk's data changed during the import")
+    }
+}
+
+impl std::error::Error for Overtaken {}
+
+/// A requester recognised a moment before was merged into another meanwhile, and is gone.
+fn merged_meanwhile<T>() -> Result<T> {
+    Err(Error::Internal(Overtaken.into()))
+}
+
+/// An import's error, or a refusal to be run again on the data as it is now when someone else
+/// changed it under the import: a requester merged away, a name taken between the import's check
+/// and its write, or a change waiting for what the import holds while the import waits for it.
+/// An import locks the customers of its rows in the files' order, not by id as moving a
+/// requester does, so the database may stop it in a deadlock (40P01) or, under a stricter
+/// isolation, a serialization failure (40001).
+fn changed_meanwhile(error: Error) -> Error {
+    let Error::Internal(internal) = &error else {
+        return error;
+    };
+    let database = internal
+        .downcast_ref::<sqlx::Error>()
+        .and_then(|e| e.as_database_error());
+    let contended = database.is_some_and(|e| {
+        e.is_unique_violation() || matches!(e.code().as_deref(), Some("40P01" | "40001"))
+    });
+    if internal.is::<Overtaken>() || contended {
+        return Error::Rule(
+            "the help desk's data changed during the import: reload and try again".into(),
+        );
+    }
+    error
 }
 
 /// What the rows before have done, for the rows after them.
@@ -1316,11 +1349,6 @@ async fn write_requester(
     }
     so_far.requesters.insert(id, row.line);
     Ok(Done::updated(changed_columns))
-}
-
-/// A requester recognised a moment before was merged into another meanwhile, and is gone.
-fn merged_meanwhile<T>() -> Result<T> {
-    Err(Error::NotFound("requester"))
 }
 
 #[cfg(test)]
@@ -2676,6 +2704,118 @@ mod tests {
             Err(Error::Rule(why)) => assert!(why.contains("try again"), "{why}"),
             other => panic!("not refused: {other:?}"),
         }
+    }
+
+    /// A requesters file of one row, recognised in a transaction of its own; nothing is locked yet.
+    async fn recognised_row(
+        db: &PgPool,
+        file: &str,
+    ) -> (Transaction<'static, Postgres>, Table, SoFar, RequesterFound) {
+        let table = read(Kind::Requesters, file.as_bytes()).unwrap();
+        let mut tx = db.begin().await.unwrap();
+        let so_far = SoFar::default();
+        let found = recognise_requester(&mut tx, &table, &table.rows[0], &so_far)
+            .await
+            .unwrap();
+        (tx, table, so_far, found)
+    }
+
+    /// A requester an agent moves to another customer after the row was recognised: the row is
+    /// about a requester of another customer now, and is left out.
+    #[sqlx::test]
+    async fn a_requester_moved_after_being_recognised_is_left_out(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let harbor = crate::customers::create(&db, "Harbor Lane", &[])
+            .await
+            .unwrap();
+        let ada = crate::testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let (mut tx, table, mut so_far, found) = recognised_row(
+            &db,
+            "customer,email_addresses,name\nBrightfield,ada@brightfield.test,Ada Ferrini\n",
+        )
+        .await;
+
+        crate::requesters::move_to_customer(&db, ada, harbor)
+            .await
+            .unwrap();
+        match write_requester(&mut tx, &table, &table.rows[0], &mut so_far, found).await {
+            Err(Error::Rule(why)) => assert!(why.contains("moved to another customer"), "{why}"),
+            Err(other) => panic!("{other:?}"),
+            Ok(_) => panic!("written"),
+        }
+        tx.commit().await.unwrap();
+        assert_eq!(
+            crate::requesters::detail(&db, ada).await.unwrap().name,
+            None
+        );
+    }
+
+    /// A requester an agent merges into another after the row was recognised is gone: the import
+    /// asks to be run again on the data as it is now.
+    #[sqlx::test]
+    async fn a_requester_merged_after_being_recognised_asks_to_try_again(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let ada = crate::testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let other = crate::testing::requester(&db, brightfield, "ada.f@brightfield.test").await;
+        let (mut tx, table, mut so_far, found) = recognised_row(
+            &db,
+            "customer,email_addresses,name\nBrightfield,ada@brightfield.test,Ada Ferrini\n",
+        )
+        .await;
+
+        crate::requesters::merge(&db, other, ada).await.unwrap();
+        let written = write_requester(&mut tx, &table, &table.rows[0], &mut so_far, found).await;
+        match written.map_err(changed_meanwhile) {
+            Err(Error::Rule(why)) => assert!(why.contains("try again"), "{why}"),
+            Err(other) => panic!("{other:?}"),
+            Ok(_) => panic!("written"),
+        }
+    }
+
+    /// The import and an agent each wait for a customer the other holds: the database stops one
+    /// of them, and the import, when it is the one, asks to be run again instead of failing.
+    #[sqlx::test]
+    async fn an_import_in_a_deadlock_asks_to_try_again(db: PgPool) {
+        let brightfield = crate::customers::create(&db, "Brightfield", &[])
+            .await
+            .unwrap();
+        let harbor = crate::customers::create(&db, "Harbor Lane", &[])
+            .await
+            .unwrap();
+        // The agent waits longer before looking for a deadlock, so that the import finds it.
+        let mut agent = db.begin().await.unwrap();
+        sqlx::query("SET LOCAL deadlock_timeout = '10s'")
+            .execute(&mut *agent)
+            .await
+            .unwrap();
+        crate::customers::lock_active(&mut agent, harbor)
+            .await
+            .unwrap();
+
+        let file = requesters(
+            "customer,email_addresses\n\
+             Brightfield,ada@brightfield.test\n\
+             Harbor Lane,cleo@harbor.test\n",
+        );
+        let importing = tokio::spawn({
+            let db = db.clone();
+            async move { run(&db, &Grant::command_line(), vec![file], Mode::Apply).await }
+        });
+        // The import holds Brightfield and waits for Harbor Lane; the agent now asks for
+        // Brightfield.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        crate::customers::lock_active(&mut agent, brightfield)
+            .await
+            .unwrap();
+        match importing.await.unwrap() {
+            Err(Error::Rule(why)) => assert!(why.contains("try again"), "{why}"),
+            other => panic!("not refused: {other:?}"),
+        }
+        agent.rollback().await.unwrap();
     }
 
     /// Applying does everything again against the database as it is then: a preview is no promise.
