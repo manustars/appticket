@@ -50,6 +50,20 @@ pub struct Asset {
     /// application, licence…
     pub kind: String,
     pub name: String,
+    /// Empty when it has none, or from a core that predates serial numbers.
+    #[serde(default)]
+    pub serial_number: Option<String>,
+    /// Its own site, one of its customer's; add-ons are not told its holder, nor the site it is at
+    /// through them.
+    #[serde(default)]
+    pub site: Option<SiteRef>,
+}
+
+/// A site of a customer, by id and name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SiteRef {
+    pub id: Uuid,
+    pub name: String,
 }
 
 /// An active service a customer uses.
@@ -218,4 +232,42 @@ pub struct TimelineNote {
     pub body: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn asset(details: serde_json::Value) -> Result<Asset, serde_json::Error> {
+        let mut json = serde_json::json!({
+            "id": "6f1c2a52-6d0e-4bd6-9a5e-0c1f3f7b9a01",
+            "customer_id": "0b7f6c1e-2a43-4e7d-8c55-3d2e1f0a9b02",
+            "kind": "Laptop",
+            "name": "PC-0042",
+        });
+        json.as_object_mut()
+            .unwrap()
+            .extend(details.as_object().unwrap().clone());
+        serde_json::from_value(json)
+    }
+
+    #[test]
+    fn an_asset_carries_its_serial_number_and_own_site_when_it_has_them() {
+        let read = asset(serde_json::json!({
+            "serial_number": "SN-0042",
+            "site": {"id": "9d8e7f6a-5b4c-4d3e-8f2a-1b0c9d8e7f03", "name": "Head office"}
+        }))
+        .unwrap();
+        assert_eq!(read.serial_number.as_deref(), Some("SN-0042"));
+        assert_eq!(read.site.map(|s| s.name).as_deref(), Some("Head office"));
+
+        let bare = asset(serde_json::json!({"serial_number": null, "site": null})).unwrap();
+        assert_eq!((bare.serial_number, bare.site), (None, None));
+        let older = asset(serde_json::json!({})).unwrap();
+        assert_eq!(
+            (older.serial_number, older.site),
+            (None, None),
+            "from a core that predates them"
+        );
+    }
 }
