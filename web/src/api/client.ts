@@ -135,7 +135,8 @@ export async function signOut(): Promise<void> {
 
 /**
  * Changes the signed-in agent's own password; their other sessions end. Refused (403) when the
- * current password is wrong, and (409) when the new one is too short.
+ * current password is wrong, and (409) when the new one is too short or the agent has no local
+ * password.
  */
 export async function changeOwnPassword(currentPassword: string, newPassword: string): Promise<void> {
   const request: Schemas['PasswordChange'] = { current_password: currentPassword, new_password: newPassword }
