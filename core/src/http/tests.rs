@@ -1553,6 +1553,46 @@ async fn an_import_is_previewed_then_applied(db: PgPool) {
 }
 
 #[sqlx::test]
+async fn requesters_are_imported_after_their_customers_and_sites(db: PgPool) {
+    let api = Client::new(&db).await;
+    let import = serde_json::json!({ "files": [
+        { "kind": "requesters", "content": "customer,email_addresses,name,site\n\
+            Brightfield,ada@brightfield.test,Ada Ferrini,Head office\n\
+            Brightfield,ada@brightfield.test,Ada F.,\n" },
+        { "kind": "sites", "content": "customer,name,address\nBrightfield,Head office,Via dei Tigli 1\n" },
+        { "kind": "customers", "content": "name\nBrightfield\n" },
+    ]});
+    let (status, preview) = api
+        .call("POST", "/api/imports/preview", Some(import.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["files"][2]["kind"], "requesters");
+    assert_eq!(preview["files"][2]["rows"][0]["outcome"], "create");
+    assert_eq!(
+        preview["files"][2]["rows"][0]["label"],
+        "Brightfield / Ada Ferrini (ada@brightfield.test)"
+    );
+    assert_eq!(preview["files"][2]["rows"][1]["outcome"], "left_out");
+    assert!(
+        preview["files"][2]["left_out"]
+            .as_str()
+            .unwrap()
+            .starts_with("customer,email_addresses,name,site,error\r\nBrightfield,ada@brightfield.test,Ada F.,,line 2 already imports"),
+        "{preview}"
+    );
+
+    let (status, applied) = api.call("POST", "/api/imports", Some(import)).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let customers = api.get("/api/customers/all").await;
+    let brightfield = customers[0]["id"].as_str().unwrap();
+    let shown = api.get(&format!("/api/customers/{brightfield}")).await;
+    let ada = shown["requester_list"][0]["id"].as_str().unwrap();
+    let ada = api.get(&format!("/api/requesters/{ada}")).await;
+    assert_eq!(ada["name"], "Ada Ferrini");
+    assert_eq!(ada["site"]["name"], "Head office");
+}
+
+#[sqlx::test]
 async fn an_import_needs_managing_customers_and_files_it_can_read(db: PgPool) {
     use crate::roles::Permission;
     let catalog = role_with(&db, "Catalog", &[Permission::ManageCatalog]).await;

@@ -2320,6 +2320,7 @@ mod tests {
             for file in [
                 customers("name\nBrightfield\n"),
                 sites("customer,name,address\n"),
+                requesters("customer,email_addresses\n"),
             ] {
                 assert!(
                     matches!(
