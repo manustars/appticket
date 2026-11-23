@@ -779,6 +779,24 @@ mod tests {
         assert!(detail(&db, ada).await.unwrap().site.is_none());
     }
 
+    /// A departed requester identified with the wrong customer is still moved, with their tickets.
+    #[sqlx::test]
+    async fn a_departed_requester_can_be_moved(db: PgPool) {
+        use crate::tickets::{self, RequesterMove};
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let n = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
+        testing::ticket(&db, brightfield, Some(ada), "b@brightfield.test").await;
+        depart(&db, ada).await.unwrap();
+
+        let moved = tickets::move_to_customer(&db, n, harbor, RequesterMove::Move).await;
+        assert!(moved.is_ok(), "{moved:?}");
+        let seen = detail(&db, ada).await.unwrap();
+        assert_eq!(seen.customer.id, harbor);
+        assert!(seen.departed_at.is_some());
+    }
+
     #[sqlx::test]
     async fn moving_a_requester_leaves_their_site(db: PgPool) {
         use crate::tickets::{self, RequesterMove};

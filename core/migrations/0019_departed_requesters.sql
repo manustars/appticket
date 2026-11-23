@@ -32,10 +32,14 @@ CREATE CONSTRAINT TRIGGER requesters_have_an_address
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION requester_has_an_address();
 
--- No ticket is opened for, or given to, a departed requester; the tickets they had stay theirs.
--- Checking the requester locks it, so that one departing at the same time is seen.
+-- No ticket is opened for, or given to, a departed requester; the tickets they had stay theirs,
+-- also when the requester moves to another customer and the move cascades to them. Checking the
+-- requester locks it, so that one departing at the same time is seen.
 CREATE FUNCTION no_ticket_for_a_departed_requester() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+    IF TG_OP = 'UPDATE' AND NEW.requester_id = OLD.requester_id THEN
+        RETURN NULL;
+    END IF;
     IF EXISTS (SELECT 1 FROM requesters WHERE id = NEW.requester_id AND departed_at IS NOT NULL
                FOR SHARE) THEN
         RAISE EXCEPTION 'no ticket is opened for a departed requester'
