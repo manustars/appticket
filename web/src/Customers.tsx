@@ -504,7 +504,7 @@ function Sites({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
     })
   }
 
-  /** What retiring the site asks, naming the requesters at it and the assets that leave it. */
+  /** What retiring the site asks, naming the requesters at it and the assets that lose it. */
   function retireQuestion(name: string, requesters: string[], assets: string[]): string {
     const who = requesters.join(', ')
     const what = assets.join(', ')
@@ -527,9 +527,9 @@ function Sites({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
     void action.run(async () => {
       const [fresh, assets] = await Promise.all([getCustomer(c.id), listCustomerAssets(c.id)])
       const requesters = fresh.requester_list.filter((r) => r.site_id === siteId).map((r) => requesterLabel(t, r.name, r.addresses[0]))
-      // The active assets that will no longer be at the site: those at it now, also through a
-      // holder who is there and leaves it, and those whose own site it is, even while they are
-      // with their holder elsewhere.
+      // The active assets that lose the site: those at it now, also through a holder who is there
+      // and leaves it, and those whose own site it is, even while they are with their holder
+      // elsewhere.
       const leaving = assets
         .filter((a) => !a.retired_at && (a.at_site?.id === siteId || a.site?.id === siteId))
         .map((a) => a.name)

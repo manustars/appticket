@@ -406,19 +406,19 @@
     "other": "Dismettere {name}? Vi si trovano {count} richiedenti, che resteranno senza sede: {requesters}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset."
   },
   "sites.confirmRetireWithAssets": {
-    "one": "Dismettere {name}? L'asset {assets} non vi si troverà più. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
-    "many": "Dismettere {name}? {count} asset non vi si troveranno più: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
-    "other": "Dismettere {name}? {count} asset non vi si troveranno più: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset."
+    "one": "Dismettere {name}? L'asset {assets} perderà questa sede. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+    "many": "Dismettere {name}? {count} asset perderanno questa sede: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+    "other": "Dismettere {name}? {count} asset perderanno questa sede: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset."
   },
   "sites.confirmRetireWithRequesterAndAssets": {
-    "one": "Dismettere {name}? {requesters} vi si trova e resterà senza sede, e l'asset {assets} non vi si troverà più. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
-    "many": "Dismettere {name}? {requesters} vi si trova e resterà senza sede, e {count} asset non vi si troveranno più: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
-    "other": "Dismettere {name}? {requesters} vi si trova e resterà senza sede, e {count} asset non vi si troveranno più: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset."
+    "one": "Dismettere {name}? {requesters} vi si trova e resterà senza sede, e l'asset {assets} perderà questa sede. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+    "many": "Dismettere {name}? {requesters} vi si trova e resterà senza sede, e {count} asset perderanno questa sede: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+    "other": "Dismettere {name}? {requesters} vi si trova e resterà senza sede, e {count} asset perderanno questa sede: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset."
   },
   "sites.confirmRetireWithRequestersAndAssets": {
-    "one": "Dismettere {name}? Vi si trovano {requesterCount} richiedenti, che resteranno senza sede: {requesters}; e l'asset {assets} non vi si troverà più. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
-    "many": "Dismettere {name}? Vi si trovano {requesterCount} richiedenti, che resteranno senza sede: {requesters}; e {count} asset non vi si troveranno più: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
-    "other": "Dismettere {name}? Vi si trovano {requesterCount} richiedenti, che resteranno senza sede: {requesters}; e {count} asset non vi si troveranno più: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset."
+    "one": "Dismettere {name}? Vi si trovano {requesterCount} richiedenti, che resteranno senza sede: {requesters}; e l'asset {assets} perderà questa sede. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+    "many": "Dismettere {name}? Vi si trovano {requesterCount} richiedenti, che resteranno senza sede: {requesters}; e {count} asset perderanno questa sede: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset.",
+    "other": "Dismettere {name}? Vi si trovano {requesterCount} richiedenti, che resteranno senza sede: {requesters}; e {count} asset perderanno questa sede: {assets}. La sede resta visibile, ma non vi si potranno più collocare richiedenti né asset."
   },
   "externalReferences.title": "Riferimenti esterni",
   "externalReferences.hint": "I nomi con cui altri sistemi indicano questo cliente, come un gruppo in uno strumento di monitoraggio. In ciascun sistema un nome indica un solo cliente; gli add-on li leggono.",
