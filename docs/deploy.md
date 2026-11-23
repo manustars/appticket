@@ -223,8 +223,8 @@ default) and `HD_OIDC_GROUP_CLAIM` (default `groups`). The issuer and the public
 must be `https://` addresses; `http://` is accepted only for a server on the core's own machine
 (`localhost` or a loopback address), as for the mail servers. Without an issuer, client id and
 secret nothing changes; with only some of them, or an authorized group without them, the core
-does not start, and says which are
-missing (the chart already refuses an issuer without a public URL). The core reads the provider's
+does not start, and says which are missing (the chart already refuses an issuer without a public
+URL). The core reads the provider's
 configuration and keys when an agent signs in, not at startup, so a provider that is down does
 not keep the core or local passwords from working.
 
@@ -246,7 +246,10 @@ How the provider's sign-in finds the agent:
   become an agent with the default role (never the Administrator role, not even on an
   installation without agents), linked to the identity and without a local password, with the
   name and e-mail the provider sends (the e-mail, verified or not, names them when there is no
-  name). Without an e-mail there is nobody to link and nothing to make an agent with.
+  name). Without an e-mail there is nobody to link and nothing to make an agent with. Add the
+  first agent with `hd agent add` before anyone signs in: once an agent exists, `hd agent add`
+  gives the default role too, and `hd agent set-role <e-mail> Administrator` hands out the
+  Administrator role.
 - From then on, by the provider's stable identifier (`sub`), even after the address changed
   there. The agent's name and e-mail follow the provider at every sign-in, the e-mail whether or
   not the provider says it is verified (that matters only the first time). When the provider
