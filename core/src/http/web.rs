@@ -100,9 +100,8 @@ mod tests {
         let dir = built_ui();
         let app = with_web(
             router(AppState {
-                db,
                 sender: None,
-                mail: Default::default(),
+                ..AppState::for_tests(&db)
             }),
             &dir,
         );

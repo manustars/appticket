@@ -21,10 +21,12 @@ use uuid::Uuid;
 use crate::auth::{self, SESSION_COOKIE, SESSION_DAYS, SignedIn};
 use crate::mail_status::MailStatus;
 use crate::outbound::Sender;
+use crate::sign_in_limits::SignInLimits;
 
 mod addon;
 mod admin;
 mod catalog;
+mod client_address;
 mod customers;
 mod directory;
 mod imports;
@@ -32,6 +34,7 @@ mod inbox;
 mod tickets;
 mod web;
 
+pub use client_address::{TrustedProxies, parse_proxy};
 pub use web::with_web;
 
 #[derive(OpenApi)]
@@ -49,6 +52,10 @@ pub struct AppState {
     pub sender: Option<Sender>,
     /// What reading and sending mail last did.
     pub mail: MailStatus,
+    /// The limits on failed sign-ins.
+    pub sign_in_limits: SignInLimits,
+    /// The reverse proxies whose forwarded client addresses are believed.
+    pub trusted_proxies: TrustedProxies,
 }
 
 #[cfg(test)]
@@ -58,6 +65,8 @@ impl AppState {
             db: db.clone(),
             sender: Some(crate::testing::sender()),
             mail: MailStatus::default(),
+            sign_in_limits: SignInLimits::for_tests(5, std::time::Duration::from_secs(15 * 60)),
+            trusted_proxies: TrustedProxies::default(),
         }
     }
 }
