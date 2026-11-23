@@ -2,24 +2,31 @@
 //! with PKCE, state and nonce checked, the ID token validated against the provider's keys
 //! (docs/domain-rules.md, "Signing in"; ADR 0008).
 
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType};
-use openidconnect::{
-    AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet,
-    EndpointNotSet, EndpointSet, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, Scope, TokenResponse,
+use openidconnect::core::{
+    CoreAuthDisplay, CoreAuthPrompt, CoreErrorResponseType, CoreGenderClaim, CoreJsonWebKey,
+    CoreJweContentEncryptionAlgorithm, CoreJwsSigningAlgorithm, CoreProviderMetadata,
+    CoreResponseType, CoreRevocableToken, CoreRevocationErrorResponse,
+    CoreTokenIntrospectionResponse, CoreTokenType,
 };
-use serde::Deserialize;
+use openidconnect::{
+    AdditionalClaims, AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
+    EmptyExtraTokenFields, EndpointMaybeSet, EndpointNotSet, EndpointSet, IdTokenFields, IssuerUrl,
+    Nonce, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, StandardErrorResponse,
+    StandardTokenResponse, TokenResponse,
+};
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use utoipa::IntoParams;
 
 use crate::auth;
-use crate::identities::Identity;
+use crate::identities::{AuthorizedGroup, Identity};
 use crate::sign_in_limits::AddressKey;
 
 /// Where the provider sends the browser back to, under the core's public URL.
@@ -57,6 +64,45 @@ pub struct Settings {
         default_value_t = 12
     )]
     pub session_hours: i64,
+    /// The authorized group: only those the provider says are in it sign in, checked at every
+    /// sign-in, and someone in it who is not an agent yet becomes one. Unset, only existing
+    /// agents sign in.
+    #[arg(long = "oidc-authorized-group", env = "HD_OIDC_AUTHORIZED_GROUP")]
+    pub authorized_group: Option<String>,
+    /// The ID token claim that lists the person's groups (or roles) the authorized group is
+    /// looked for in.
+    #[arg(
+        long = "oidc-group-claim",
+        env = "HD_OIDC_GROUP_CLAIM",
+        default_value = "groups"
+    )]
+    pub group_claim: String,
+}
+
+/// Where the authorized group is looked for: a claim of the ID token, and the value it must hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupClaim {
+    pub claim: String,
+    pub value: String,
+}
+
+impl GroupClaim {
+    /// Whether the ID token's claims put the person in the authorized group: the claim is the
+    /// value, or a list that holds it, compared exactly. Anything else is not.
+    fn check(&self, claims: &OtherClaims) -> AuthorizedGroup {
+        let member = match claims.0.get(&self.claim) {
+            Some(serde_json::Value::String(value)) => *value == self.value,
+            Some(serde_json::Value::Array(values)) => values
+                .iter()
+                .any(|value| value.as_str() == Some(self.value.as_str())),
+            _ => false,
+        };
+        if member {
+            AuthorizedGroup::Member
+        } else {
+            AuthorizedGroup::NotMember
+        }
+    }
 }
 
 /// A configured identity provider.
@@ -70,6 +116,8 @@ pub struct Config {
     pub label: String,
     /// How long a session opened through the provider lasts.
     pub session: time::Duration,
+    /// The authorized group, when the installation names one.
+    pub authorized_group: Option<GroupClaim>,
 }
 
 impl Config {
@@ -85,7 +133,13 @@ impl Config {
         let client_id = given(settings.client_id);
         let secret = given(settings.client_secret);
         let secret_file = settings.client_secret_file;
-        if issuer.is_none() && client_id.is_none() && secret.is_none() && secret_file.is_none() {
+        let authorized_group = given(settings.authorized_group);
+        if issuer.is_none()
+            && client_id.is_none()
+            && secret.is_none()
+            && secret_file.is_none()
+            && authorized_group.is_none()
+        {
             return Ok(None);
         }
         let mut missing = Vec::new();
@@ -129,6 +183,21 @@ impl Config {
         if !(1..=24).contains(&settings.session_hours) {
             bail!("HD_OIDC_SESSION_HOURS must be between 1 and 24");
         }
+        let authorized_group = match authorized_group {
+            None => None,
+            Some(value) => {
+                let claim = settings.group_claim.trim();
+                if claim.is_empty() {
+                    bail!(
+                        "HD_OIDC_GROUP_CLAIM is empty: name the claim the authorized group is in"
+                    );
+                }
+                Some(GroupClaim {
+                    claim: claim.to_owned(),
+                    value,
+                })
+            }
+        };
         let redirect = format!("{}{CALLBACK_PATH}", public_url.trim_end_matches('/'));
         Ok(Some(Config {
             issuer: IssuerUrl::new(issuer).context("HD_OIDC_ISSUER is not a URL")?,
@@ -137,6 +206,7 @@ impl Config {
             redirect: RedirectUrl::new(redirect).context("HD_PUBLIC_URL is not a URL")?,
             label: given(settings.label).unwrap_or_else(|| "OpenID Connect".to_owned()),
             session: time::Duration::hours(settings.session_hours),
+            authorized_group,
         }))
     }
 }
@@ -173,7 +243,7 @@ impl Provider {
         let metadata = CoreProviderMetadata::discover_async(self.config.issuer.clone(), &http)
             .await
             .context("reading the identity provider's configuration")?;
-        Ok(CoreClient::from_provider_metadata(
+        Ok(Client::from_provider_metadata(
             metadata,
             self.config.client_id.clone(),
             Some(self.config.client_secret.clone()),
@@ -314,7 +384,10 @@ impl Provider {
             email: claims.email().map(|email| email.as_str().to_owned()),
             email_verified: claims.email_verified() == Some(true),
             name,
-            authorized_group: crate::identities::AuthorizedGroup::NotConfigured,
+            authorized_group: match &self.config.authorized_group {
+                None => AuthorizedGroup::NotConfigured,
+                Some(group) => group.check(claims.additional_claims()),
+            },
         })
     }
 }
@@ -368,7 +441,34 @@ pub struct CallbackQuery {
     pub error: Option<String>,
 }
 
-type Client = openidconnect::core::CoreClient<
+/// The ID token's claims the OpenID Connect library does not name, such as the one the
+/// authorized group is in.
+#[derive(Debug, Deserialize, Serialize)]
+struct OtherClaims(HashMap<String, serde_json::Value>);
+
+impl AdditionalClaims for OtherClaims {}
+
+type IdTokenFieldsWithOtherClaims = IdTokenFields<
+    OtherClaims,
+    EmptyExtraTokenFields,
+    CoreGenderClaim,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJwsSigningAlgorithm,
+>;
+
+/// The library's core client, but for the ID token's other claims.
+type Client = openidconnect::Client<
+    OtherClaims,
+    CoreAuthDisplay,
+    CoreGenderClaim,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJsonWebKey,
+    CoreAuthPrompt,
+    StandardErrorResponse<CoreErrorResponseType>,
+    StandardTokenResponse<IdTokenFieldsWithOtherClaims, CoreTokenType>,
+    CoreTokenIntrospectionResponse,
+    CoreRevocableToken,
+    CoreRevocationErrorResponse,
     EndpointSet,
     EndpointNotSet,
     EndpointNotSet,
@@ -416,6 +516,106 @@ mod tests {
             client_secret_file: None,
             label: None,
             session_hours: 12,
+            authorized_group: None,
+            group_claim: "groups".to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_authorized_group_is_read_from_the_groups_claim_unless_another_is_named() {
+        let none = Config::from_settings(settings(), PUBLIC_URL)
+            .unwrap()
+            .unwrap();
+        assert_eq!(none.authorized_group, None);
+        let blank = Settings {
+            authorized_group: Some("  ".to_owned()),
+            ..settings()
+        };
+        let blank = Config::from_settings(blank, PUBLIC_URL).unwrap().unwrap();
+        assert_eq!(blank.authorized_group, None);
+
+        let groups = Settings {
+            authorized_group: Some(" helpdesk-agents ".to_owned()),
+            ..settings()
+        };
+        let groups = Config::from_settings(groups, PUBLIC_URL).unwrap().unwrap();
+        assert_eq!(
+            groups.authorized_group,
+            Some(GroupClaim {
+                claim: "groups".to_owned(),
+                value: "helpdesk-agents".to_owned()
+            })
+        );
+
+        let roles = Settings {
+            authorized_group: Some("Helpdesk.Agent".to_owned()),
+            group_claim: " roles ".to_owned(),
+            ..settings()
+        };
+        let roles = Config::from_settings(roles, PUBLIC_URL).unwrap().unwrap();
+        assert_eq!(
+            roles.authorized_group,
+            Some(GroupClaim {
+                claim: "roles".to_owned(),
+                value: "Helpdesk.Agent".to_owned()
+            })
+        );
+
+        let no_claim = Settings {
+            authorized_group: Some("Helpdesk.Agent".to_owned()),
+            group_claim: " ".to_owned(),
+            ..settings()
+        };
+        let error = Config::from_settings(no_claim, PUBLIC_URL).unwrap_err();
+        assert!(
+            format!("{error}").contains("HD_OIDC_GROUP_CLAIM"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_authorized_group_without_a_provider_is_a_partial_configuration() {
+        let alone = Settings {
+            issuer: None,
+            client_id: None,
+            client_secret: None,
+            authorized_group: Some("helpdesk-agents".to_owned()),
+            ..settings()
+        };
+        let error = Config::from_settings(alone, PUBLIC_URL).unwrap_err();
+        assert!(format!("{error}").contains("HD_OIDC_ISSUER"), "{error}");
+    }
+
+    fn claims(json: serde_json::Value) -> OtherClaims {
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn the_group_claim_holds_the_authorized_group_as_one_of_a_list_or_alone() {
+        let rule = GroupClaim {
+            claim: "roles".to_owned(),
+            value: "Helpdesk.Agent".to_owned(),
+        };
+        let member = |json| rule.check(&claims(json));
+        assert_eq!(
+            member(serde_json::json!({"roles": ["Reader", "Helpdesk.Agent"]})),
+            AuthorizedGroup::Member
+        );
+        assert_eq!(
+            member(serde_json::json!({"roles": "Helpdesk.Agent"})),
+            AuthorizedGroup::Member
+        );
+        for not in [
+            serde_json::json!({"roles": ["Reader"]}),
+            serde_json::json!({"roles": []}),
+            serde_json::json!({"roles": ["helpdesk.agent"]}),
+            serde_json::json!({"roles": "Helpdesk.Agents"}),
+            serde_json::json!({"roles": {"Helpdesk.Agent": true}}),
+            serde_json::json!({"roles": null}),
+            serde_json::json!({"groups": ["Helpdesk.Agent"]}),
+            serde_json::json!({}),
+        ] {
+            assert_eq!(member(not.clone()), AuthorizedGroup::NotMember, "{not}");
         }
     }
 
