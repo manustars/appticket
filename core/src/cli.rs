@@ -240,7 +240,7 @@ pub async fn sign_in(
     let SignInCommand::Local { switch } = command;
     match switch {
         None => {
-            let on = crate::local_sign_in::is_on(db).await?;
+            let on = crate::local_sign_in::is_on(db).await.map_err(fail)?;
             writeln!(out, "local sign-in is {}", if on { "on" } else { "off" })?;
         }
         Some(LocalSignIn::On) => {
@@ -253,7 +253,7 @@ pub async fn sign_in(
         }) => {
             let config =
                 crate::oidc::Config::from_settings(identity_provider, public_url.as_deref())?;
-            let ended = crate::local_sign_in::switch_off(db, config.as_ref())
+            let ended = crate::local_sign_in::switch_off(db, config.is_some())
                 .await
                 .map_err(fail)?;
             let sessions = if ended == 1 { "session" } else { "sessions" };

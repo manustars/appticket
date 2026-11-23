@@ -397,10 +397,7 @@ mod tests {
         let lena = agent(&db, "lena.marsh@example.com", "Lena").await;
         let before = sign_in_as(&state, "lena").await;
         let before = before.cookie("hd_session").expect("a session");
-        let configured = crate::local_sign_in::tests::identity_provider();
-        crate::local_sign_in::switch_off(&db, Some(&configured))
-            .await
-            .unwrap();
+        crate::local_sign_in::switch_off(&db, true).await.unwrap();
 
         let token = before.trim_start_matches("hd_session=");
         let still = crate::auth::agent_for(&db, token).await.unwrap().unwrap();

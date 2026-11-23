@@ -285,18 +285,27 @@ async fn behind_a_trusted_proxy_clients_are_counted_under_their_forwarded_addres
 #[sqlx::test]
 async fn with_local_sign_in_off_a_password_is_refused_the_same_way_for_every_account(db: PgPool) {
     let api = Client::new(&db).await;
-    let provider = crate::local_sign_in::tests::identity_provider();
+    let settings = crate::oidc::Settings {
+        issuer: Some("https://login.example.com/realms/staff".to_owned()),
+        client_id: Some("helpdesk".to_owned()),
+        client_secret: Some("invented-secret".to_owned()),
+        client_secret_file: None,
+        label: Some("Northgate".to_owned()),
+        session_hours: 12,
+    };
+    let provider =
+        crate::oidc::Config::from_settings(settings, Some("https://helpdesk.example.com"))
+            .unwrap()
+            .unwrap();
     let state = AppState {
-        identity_provider: Some(crate::oidc::Provider::new(provider.clone()).unwrap()),
+        identity_provider: Some(crate::oidc::Provider::new(provider).unwrap()),
         ..api.state.clone()
     };
     let anonymous = Client::anonymous(state.clone());
     let (_, options) = anonymous.call("GET", "/api/session/options", None).await;
     assert_eq!(options["local_sign_in"], true);
 
-    crate::local_sign_in::switch_off(&db, Some(&provider))
-        .await
-        .unwrap();
+    crate::local_sign_in::switch_off(&db, true).await.unwrap();
     let (status, _) = api.call("GET", "/api/session", None).await;
     assert_eq!(
         status,
