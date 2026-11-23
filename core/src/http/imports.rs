@@ -1,4 +1,5 @@
-//! Importing customers and sites from CSV files: a preview first, then the import itself.
+//! Importing customers, sites and requesters from CSV files: a preview first, then the import
+//! itself.
 
 use axum::{Json, extract::DefaultBodyLimit, extract::State};
 use serde::Deserialize;
@@ -20,7 +21,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
 }
 
-/// CSV files to import, at most one of each kind; they are taken customers first, then sites.
+/// CSV files to import, at most one of each kind; they are taken customers first, then sites,
+/// then requesters.
 #[derive(Deserialize, ToSchema)]
 pub struct ImportRequest {
     files: Vec<ImportFile>,

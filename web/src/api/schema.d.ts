@@ -1796,7 +1796,7 @@ export interface components {
          *     row can refer to something an earlier file creates.
          * @enum {string}
          */
-        ImportKind: "customers" | "sites";
+        ImportKind: "customers" | "sites" | "requesters";
         /** @enum {string} */
         ImportOutcome: "create" | "update" | "unchanged" | "left_out";
         /** @description What an import does, or would do, file by file. */
@@ -1805,14 +1805,20 @@ export interface components {
             applied: boolean;
             files: components["schemas"]["ImportFileReport"][];
         };
-        /** @description CSV files to import, at most one of each kind; they are taken customers first, then sites. */
+        /**
+         * @description CSV files to import, at most one of each kind; they are taken customers first, then sites,
+         *     then requesters.
+         */
         ImportRequest: {
             files: components["schemas"]["ImportFile"][];
         };
         ImportRow: {
             /** @description The columns whose values a row that updates changes. */
             changes: string[];
-            /** @description What the row is about: a customer's name, or a site's customer and name. */
+            /**
+             * @description What the row is about: a customer's name, a site's customer and name, or a requester's
+             *     customer, name and first address.
+             */
             label: string;
             /**
              * Format: int64

@@ -6308,7 +6308,8 @@
         "description": "What a file of an import holds, one kind per file. Files are taken in this order, so that a\nrow can refer to something an earlier file creates.",
         "enum": [
           "customers",
-          "sites"
+          "sites",
+          "requesters"
         ]
       },
       "ImportOutcome": {
@@ -6342,7 +6343,7 @@
       },
       "ImportRequest": {
         "type": "object",
-        "description": "CSV files to import, at most one of each kind; they are taken customers first, then sites.",
+        "description": "CSV files to import, at most one of each kind; they are taken customers first, then sites,\nthen requesters.",
         "required": [
           "files"
         ],
@@ -6373,7 +6374,7 @@
           },
           "label": {
             "type": "string",
-            "description": "What the row is about: a customer's name, or a site's customer and name."
+            "description": "What the row is about: a customer's name, a site's customer and name, or a requester's\ncustomer, name and first address."
           },
           "line": {
             "type": "integer",
