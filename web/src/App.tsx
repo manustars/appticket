@@ -99,7 +99,7 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
   // undefined: still asking the core; null: no answer, and the page offers the password only.
   const [options, setOptions] = useState<SignInOptions | null | undefined>(undefined)
   const provider = options?.identity_provider?.label ?? null
-  const local = options === null || options?.local_sign_in === true
+  const localSignIn = options === null || options?.local_sign_in === true
 
   const askOptions = useCallback(() => {
     signInOptions().then(setOptions, () => setOptions(null))
@@ -139,13 +139,13 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
         {provider !== null && (
           <>
             <a className="button provider" href={identityProviderSignIn}>{t('signIn.with', { provider })}</a>
-            {local && <p className="hint">{t('signIn.orPassword')}</p>}
+            {localSignIn && <p className="hint">{t('signIn.orPassword')}</p>}
           </>
         )}
-        {options !== undefined && !local && provider === null && (
+        {options !== undefined && !localSignIn && provider === null && (
           <p className="error" role="alert">{t('signIn.noWayIn')}</p>
         )}
-        {local && (
+        {localSignIn && (
           <>
             <label>
               {t('signIn.email')}
@@ -167,7 +167,7 @@ function SignIn({ onSignedIn }: { onSignedIn: (agent: Agent) => void }) {
                   : t('error.unreachable')}
           </p>
         )}
-        {local && <button type="submit" disabled={busy}>{t('signIn.submit')}</button>}
+        {localSignIn && <button type="submit" disabled={busy}>{t('signIn.submit')}</button>}
         <LanguageSwitcher />
       </form>
     </main>

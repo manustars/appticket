@@ -326,7 +326,8 @@ async fn with_local_sign_in_off_a_password_is_refused_the_same_way_for_every_acc
             assert_eq!(
                 answer.body,
                 serde_json::json!({
-                    "error": "Local sign-in is off: sign in through the identity provider."
+                    "error": "Local sign-in is off: sign in through the identity provider.",
+                    "code": "local_sign_in_off"
                 })
             );
         }
@@ -378,6 +379,7 @@ async fn local_sign_in_off_and_an_unreachable_provider_are_recovered_with_the_co
     // Nobody gets in: the password is refused, and the provider cannot be reached.
     let refused = sign_in_from(&state, "192.0.2.1", &[], "marco@northgate.test", "pw").await;
     assert_eq!(refused.status, StatusCode::FORBIDDEN);
+    assert_eq!(refused.body["code"], "local_sign_in_off");
     let begin = Request::get("/api/session/identity-provider")
         .extension(connection_from("192.0.2.1"))
         .body(Body::empty())
