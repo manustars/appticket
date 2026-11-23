@@ -19,6 +19,10 @@ impl TrustedProxies {
         TrustedProxies(proxies.into())
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     /// The client's address, for a connection from `peer` carrying the `X-Forwarded-For` header
     /// lines `forwarded_for`. Each proxy adds the address it was connected from on the right,
     /// and the client can write anything on the left: the client is the first address from the
@@ -67,8 +71,17 @@ fn entry_address(entry: &str) -> Option<IpAddr> {
         .map(|address| address.to_canonical())
 }
 
+/// Trusted proxies separated by commas; empty entries are left out, so an empty text trusts none.
+pub fn parse_proxies(text: &str) -> Result<TrustedProxies, String> {
+    text.split(',')
+        .filter(|entry| !entry.trim().is_empty())
+        .map(parse_proxy)
+        .collect::<Result<Vec<_>, _>>()
+        .map(TrustedProxies::new)
+}
+
 /// One trusted proxy: an address, or a network such as `192.0.2.0/24`.
-pub fn parse_proxy(text: &str) -> Result<IpNet, String> {
+fn parse_proxy(text: &str) -> Result<IpNet, String> {
     let text = text.trim();
     text.parse::<IpNet>()
         .or_else(|_| text.parse::<IpAddr>().map(IpNet::from))
@@ -200,6 +213,22 @@ mod tests {
             ),
             ip("2001:db8:9::5")
         );
+    }
+
+    /// A variable set to nothing, as a chart or a Compose file may leave it, trusts no proxy.
+    #[test]
+    fn trusted_proxies_are_listed_with_commas_and_the_list_may_be_empty() {
+        assert!(parse_proxies("").unwrap().is_empty());
+        assert!(parse_proxies(" , ").unwrap().is_empty());
+        let listed = parse_proxies("192.0.2.10, 198.51.100.0/24,").unwrap();
+        assert_eq!(
+            listed.client_address(
+                ip("198.51.100.4"),
+                [HeaderValue::from_static("203.0.113.7")].iter()
+            ),
+            ip("203.0.113.7")
+        );
+        assert!(parse_proxies("192.0.2.10, nonsense").is_err());
     }
 
     #[test]

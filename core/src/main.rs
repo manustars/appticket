@@ -97,9 +97,9 @@ enum Command {
         /// Reverse proxies, as addresses or networks separated by commas (192.0.2.10,
         /// 198.51.100.0/24), whose X-Forwarded-For gives the client's address. Without them the
         /// header is ignored and the connection's address is the client's.
-        #[arg(long, env = "HD_TRUSTED_PROXIES", value_delimiter = ',',
-            value_parser = http::parse_proxy)]
-        trusted_proxies: Vec<ipnet::IpNet>,
+        #[arg(long, env = "HD_TRUSTED_PROXIES", default_value = "", hide_default_value = true,
+            value_parser = http::parse_proxies)]
+        trusted_proxies: http::TrustedProxies,
     },
     /// Apply pending database migrations and exit.
     Migrate,
@@ -237,7 +237,7 @@ async fn main() -> anyhow::Result<()> {
                     sign_in_failures,
                     Duration::from_secs(sign_in_window_seconds),
                 ),
-                trusted_proxies: http::TrustedProxies::new(trusted_proxies),
+                trusted_proxies,
             };
             http::serve(state, listen, web_dir).await
         }
