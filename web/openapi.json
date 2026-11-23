@@ -77,7 +77,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Asset"
+                    "$ref": "#/components/schemas/AddonAsset"
                   }
                 }
               }
@@ -1348,7 +1348,7 @@
         "tags": [
           "catalog"
         ],
-        "summary": "Changes an asset's kind and name.",
+        "summary": "Changes an asset's kind, name, serial number, site and holder; those left out are cleared. The\nsite and the holder belong to the asset's customer; the site is not retired, the holder has not\ndeparted, and a retired asset has no holder.",
         "operationId": "update_asset",
         "parameters": [
           {
@@ -1721,7 +1721,7 @@
         "tags": [
           "catalog"
         ],
-        "summary": "Adds an asset the customer owns.",
+        "summary": "Adds an asset the customer owns, with its serial number, site and holder if given.",
         "operationId": "create_asset",
         "parameters": [
           {
@@ -3309,7 +3309,7 @@
         "tags": [
           "customers"
         ],
-        "summary": "Moves a requester identified with the wrong customer to the right one, under the rule for\nmoving tickets: all their tickets move with them, closed ones included, and linked assets and\nservices that do not fit the new customer are unlinked. They leave their site.",
+        "summary": "Moves a requester identified with the wrong customer to the right one, under the rule for\nmoving tickets: all their tickets move with them, closed ones included, and linked assets and\nservices that do not fit the new customer are unlinked. They leave their site, and the assets\nthey hold stay with the old customer without a holder.",
         "operationId": "move_requester",
         "parameters": [
           {
@@ -4076,7 +4076,7 @@
         "tags": [
           "customers"
         ],
-        "summary": "Retires a site: it stays visible but gets no new requesters or assets. Sites are never\ndeleted.",
+        "summary": "Retires a site: it stays visible but gets no new requesters or assets, and the requesters and\nassets at it are left without a site. Sites are never deleted.",
         "operationId": "retire_site",
         "parameters": [
           {
@@ -5291,6 +5291,56 @@
           }
         }
       },
+      "AddonAsset": {
+        "type": "object",
+        "description": "An asset as add-ons read it: without its holder, who is a person.",
+        "required": [
+          "id",
+          "customer_id",
+          "customer_name",
+          "kind_id",
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customer_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "description": "The name of its asset kind: laptop, printer, application, licence…"
+          },
+          "kind_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "retired_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "source_addon": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The add-on it came from, when an add-on supplies it."
+          }
+        }
+      },
       "AddonCustomer": {
         "type": "object",
         "required": [
@@ -5557,15 +5607,38 @@
           "customer_name",
           "kind_id",
           "kind",
+          "moves_with_holder",
           "name"
         ],
         "properties": {
+          "at_site": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SiteRef",
+                "description": "Where it is: its holder's site while it has a holder, when its kind moves with its holder;\nits own site otherwise."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "customer_id": {
             "type": "string",
             "format": "uuid"
           },
           "customer_name": {
             "type": "string"
+          },
+          "holder": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Holder",
+                "description": "The requester it has been given to, of its customer and not departed."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "type": "string",
@@ -5579,6 +5652,10 @@
             "type": "string",
             "format": "uuid"
           },
+          "moves_with_holder": {
+            "type": "boolean",
+            "description": "Whether its kind moves with its holder; otherwise it stays at its own site."
+          },
           "name": {
             "type": "string"
           },
@@ -5588,6 +5665,23 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "serial_number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "site": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SiteRef",
+                "description": "Its own site, one of its customer's."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "source_addon": {
             "type": [
@@ -5600,11 +5694,20 @@
       },
       "AssetFields": {
         "type": "object",
+        "description": "What agents who manage the catalog set on an asset.",
         "required": [
           "kind_id",
           "name"
         ],
         "properties": {
+          "holder_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "A requester of the asset's customer who has not departed."
+          },
           "kind_id": {
             "type": "string",
             "format": "uuid",
@@ -5612,6 +5715,21 @@
           },
           "name": {
             "type": "string"
+          },
+          "serial_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Empty or left out for none."
+          },
+          "site_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "One of the asset's customer's sites that is not retired."
           }
         }
       },
@@ -6261,6 +6379,32 @@
           }
         }
       },
+      "Holder": {
+        "type": "object",
+        "description": "The requester an asset has been given to.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The first of their addresses."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ImportFile": {
         "type": "object",
         "required": [
@@ -6652,7 +6796,8 @@
           "tickets",
           "key_requester",
           "assets",
-          "services"
+          "services",
+          "held_assets"
         ],
         "properties": {
           "assets": {
@@ -6661,6 +6806,13 @@
               "$ref": "#/components/schemas/LinkedAsset"
             },
             "description": "The assets linked to their tickets: they belong to the old customer, so they are unlinked."
+          },
+          "held_assets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkedAsset"
+            },
+            "description": "The assets they hold: these stay with the old customer, without a holder."
           },
           "key_requester": {
             "type": "boolean",
@@ -7338,7 +7490,8 @@
           "customer",
           "addresses",
           "phone_numbers",
-          "notes"
+          "notes",
+          "held_assets"
         ],
         "properties": {
           "addresses": {
@@ -7358,6 +7511,13 @@
             ],
             "format": "date-time",
             "description": "When the requester left their customer; empty while they have not. A departed requester\ngets no tickets and their messages wait in the inbox."
+          },
+          "held_assets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Asset"
+            },
+            "description": "The assets they hold, by kind."
           },
           "id": {
             "type": "string",

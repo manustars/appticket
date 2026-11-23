@@ -165,6 +165,7 @@ export interface Messages {
   "move.willUnlink": { plural: false; placeholders: never; tags: never }
   "move.unlinkAsset": { plural: false; placeholders: "customer" | "kind" | "name"; tags: never }
   "move.unlinkService": { plural: false; placeholders: "customer" | "name"; tags: never }
+  "move.heldAsset": { plural: false; placeholders: "kind" | "name"; tags: never }
   "move.keepsLinks": { plural: false; placeholders: "customer"; tags: never }
   "move.willUnlinkWithRequester": { plural: false; placeholders: never; tags: never }
   "links.assets": { plural: false; placeholders: never; tags: never }
@@ -300,6 +301,7 @@ export interface Messages {
   "requester.removeAddress": { plural: false; placeholders: "address"; tags: never }
   "requester.tickets": { plural: false; placeholders: never; tags: never }
   "requester.noTickets": { plural: false; placeholders: never; tags: never }
+  "requester.heldAssets": { plural: false; placeholders: never; tags: never }
   "requester.unnamed": { plural: false; placeholders: never; tags: never }
   "requester.departedOn": { plural: false; placeholders: "date"; tags: never }
   "requester.departedNotice": { plural: false; placeholders: never; tags: never }
@@ -308,6 +310,7 @@ export interface Messages {
   "requester.departHint": { plural: false; placeholders: never; tags: never }
   "requester.depart": { plural: false; placeholders: never; tags: never }
   "requester.confirmDepart": { plural: false; placeholders: "name"; tags: never }
+  "requester.departLeavesAssets": { plural: true; placeholders: "assets" | "count"; tags: never }
   "requester.comeBackHint": { plural: false; placeholders: never; tags: never }
   "requester.comeBackNeedsAddress": { plural: false; placeholders: never; tags: never }
   "requester.comeBack": { plural: false; placeholders: never; tags: never }
@@ -326,6 +329,7 @@ export interface Messages {
   "requester.moveNoTickets": { plural: false; placeholders: never; tags: never }
   "requester.moveLeavesSite": { plural: false; placeholders: "customer" | "site"; tags: never }
   "requester.moveEndsKeyRequester": { plural: false; placeholders: "customer"; tags: never }
+  "requester.moveLeavesAssets": { plural: true; placeholders: "assets" | "count" | "customer"; tags: never }
   "requester.moveWillUnlink": { plural: false; placeholders: never; tags: never }
   "requester.moveSubmit": { plural: false; placeholders: never; tags: never }
   "requester.moved": { plural: false; placeholders: never; tags: never }
@@ -341,8 +345,10 @@ export interface Messages {
   "sites.retire": { plural: false; placeholders: never; tags: never }
   "sites.retireNamed": { plural: false; placeholders: "name"; tags: never }
   "sites.retired": { plural: false; placeholders: "date"; tags: never }
-  "sites.confirmRetire": { plural: false; placeholders: "name"; tags: never }
-  "sites.confirmRetireWithRequesters": { plural: true; placeholders: "count" | "name" | "requesters"; tags: never }
+  "sites.retireAsk": { plural: false; placeholders: "name"; tags: never }
+  "sites.retireLeavesRequesters": { plural: true; placeholders: "count" | "requesters"; tags: never }
+  "sites.retireLeavesAssets": { plural: true; placeholders: "assets" | "count"; tags: never }
+  "sites.retireStays": { plural: false; placeholders: never; tags: never }
   "externalReferences.title": { plural: false; placeholders: never; tags: never }
   "externalReferences.hint": { plural: false; placeholders: never; tags: never }
   "externalReferences.empty": { plural: false; placeholders: never; tags: never }
@@ -351,15 +357,27 @@ export interface Messages {
   "externalReferences.add": { plural: false; placeholders: never; tags: never }
   "externalReferences.removeNamed": { plural: false; placeholders: "name" | "system"; tags: never }
   "assets.title": { plural: false; placeholders: never; tags: never }
+  "assets.hint": { plural: false; placeholders: never; tags: never }
   "assets.empty": { plural: false; placeholders: never; tags: never }
+  "assets.noneHeld": { plural: false; placeholders: never; tags: never }
   "assets.kind": { plural: false; placeholders: never; tags: never }
   "assets.name": { plural: false; placeholders: never; tags: never }
+  "assets.serialNumber": { plural: false; placeholders: never; tags: never }
+  "assets.whereItIs": { plural: false; placeholders: never; tags: never }
+  "assets.withHolder": { plural: false; placeholders: never; tags: never }
+  "assets.ownSite": { plural: false; placeholders: never; tags: never }
+  "assets.noSite": { plural: false; placeholders: never; tags: never }
+  "assets.holder": { plural: false; placeholders: never; tags: never }
+  "assets.noHolder": { plural: false; placeholders: never; tags: never }
   "assets.chooseKind": { plural: false; placeholders: never; tags: never }
   "assets.noKinds": { plural: false; placeholders: never; tags: "link" }
   "assets.add": { plural: false; placeholders: never; tags: never }
+  "assets.editNamed": { plural: false; placeholders: "name"; tags: never }
   "assets.retire": { plural: false; placeholders: never; tags: never }
+  "assets.retireNamed": { plural: false; placeholders: "name"; tags: never }
   "assets.retired": { plural: false; placeholders: "date"; tags: never }
   "assets.confirmRetire": { plural: false; placeholders: "name"; tags: never }
+  "assets.confirmRetireHeld": { plural: false; placeholders: "holder" | "name"; tags: never }
   "kinds.title": { plural: false; placeholders: never; tags: never }
   "kinds.hint": { plural: false; placeholders: never; tags: never }
   "kinds.empty": { plural: false; placeholders: never; tags: never }
