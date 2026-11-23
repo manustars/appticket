@@ -93,6 +93,30 @@ spec:
             - name: HD_TRUSTED_PROXIES
               value: {{ join "," . | quote }}
             {{- end }}
+            {{- $publicUrl := $core.publicUrl | default (ternary (printf "https://%s" .Values.ingress.host) "" .Values.ingress.enabled) }}
+            {{- if $publicUrl }}
+            - name: HD_PUBLIC_URL
+              value: {{ $publicUrl | quote }}
+            {{- end }}
+            {{- with $core.oidc }}
+            {{- if .issuer }}
+            - name: HD_OIDC_ISSUER
+              value: {{ .issuer | quote }}
+            - name: HD_OIDC_CLIENT_ID
+              value: {{ required "core.oidc.clientId is required with core.oidc.issuer" .clientId | quote }}
+            - name: HD_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "core.oidc.existingSecret is required with core.oidc.issuer" .existingSecret }}
+                  key: {{ .secretKey }}
+            {{- with .label }}
+            - name: HD_OIDC_LABEL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: HD_OIDC_SESSION_HOURS
+              value: {{ .sessionHours | quote }}
+            {{- end }}
+            {{- end }}
             - name: HD_LOG
               value: {{ $core.log | quote }}
             {{- with $core.extraEnv }}
