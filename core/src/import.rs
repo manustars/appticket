@@ -562,7 +562,7 @@ fn left_out(done: Result<Done>) -> Result<std::result::Result<Done, String>> {
         {
             rule("the help desk's data changed during the import: reload and try again")
         }
-        // A requester found a moment before was merged into another meanwhile, and is gone.
+        // Likewise a requester found a moment before and merged into another meanwhile, now gone.
         Err(Error::NotFound(_)) => {
             rule("the help desk's data changed during the import: reload and try again")
         }
@@ -1090,7 +1090,7 @@ fn recognised(customer: Uuid, owners: &[AddressOwner], so_far: &SoFar) -> Result
         let customer = &other.customer_name;
         return rule(if other.departed {
             format!(
-                "the address {address} belongs to a requester who departed from {customer}: \
+                "the address {address} belongs to a requester who has departed from {customer}: \
                  to give it to the requester they are now, add them on their customer's page; \
                  an import takes no address from anyone"
             )
@@ -1261,7 +1261,8 @@ async fn requester_row(
     let owners = owners(tx, &addresses).await?;
     let found = recognised(customer, &owners, so_far)?;
     let site = requester_site(tx, table, row, customer, so_far).await?;
-    let new: Vec<&String> = addresses
+    // The addresses that belong to nobody yet, which the requester gets.
+    let to_add: Vec<&String> = addresses
         .iter()
         .filter(|a| !owners.iter().any(|o| o.address == **a))
         .collect();
@@ -1273,16 +1274,21 @@ async fn requester_row(
         so_far.requesters.insert(id, row.line);
         return Ok(Done::created());
     };
-    let before = requester_details(tx, id).await?;
-    let mut changes = requester_changes(&before, &requester_merged(&before, table, row, site));
-    if !new.is_empty() {
-        changes.insert(0, "email_addresses");
-    }
-    // Only a requester that changes is written, and locked; their details are read again under
-    // the lock, so that a change made meanwhile is kept.
-    if !changes.is_empty() {
-        // One moved to another customer meanwhile is refused by the lock itself.
-        crate::requesters::lock_with_customer(tx, id).await?;
+    let changes = |before: &RequesterDetails| {
+        let mut changes = requester_changes(before, &requester_merged(before, table, row, site));
+        if !to_add.is_empty() {
+            changes.insert(0, "email_addresses");
+        }
+        changes
+    };
+    let mut done = changes(&requester_details(tx, id).await?);
+    // Only a requester that changes is written, and locked; they are read again under the lock,
+    // so that a change made meanwhile is kept and the report says what is written.
+    if !done.is_empty() {
+        // Moved to another customer since they were recognised: about another customer now.
+        if crate::requesters::lock_with_customer(tx, id).await? != customer {
+            return rule("the requester has just moved to another customer; reload and try again");
+        }
         let departed: bool =
             sqlx::query_scalar("SELECT departed_at IS NOT NULL FROM requesters WHERE id = $1")
                 .bind(id)
@@ -1295,14 +1301,15 @@ async fn requester_row(
             );
         }
         let before = requester_details(tx, id).await?;
-        for address in new {
+        done = changes(&before);
+        for address in to_add {
             crate::requesters::add_new_address_in(tx, id, address).await?;
         }
         let after = requester_merged(&before, table, row, site);
         crate::requesters::update_in(tx, id, &after).await?;
     }
     so_far.requesters.insert(id, row.line);
-    Ok(Done::updated(changes))
+    Ok(Done::updated(done))
 }
 
 #[cfg(test)]
@@ -1520,7 +1527,7 @@ mod tests {
     /// A row is about one requester of its customer who has not departed: an import moves,
     /// merges and brings back no one, and takes no address from anyone.
     #[sqlx::test]
-    async fn a_row_of_someone_else_s_address_is_left_out(db: PgPool) {
+    async fn a_row_is_about_one_present_requester_of_its_customer(db: PgPool) {
         let brightfield = crate::customers::create(&db, "Brightfield", &[])
             .await
             .unwrap();
@@ -1542,27 +1549,22 @@ mod tests {
             Brightfield,eva@brightfield.test,Eva\n\
             Brightfield,new@brightfield.test cleo@harbor.test,New\n";
         let report = import(&db, vec![requesters(file)], Mode::Apply).await;
-        let reasons = reasons(&report.files[0]);
-        let expected = [
-            (
-                2,
-                "cleo@harbor.test already belongs to a requester of Harbor Lane",
-            ),
-            (3, "departed from Harbor Lane"),
-            (4, "merge them"),
-            (5, "has departed from Brightfield: bring them back"),
-            (
-                6,
-                "cleo@harbor.test already belongs to a requester of Harbor Lane",
-            ),
-        ];
-        assert_eq!(reasons.len(), expected.len(), "{reasons:?}");
-        for ((line, why), (expected_line, expected)) in reasons.iter().zip(expected) {
-            assert!(
-                *line == expected_line && why.contains(expected),
-                "line {line}: {why}"
-            );
-        }
+        assert_reasons(
+            &report.files[0],
+            &[
+                (
+                    2,
+                    "cleo@harbor.test already belongs to a requester of Harbor Lane",
+                ),
+                (3, "departed from Harbor Lane"),
+                (4, "merge them"),
+                (5, "has departed from Brightfield: bring them back"),
+                (
+                    6,
+                    "cleo@harbor.test already belongs to a requester of Harbor Lane",
+                ),
+            ],
+        );
         let mut shown: Vec<(Vec<String>, Option<String>, bool)> = requesters_of(&db, brightfield)
             .await
             .into_iter()
@@ -1616,24 +1618,19 @@ mod tests {
             Brightfield,f@brightfield.test,head office\n\
             Brightfield,F@brightfield.test,\n";
         let report = import(&db, vec![requesters(file)], Mode::Apply).await;
-        let reasons = reasons(&report.files[0]);
-        let expected = [
-            (2, "no customer is named Nowhere"),
-            (3, "Ninefold is offboarded"),
-            (4, "a requester needs its customer"),
-            (5, "a requester needs an e-mail address"),
-            (6, "is not an e-mail address"),
-            (7, "Brightfield has no site named Lab"),
-            (8, "the site Old lab is retired"),
-            (10, "line 9 already imports this requester"),
-        ];
-        assert_eq!(reasons.len(), expected.len(), "{reasons:?}");
-        for ((line, why), (expected_line, expected)) in reasons.iter().zip(expected) {
-            assert!(
-                *line == expected_line && why.contains(expected),
-                "line {line}: {why}"
-            );
-        }
+        assert_reasons(
+            &report.files[0],
+            &[
+                (2, "no customer is named Nowhere"),
+                (3, "Ninefold is offboarded"),
+                (4, "a requester needs its customer"),
+                (5, "a requester needs an e-mail address"),
+                (6, "is not an e-mail address"),
+                (7, "Brightfield has no site named Lab"),
+                (8, "the site Old lab is retired"),
+                (10, "line 9 already imports this requester"),
+            ],
+        );
         let shown: Vec<(Vec<String>, Option<Uuid>)> = requesters_of(&db, brightfield)
             .await
             .into_iter()
@@ -1682,28 +1679,23 @@ mod tests {
             outcomes(&report)[2][0],
             (2, Outcome::Create, "Harbor Lane / cleo@harbor.test")
         );
-        let reasons = reasons(&report.files[2]);
-        let expected = [
-            (
-                3,
-                "the row of its customer, line 3 of the customers file, is left out",
-            ),
-            (
-                4,
-                "the row of its site, line 3 of the sites file, is left out",
-            ),
-            (
-                5,
-                "the row of its customer, line 4 of the customers file, is left out",
-            ),
-        ];
-        assert_eq!(reasons.len(), expected.len(), "{reasons:?}");
-        for ((line, why), (expected_line, expected)) in reasons.iter().zip(expected) {
-            assert!(
-                *line == expected_line && why.contains(expected),
-                "line {line}: {why}"
-            );
-        }
+        assert_reasons(
+            &report.files[2],
+            &[
+                (
+                    3,
+                    "the row of its customer, line 3 of the customers file, is left out",
+                ),
+                (
+                    4,
+                    "the row of its site, line 3 of the sites file, is left out",
+                ),
+                (
+                    5,
+                    "the row of its customer, line 4 of the customers file, is left out",
+                ),
+            ],
+        );
         let harbor = id_of(&db, "Harbor Lane").await;
         let shown = requesters_of(&db, harbor).await;
         assert_eq!(shown.len(), 1);
@@ -1818,6 +1810,19 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    /// Checks that exactly the `expected` lines are left out, each for a reason containing its
+    /// text.
+    fn assert_reasons(file: &FileReport, expected: &[(u64, &str)]) {
+        let reasons = reasons(file);
+        assert_eq!(reasons.len(), expected.len(), "{reasons:?}");
+        for ((line, why), (expected_line, expected)) in reasons.iter().zip(expected) {
+            assert!(
+                line == expected_line && why.contains(expected),
+                "line {line}: {why}"
+            );
+        }
     }
 
     /// The reasons of the rows left out, by line.
@@ -2282,24 +2287,19 @@ mod tests {
             Brightfield,,,LAB,Corso dei Mulini 9\n\
             ,watchtower,hl,Head office,Molo delle Reti 2\n";
         let report = import(&db, vec![sites(file)], Mode::Apply).await;
-        let reasons = reasons(&report.files[0]);
-        let expected = [
-            (2, "no customer is named Nowhere"),
-            (3, "no customer has ZZ in Watchtower"),
-            (4, "names Harbor Lane, not Copperleaf"),
-            (5, "offboarded"),
-            (6, "a site needs a name"),
-            (7, "a site needs its customer"),
-            (8, "a site needs an address"),
-            (10, "line 9 already imports this site"),
-        ];
-        assert_eq!(reasons.len(), expected.len(), "{reasons:?}");
-        for ((line, why), (expected_line, expected)) in reasons.iter().zip(expected) {
-            assert!(
-                *line == expected_line && why.contains(expected),
-                "line {line}: {why}"
-            );
-        }
+        assert_reasons(
+            &report.files[0],
+            &[
+                (2, "no customer is named Nowhere"),
+                (3, "no customer has ZZ in Watchtower"),
+                (4, "names Harbor Lane, not Copperleaf"),
+                (5, "offboarded"),
+                (6, "a site needs a name"),
+                (7, "a site needs its customer"),
+                (8, "a site needs an address"),
+                (10, "line 9 already imports this site"),
+            ],
+        );
         assert_eq!(
             sites_of(&db, brightfield).await,
             [site("Lab", "Via del Glicine 3")]
