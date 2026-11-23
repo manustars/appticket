@@ -103,7 +103,7 @@ enum Command {
             value_parser = http::parse_proxies)]
         trusted_proxies: http::TrustedProxies,
         #[command(flatten)]
-        identity_provider: oidc::Settings,
+        identity_provider: Box<oidc::Settings>,
     },
     /// Apply pending database migrations and exit.
     Migrate,
@@ -180,7 +180,7 @@ async fn main() -> anyhow::Result<()> {
         } => {
             // A provider configured in part stops the core; one that is down at startup does not,
             // since it is asked only when an agent signs in through it.
-            let identity_provider = match oidc::Config::from_settings(identity_provider)? {
+            let identity_provider = match oidc::Config::from_settings(*identity_provider)? {
                 Some(config) => {
                     tracing::info!(issuer = %config.issuer.as_str(), "agents can sign in through the OpenID Connect identity provider");
                     Some(oidc::Provider::new(config)?)
