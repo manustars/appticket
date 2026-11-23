@@ -38,8 +38,8 @@ Rules agreed with the maintainer that the ticket schema must respect. Terms are 
   different customers are never merged.
 - A requester identified with the wrong customer is moved, from their own page or by moving one of
   their tickets, under the rule for moving tickets below: all their tickets move with them. The
-  assets they hold stay with their customer and lose their holder, and they stop being a key
-  requester.
+  assets they hold stay with their customer and lose their holder, they leave their site, and they
+  stop being a key requester.
 - A customer has any number of key requesters, who are requesters of that customer and not
   departed. They receive the messages about failures that affect their customer (the
   announcements sent from a parent ticket, and the message sent when its children are resolved)
@@ -152,8 +152,8 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
 - Exactly one customer is the help desk's own organization, and it uses every service the help desk
   provides.
 - Customers are offboarded, never deleted. Every message from an offboarded customer's requesters
-  or domains, replies included, waits in the inbox. An offboarded customer can come back, with its
-  history, requesters and assets.
+  or domains, replies included, waits in the inbox, and its sites and requesters do not change. An
+  offboarded customer can come back, with its history, requesters and assets.
 - A customer has a name, and optionally a legal name, a tax identifier with its country, an
   address, a phone number, a website and internal notes.
 - A customer has any number of external references, each made of a system and a name in it; a
