@@ -98,8 +98,8 @@ enum Command {
     /// Manage add-ons.
     #[command(subcommand)]
     Addon(cli::AddonCommand),
-    /// Import customers, sites and requesters from CSV files: shows what it would do, and does
-    /// it with --apply (--help lists the columns).
+    /// Import customers, sites, requesters and assets from CSV files: shows what it would do,
+    /// and does it with --apply (--help lists the columns).
     Import(cli::ImportArgs),
     /// Print the OpenAPI specification of the HTTP API (needs no database).
     Openapi,

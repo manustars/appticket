@@ -415,15 +415,33 @@ import moves, merges and brings back no one, and marks no one departed:
   site                The requester's site, by name: one of the customer's that is not retired.
   notes               Internal notes, seen only by agents; they replace the ones there.
 
-The files are taken customers first, then sites, then requesters, so that a row can refer to
-something an earlier file creates. A row that breaks a rule is left out with its reason, as are
-the sites and requesters of a customer row left out and the requesters of a site row left out;
-the rest is imported. The rows left out are written to <kind>-left-out.csv, with the same
+Assets file (--assets), for an agent who also manages the catalog; an asset is recognised by
+its serial number within its customer, else by its name, ignoring case. A row is about one
+asset entered by hand and not retired: a row matching an asset an add-on is the source of, a
+retired asset, or two assets, is left out, as is a row found by name whose asset has another
+serial number. An import replaces no serial number, and never retires or brings back an asset:
+  customer            The asset's customer, by name.
+  customer_external_system
+  customer_external_name
+                      Or by one of its external references, as in the sites file.
+  name                The asset's name (required column; required to create an asset).
+  serial_number       The serial number.
+  kind                The asset kind, by name: one of the list the help desk manages (required
+                      column; required to create an asset).
+  site                The asset's own site, by name: one of the customer's that is not retired.
+  holder              The requester the asset is given to, by one of their e-mail addresses: a
+                      requester of the customer who has not departed.
+
+The files are taken customers first, then sites, then requesters, then assets, so that a row
+can refer to something an earlier file creates. A row that breaks a rule is left out with its
+reason, as are the sites, requesters and assets of a customer row left out, the requesters and
+assets of a site row left out and the assets of a requester row left out; the rest is
+imported. The rows left out are written to <kind>-left-out.csv, with the same
 columns and an error column, ready to correct and import again; never over a file being
 imported.";
 
-/// Import customers, sites and requesters from CSV files: shows what it would do, and does it
-/// with --apply.
+/// Import customers, sites, requesters and assets from CSV files: shows what it would do, and
+/// does it with --apply.
 #[derive(clap::Args)]
 #[command(after_long_help = IMPORT_HELP)]
 pub struct ImportArgs {
@@ -436,6 +454,10 @@ pub struct ImportArgs {
     /// A requesters file; `-` reads it from standard input.
     #[arg(long)]
     requesters: Option<PathBuf>,
+    /// An assets file, for an agent who also manages the catalog; `-` reads it from standard
+    /// input.
+    #[arg(long)]
+    assets: Option<PathBuf>,
     /// Import; without it nothing changes, and the command only shows what it would do.
     #[arg(long)]
     apply: bool,
@@ -453,6 +475,7 @@ pub async fn import(db: &PgPool, args: ImportArgs, out: &mut impl Write) -> anyh
         (Kind::Customers, args.customers),
         (Kind::Sites, args.sites),
         (Kind::Requesters, args.requesters),
+        (Kind::Assets, args.assets),
     ] {
         let Some(path) = path else { continue };
         let content = if path.as_os_str() == "-" {
@@ -468,7 +491,8 @@ pub async fn import(db: &PgPool, args: ImportArgs, out: &mut impl Write) -> anyh
     }
     if files.is_empty() {
         anyhow::bail!(
-            "name a file to import: --customers, --sites, --requesters (see hd import --help)"
+            "name a file to import: --customers, --sites, --requesters, --assets (see hd import \
+             --help)"
         );
     }
     if paths.iter().filter(|(_, p)| p.as_os_str() == "-").count() > 1 {
@@ -593,6 +617,7 @@ mod tests {
             .iter()
             .chain(crate::import::SITE_COLUMNS)
             .chain(crate::import::REQUESTER_COLUMNS)
+            .chain(crate::import::ASSET_COLUMNS)
         {
             assert!(
                 IMPORT_HELP
@@ -615,6 +640,7 @@ mod tests {
                 customers: Some(corrected.clone()),
                 sites: None,
                 requesters: None,
+                assets: None,
                 apply: true,
                 left_out,
             };
@@ -649,6 +675,7 @@ mod tests {
             customers: Some(customers.clone()),
             sites: Some(sites.clone()),
             requesters: None,
+            assets: None,
             apply,
             left_out: None,
         };
@@ -702,6 +729,7 @@ mod tests {
             customers: Some(customers),
             sites: None,
             requesters: Some(requesters),
+            assets: None,
             apply: true,
             left_out: None,
         };
@@ -727,6 +755,60 @@ mod tests {
         let brightfield = crate::customers::list(&db).await.unwrap()[0].id;
         let shown = crate::customers::detail(&db, brightfield).await.unwrap();
         assert_eq!(shown.requester_list[0].addresses, ["ada@brightfield.test"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[sqlx::test]
+    async fn assets_are_imported_from_the_command_line(db: PgPool) {
+        crate::testing::asset_kind(&db, "Laptop").await;
+        let dir = std::env::temp_dir().join(format!("hd-import-{}", Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let customers = dir.join("customers.csv");
+        std::fs::write(&customers, "name\nBrightfield\n").unwrap();
+        let assets = dir.join("assets.csv");
+        std::fs::write(
+            &assets,
+            "customer;name;serial_number;kind\n\
+             Brightfield;PC-0042;SN-0042;laptop\n\
+             Brightfield;PC-0043;;Tablet\n",
+        )
+        .unwrap();
+        let args = ImportArgs {
+            customers: Some(customers),
+            sites: None,
+            requesters: None,
+            assets: Some(assets),
+            apply: true,
+            left_out: None,
+        };
+
+        let mut out = Vec::new();
+        import(&db, args, &mut out).await.unwrap();
+        let shown = String::from_utf8(out).unwrap();
+        assert!(
+            shown.contains("assets file: 1 created, 0 updated, 0 unchanged, 1 left out"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("line 2  create     Brightfield / PC-0042 (SN-0042)"),
+            "{shown}"
+        );
+        let left_out = std::fs::read_to_string(dir.join("assets-left-out.csv")).unwrap();
+        assert!(
+            left_out.starts_with(
+                "customer;name;serial_number;kind;error\r\nBrightfield;PC-0043;;Tablet;there is no asset kind"
+            ),
+            "{left_out}"
+        );
+        let brightfield = crate::customers::list(&db).await.unwrap()[0].id;
+        let assets = crate::catalog::assets_of(&db, brightfield).await.unwrap();
+        assert_eq!(
+            assets
+                .iter()
+                .map(|a| (a.name.as_str(), a.kind.as_str()))
+                .collect::<Vec<_>>(),
+            [("PC-0042", "Laptop")]
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
