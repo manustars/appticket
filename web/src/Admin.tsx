@@ -138,8 +138,10 @@ function Agents({ onSignedOut }: { onSignedOut: () => void }) {
     let password = ''
     void action.run(async () => {
       password = await resetAgentPassword(a.id)
-    }).then((ok) => {
+    }).then(async (ok) => {
       if (ok) setSecret({ kind: 'reset', name: a.name, email: a.email, password })
+      // An agent without a local password has one now.
+      await changed(false)
     })
   }
 
