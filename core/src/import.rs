@@ -1468,20 +1468,27 @@ async fn recognised_asset(
     let Some(asset) = found else {
         return Ok(None);
     };
-    changeable(&asset, false)?;
+    changeable(&asset, Look::Recognising)?;
     if by_name {
-        keeps_its_serial_number(&asset, serial_number, false)?;
+        keeps_its_serial_number(&asset, serial_number, Look::Recognising)?;
     }
     Ok(Some(asset))
 }
 
+/// When an import looks at an asset: as it recognises a row, or again under the lock before it
+/// writes the row, when what it finds then has changed since the row was recognised.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Look {
+    Recognising,
+    UnderTheLock,
+}
+
 /// Refuses an asset an import does not change: one an add-on is the source of, or a retired
-/// one. `meanwhile` says that it became so after the row was recognised.
-fn changeable(asset: &crate::catalog::StoredAsset, meanwhile: bool) -> Result<()> {
-    let (comes, is) = if meanwhile {
-        ("has just come", "has just been")
-    } else {
-        ("comes", "is")
+/// one.
+fn changeable(asset: &crate::catalog::StoredAsset, look: Look) -> Result<()> {
+    let (comes, is) = match look {
+        Look::Recognising => ("comes", "is"),
+        Look::UnderTheLock => ("has just come", "has just been"),
     };
     if let Some(addon) = &asset.source_addon {
         return rule(format!(
@@ -1499,19 +1506,18 @@ fn changeable(asset: &crate::catalog::StoredAsset, meanwhile: bool) -> Result<()
 }
 
 /// Refuses a row whose serial number would replace the one the asset has: an import replaces no
-/// serial number. `meanwhile` says that the asset got its own after the row was recognised.
+/// serial number.
 fn keeps_its_serial_number(
     asset: &crate::catalog::StoredAsset,
     serial_number: Option<&str>,
-    meanwhile: bool,
+    look: Look,
 ) -> Result<()> {
     if let (Some(theirs), Some(serial_number)) = (&asset.serial_number, serial_number)
         && theirs.to_lowercase() != serial_number.to_lowercase()
     {
-        let has = if meanwhile {
-            "has just been given"
-        } else {
-            "has"
+        let has = match look {
+            Look::Recognising => "has",
+            Look::UnderTheLock => "has just been given",
         };
         return rule(format!(
             "{} {has} the serial number {theirs}, not {serial_number}: an import does not \
@@ -1749,8 +1755,12 @@ async fn write_asset(
     if !changes.is_empty() {
         crate::customers::lock_active(tx, customer).await?;
         let stored = crate::catalog::lock_stored(tx, asset.id).await?;
-        changeable(&stored, true)?;
-        keeps_its_serial_number(&stored, table.cell(row, "serial_number"), true)?;
+        changeable(&stored, Look::UnderTheLock)?;
+        keeps_its_serial_number(
+            &stored,
+            table.cell(row, "serial_number"),
+            Look::UnderTheLock,
+        )?;
         let before = stored.fields();
         let after = found.merged(&before, table, row);
         changes = asset_changes(&before, &after);
