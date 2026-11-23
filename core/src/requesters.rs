@@ -585,10 +585,11 @@ pub async fn move_to_customer(
 }
 
 /// Locks what moving `requester` to `customer` changes, in the order every change to requesters
-/// and tickets follows (customers, then requesters, then key requesters, then assets, then
-/// tickets): both customers, by id, which must exist and not be offboarded, then the requester,
-/// then their row as a key requester, if any, then the assets they hold. Returns the requester's
-/// customer.
+/// and tickets follows (customers, then requesters, then key requesters, then tickets): both
+/// customers, by id, which must exist and not be offboarded, then the requester, then their row as
+/// a key requester, if any, then the assets they hold, before any ticket. The assets are locked
+/// only against changes (`FOR NO KEY UPDATE`): linking an asset to a ticket holds the ticket and
+/// then refers to the asset, which such a lock lets it do. Returns the requester's customer.
 pub(crate) async fn lock_for_move(
     tx: &mut Transaction<'_, Postgres>,
     requester: Uuid,
@@ -618,8 +619,9 @@ pub(crate) async fn lock_for_move(
         .bind(requester)
         .execute(&mut **tx)
         .await?;
-    // The assets they hold lose their holder; they are taken now too, before any ticket.
-    sqlx::query("SELECT 1 FROM assets WHERE holder_id = $1 FOR UPDATE")
+    // The assets they hold lose their holder, which is no key: they are taken now too, before any
+    // ticket, still letting tickets refer to them.
+    sqlx::query("SELECT 1 FROM assets WHERE holder_id = $1 FOR NO KEY UPDATE")
         .bind(requester)
         .execute(&mut **tx)
         .await?;
@@ -1214,6 +1216,56 @@ mod tests {
 
         merge(&db, ada, twin).await.unwrap();
         assert_eq!(held(&db, ada).await, ["PC-0042", "PC-0043", "Phone 12"]);
+    }
+
+    /// Moving a holder takes the assets they hold before their tickets, while linking an asset to a
+    /// ticket holds the ticket and then refers to the asset. Moving takes the assets without
+    /// keeping them from being referred to, so the two never wait for each other: the link is
+    /// made, then the move unlinks it.
+    #[sqlx::test]
+    async fn moving_a_holder_and_linking_their_asset_do_not_wait_for_each_other(db: PgPool) {
+        use crate::tickets::{self, RequesterMove};
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let pc = testing::held_asset(&db, brightfield, "Laptop", "PC-0042", ada).await;
+        let hers = testing::ticket(&db, brightfield, Some(ada), "a1@brightfield.test").await;
+
+        // As linking an asset does: the ticket first, then the link that refers to the asset.
+        let mut linking = db.begin().await.unwrap();
+        let ticket: Uuid =
+            sqlx::query_scalar("SELECT id FROM tickets WHERE number = $1 FOR UPDATE")
+                .bind(hers)
+                .fetch_one(&mut *linking)
+                .await
+                .unwrap();
+        let moving = tokio::spawn({
+            let db = db.clone();
+            async move { tickets::move_to_customer(&db, hers, harbor, RequesterMove::Move).await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(!moving.is_finished(), "moved a ticket being linked");
+        sqlx::query("SET LOCAL lock_timeout = '3s'")
+            .execute(&mut *linking)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO ticket_assets (ticket_id, customer_id, asset_id) VALUES ($1, $2, $3)",
+        )
+        .bind(ticket)
+        .bind(brightfield)
+        .bind(pc)
+        .execute(&mut *linking)
+        .await
+        .expect("the asset was locked by the move, which waits for the ticket");
+        linking.commit().await.unwrap();
+        let moved = moving.await.unwrap().unwrap();
+        assert_eq!(
+            (moved.moved, moved.unlinked),
+            (1, 1),
+            "the new link removed"
+        );
+        assert!(held(&db, ada).await.is_empty());
     }
 
     /// The assets a moved requester holds stay with their customer and lose their holder, whether

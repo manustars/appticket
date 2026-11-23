@@ -416,7 +416,7 @@ pub async fn move_to_customer(
 ) -> Result<Moved> {
     let mut tx = db.begin().await?;
     // Read before any lock: locks are taken customers first, then requesters, then key
-    // requesters, then tickets.
+    // requesters, then the assets the requester holds (against changes only), then tickets.
     let (ticket_id, state, current, requester_id): (Uuid, TicketState, Uuid, Option<Uuid>) =
         sqlx::query_as(
             "SELECT id, state, customer_id, requester_id FROM tickets WHERE number = $1",
