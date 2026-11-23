@@ -21,6 +21,7 @@ use crate::roles::{self, Permission, Role};
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_agents, add_agent))
+        .routes(routes!(edit_agent))
         .routes(routes!(set_role))
         .routes(routes!(reset_password))
         .routes(routes!(deactivate))
@@ -89,6 +90,29 @@ async fn add_agent(
         id: added.id,
         password: added.generated_password.unwrap_or_default(),
     }))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct AgentDetails {
+    email: String,
+    name: String,
+}
+
+/// Changes an agent's e-mail and name; refused for an agent linked to the identity provider,
+/// which they come from.
+#[utoipa::path(put, path = "/api/admin/agents/{id}", tag = "admin",
+    params(("id" = Uuid, Path, description = "The agent")), request_body = AgentDetails,
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = FORBIDDEN, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn edit_agent(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+    Json(details): Json<AgentDetails>,
+) -> Result<StatusCode, ApiError> {
+    agents::edit(&state.db, &agent.grant, id, &details.email, &details.name).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize, ToSchema)]

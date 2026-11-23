@@ -80,14 +80,7 @@ pub async fn add(
     password: Option<&str>,
 ) -> Result<Added> {
     by.require(Permission::ManageAgents)?;
-    let email = email.trim().to_lowercase();
-    if !email.contains('@') || email.starts_with('@') || email.ends_with('@') {
-        return rule("an agent needs an e-mail address");
-    }
-    let name = name.trim();
-    if name.is_empty() {
-        return rule("an agent needs a name");
-    }
+    let (email, name) = email_and_name(email, name)?;
     if let Some(password) = password {
         check_password(password)?;
     }
@@ -139,6 +132,64 @@ pub async fn add(
         id,
         generated_password: generated,
     })
+}
+
+/// The e-mail address, in lower case, and the name, trimmed, of an agent.
+fn email_and_name<'a>(email: &str, name: &'a str) -> Result<(String, &'a str)> {
+    let email = email.trim().to_lowercase();
+    if !email.contains('@') || email.starts_with('@') || email.ends_with('@') {
+        return rule("an agent needs an e-mail address");
+    }
+    let name = name.trim();
+    if name.is_empty() {
+        return rule("an agent needs a name");
+    }
+    Ok((email, name))
+}
+
+/// Changes an agent's e-mail address and name. Those of an agent linked to an identity
+/// provider come from it and are not edited here.
+pub async fn edit(db: &PgPool, by: &Grant, agent: Uuid, email: &str, name: &str) -> Result<()> {
+    by.require(Permission::ManageAgents)?;
+    let (email, name) = email_and_name(email, name)?;
+    let mut tx = db.begin().await?;
+    lock_for_change(
+        &mut tx,
+        by,
+        agent,
+        "change the name and e-mail of this agent",
+    )
+    .await?;
+    let linked: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM agent_identities WHERE agent_id = $1)")
+            .bind(agent)
+            .fetch_one(&mut *tx)
+            .await?;
+    if linked {
+        return rule(
+            "this agent signs in through the identity provider, which their name and e-mail \
+             come from",
+        );
+    }
+    let taken: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM agents WHERE email = $1 AND id <> $2)")
+            .bind(&email)
+            .bind(agent)
+            .fetch_one(&mut *tx)
+            .await?;
+    if taken {
+        return rule(format!(
+            "there is already an agent with the address {email}"
+        ));
+    }
+    sqlx::query("UPDATE agents SET email = $2, name = $3 WHERE id = $1")
+        .bind(agent)
+        .bind(&email)
+        .bind(name)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Locks the Administrator role, so that two changes cannot each think the other leaves an
@@ -527,5 +578,62 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[sqlx::test]
+    async fn a_linked_agents_name_and_email_are_not_edited(db: PgPool) {
+        let cli = Grant::command_line();
+        add(&db, &cli, "ada@helpdesk.test", "Ada", None, None)
+            .await
+            .unwrap();
+        let bo = add(&db, &cli, "bo@example.com", "Bo", None, None)
+            .await
+            .unwrap()
+            .id;
+        let lena = add(&db, &cli, "lena.marsh@example.com", "Lena", None, None)
+            .await
+            .unwrap()
+            .id;
+
+        edit(&db, &cli, bo, " Bo.Lund@Example.com ", " Bo Lund ")
+            .await
+            .unwrap();
+        let bo_now = list(&db).await.unwrap().into_iter().find(|a| a.id == bo);
+        let bo_now = bo_now.unwrap();
+        assert_eq!(
+            (bo_now.email.as_str(), bo_now.name.as_str()),
+            ("bo.lund@example.com", "Bo Lund")
+        );
+        assert!(matches!(
+            edit(&db, &cli, bo, "ada@helpdesk.test", "Bo Lund").await,
+            Err(Error::Rule(_))
+        ));
+        assert!(matches!(
+            edit(
+                &db,
+                &grant(&[Permission::WorkTickets]),
+                bo,
+                "bo@example.com",
+                "Bo"
+            )
+            .await,
+            Err(Error::Forbidden(_))
+        ));
+
+        let at_provider = crate::identities::Identity {
+            issuer: "https://login.example.com/realms/staff".to_owned(),
+            subject: "sub-lena".to_owned(),
+            email: Some("lena.marsh@example.com".to_owned()),
+            email_verified: true,
+            name: Some("Lena Marsh".to_owned()),
+        };
+        crate::identities::sign_in(&db, &at_provider, time::Duration::hours(12))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            edit(&db, &cli, lena, "lena.marsh@example.com", "Lena M.").await,
+            Err(Error::Rule(_))
+        ));
     }
 }

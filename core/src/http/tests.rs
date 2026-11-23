@@ -1083,6 +1083,54 @@ async fn administrators_manage_agents_through_the_api(db: PgPool) {
     assert!(mail["reading"].is_null() && mail["outbox"]["waiting"] == 0);
 }
 
+/// An agent's name and e-mail are edited, unless the identity provider they are linked to
+/// supplies them.
+#[sqlx::test]
+async fn a_linked_agents_name_and_email_are_not_edited_through_the_api(db: PgPool) {
+    let admin = Client::new(&db).await;
+    let cli = crate::roles::Grant::command_line();
+    let bo = crate::agents::add(&db, &cli, "bo@example.com", "Bo", None, None)
+        .await
+        .unwrap()
+        .id;
+    let (status, json) = admin
+        .call(
+            "PUT",
+            &format!("/api/admin/agents/{bo}"),
+            Some(serde_json::json!({"email": "bo.lund@example.com", "name": "Bo Lund"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    let agents = admin.get("/api/admin/agents").await;
+    let listed = agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == bo.to_string());
+    assert_eq!(listed.unwrap()["name"], "Bo Lund");
+
+    sqlx::query(
+        "INSERT INTO agent_identities (issuer, subject, agent_id)
+         VALUES ('https://login.example.com/realms/staff', 'sub-bo', $1)",
+    )
+    .bind(bo)
+    .execute(&db)
+    .await
+    .unwrap();
+    let (status, json) = admin
+        .call(
+            "PUT",
+            &format!("/api/admin/agents/{bo}"),
+            Some(serde_json::json!({"email": "bo@example.com", "name": "Bo"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert_eq!(
+        json["error"],
+        "This agent signs in through the identity provider, which their name and e-mail come from."
+    );
+}
+
 /// A requester with two addresses: either finds their tickets, the reply goes where they wrote
 /// from, and the agent picks on a ticket they have not written on.
 #[sqlx::test]
