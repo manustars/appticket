@@ -223,9 +223,13 @@ fn account_key(account: &str) -> String {
     account.trim().to_lowercase()
 }
 
-/// The address an attempt counts for.
+/// The address an attempt counts for: an IPv4 address (also when mapped into IPv6), or the /64
+/// network of an IPv6 address, as one client usually holds a whole /64.
 fn address_key(address: IpAddr) -> String {
-    address.to_string()
+    match address.to_canonical() {
+        IpAddr::V4(v4) => v4.to_string(),
+        IpAddr::V6(v6) => ipnet::Ipv6Net::new_assert(v6, 64).trunc().to_string(),
+    }
 }
 
 /// The time limits are measured by, and how a slowed attempt waits.
@@ -380,6 +384,33 @@ mod tests {
         wrong(&db, &limits, "ada@example.com", "203.0.113.7").await;
         // That was the first failure: only the attempt after it waits.
         assert_eq!(limits.clock().sleeps(), secs(&[]));
+    }
+
+    /// A single IPv6 client usually holds a whole /64 network; an IPv4 client may connect over
+    /// IPv6 as a mapped address.
+    #[sqlx::test]
+    async fn ipv6_addresses_count_by_their_64_network(db: PgPool) {
+        let limits = SignInLimits::for_tests(5, 15 * MINUTE);
+        for n in 1..=9 {
+            let from = format!("2001:db8:7:1::{n:x}");
+            wrong(&db, &limits, &format!("guess{n}@example.com"), &from).await;
+        }
+        assert!(matches!(
+            wrong(&db, &limits, "ada@example.com", "2001:db8:7:1:ffff::1").await,
+            Guarded::Refused { .. }
+        ));
+        assert_eq!(
+            wrong(&db, &limits, "ada@example.com", "2001:db8:7:2::1").await,
+            Guarded::Failed
+        );
+
+        for n in 1..=9 {
+            wrong(&db, &limits, &format!("try{n}@example.com"), "203.0.113.7").await;
+        }
+        assert!(matches!(
+            wrong(&db, &limits, "bo@example.com", "::ffff:203.0.113.7").await,
+            Guarded::Refused { .. }
+        ));
     }
 
     /// Signing in proves the person knows the account's password, not that nobody at their
