@@ -73,7 +73,9 @@ HD_PUBLIC_URL=http://localhost:5173
 
 and add an agent with a Keycloak user's address, such as `lena.marsh@example.com`. Use the same
 host for the browser as in `HD_PUBLIC_URL`. [`deploy.md`](deploy.md#signing-in-through-an-identity-provider)
-explains how the sign-in finds the agent.
+explains how the sign-in finds the agent. With these settings, `cargo run -p hd-core -- sign-in
+local off` leaves only the Keycloak button on the sign-in page, and `sign-in local on` brings the
+password back.
 
 The first time the core reads a mailbox it leaves the mail already there alone and reads only what
 arrives afterwards; set `HD_IMAP_IMPORT_EXISTING=true` to turn the existing mail into tickets too.
