@@ -28,26 +28,47 @@ pub fn clean_address(address: &str) -> Result<String> {
 /// The requester an address belongs to.
 #[derive(Debug, sqlx::FromRow)]
 pub struct Owner {
+    pub address: String,
     pub requester_id: Uuid,
     pub customer_id: Uuid,
     pub customer_name: String,
     pub departed: bool,
 }
 
+/// The query of [`Owner`]s of the addresses in `$1`, in their order, followed by `$tail`.
+macro_rules! owners_query {
+    ($tail:literal) => {
+        concat!(
+            "SELECT a.address, r.id AS requester_id, r.customer_id, c.name AS customer_name,
+                    r.departed_at IS NOT NULL AS departed
+             FROM requester_addresses a
+             JOIN requesters r ON r.id = a.requester_id
+             JOIN customers c ON c.id = r.customer_id
+             WHERE a.address = ANY($1)
+             ORDER BY array_position($1, a.address)",
+            $tail
+        )
+    };
+}
+
 /// Who the address belongs to, if anyone; the address and its requester are locked.
 pub async fn owner_of(tx: &mut Transaction<'_, Postgres>, address: &str) -> Result<Option<Owner>> {
-    Ok(sqlx::query_as(
-        "SELECT r.id AS requester_id, r.customer_id, c.name AS customer_name,
-                r.departed_at IS NOT NULL AS departed
-         FROM requester_addresses a
-         JOIN requesters r ON r.id = a.requester_id
-         JOIN customers c ON c.id = r.customer_id
-         WHERE a.address = $1
-         FOR UPDATE OF a, r",
-    )
-    .bind(address)
-    .fetch_optional(&mut **tx)
-    .await?)
+    Ok(sqlx::query_as(owners_query!(" FOR UPDATE OF a, r"))
+        .bind([address])
+        .fetch_optional(&mut **tx)
+        .await?)
+}
+
+/// Who the addresses belong to, those that belong to someone, in their order. Nothing is locked,
+/// so that a reader that ends up changing nothing waits for no one.
+pub(crate) async fn owners<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    addresses: &[String],
+) -> Result<Vec<Owner>> {
+    Ok(sqlx::query_as(owners_query!(""))
+        .bind(addresses)
+        .fetch_all(db)
+        .await?)
 }
 
 /// Where an address a requester is given comes from.
@@ -85,8 +106,8 @@ async fn source_of(
     }
 }
 
-/// Gives `requester` the address from its [`source_of`]: one passing from a departed requester
-/// leaves them and counts as newly registered.
+/// Gives `requester` the address from its [`source_of`], registered after the ones they have: one
+/// passing from a departed requester leaves them and counts as newly registered.
 async fn give_address(
     tx: &mut Transaction<'_, Postgres>,
     requester: Uuid,
@@ -94,9 +115,12 @@ async fn give_address(
     source: Source,
 ) -> Result<()> {
     let given = match source {
-        Source::Free => {
-            sqlx::query("INSERT INTO requester_addresses (address, requester_id) VALUES ($1, $2)")
-        }
+        // Several given in one transaction keep the order they were given in.
+        Source::Free => sqlx::query(
+            "INSERT INTO requester_addresses (address, requester_id, created_at)
+             SELECT $1, $2, greatest(now(), max(created_at) + interval '1 microsecond')
+             FROM requester_addresses WHERE requester_id = $2",
+        ),
         Source::Departed => sqlx::query(
             "UPDATE requester_addresses SET requester_id = $2, created_at = now()
              WHERE address = $1",
@@ -115,6 +139,23 @@ async fn give_address(
     }
 }
 
+/// Adds a requester of `customer`, without an address yet: the caller gives them one before the
+/// transaction ends.
+async fn insert(
+    tx: &mut Transaction<'_, Postgres>,
+    customer: Uuid,
+    name: Option<&str>,
+) -> Result<Uuid> {
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO requesters (id, customer_id, name) VALUES ($1, $2, $3)")
+        .bind(id)
+        .bind(customer)
+        .bind(filled(name))
+        .execute(&mut **tx)
+        .await?;
+    Ok(id)
+}
+
 /// Adds a requester of `customer` with its first address, which must be clean and belong to
 /// nobody yet, or to a requester who departed from another customer.
 pub async fn create(
@@ -124,13 +165,7 @@ pub async fn create(
     name: Option<&str>,
 ) -> Result<Uuid> {
     let source = source_of(tx, customer, None, address).await?;
-    let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO requesters (id, customer_id, name) VALUES ($1, $2, $3)")
-        .bind(id)
-        .bind(customer)
-        .bind(filled(name))
-        .execute(&mut **tx)
-        .await?;
+    let id = insert(tx, customer, name).await?;
     give_address(tx, id, address, source).await?;
     Ok(id)
 }
@@ -142,14 +177,9 @@ pub(crate) async fn create_with_new_addresses(
     customer: Uuid,
     addresses: &[String],
 ) -> Result<Uuid> {
-    let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO requesters (id, customer_id) VALUES ($1, $2)")
-        .bind(id)
-        .bind(customer)
-        .execute(&mut **tx)
-        .await?;
+    let id = insert(tx, customer, None).await?;
     for address in addresses {
-        add_new_address_in(tx, id, address).await?;
+        give_address(tx, id, address, Source::Free).await?;
     }
     Ok(id)
 }
@@ -161,22 +191,42 @@ pub(crate) async fn add_new_address_in(
     requester: Uuid,
     address: &str,
 ) -> Result<()> {
-    let given = sqlx::query(
-        "INSERT INTO requester_addresses (address, requester_id, created_at)
-         SELECT $1, $2, greatest(now(), max(created_at) + interval '1 microsecond')
-         FROM requester_addresses WHERE requester_id = $2",
+    give_address(tx, requester, address, Source::Free).await
+}
+
+/// A requester's details as they are stored, and whether they have departed; none for one that
+/// no longer exists, merged into another.
+pub(crate) async fn stored<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    id: Uuid,
+) -> Result<Option<(RequesterDetails, bool)>> {
+    type Row = (
+        Option<String>,
+        Vec<String>,
+        Option<String>,
+        String,
+        Option<Uuid>,
+        bool,
+    );
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT name, phone_numbers, job_title, notes, site_id, departed_at IS NOT NULL
+         FROM requesters WHERE id = $1",
     )
-    .bind(address)
-    .bind(requester)
-    .execute(&mut **tx)
-    .await;
-    match given {
-        Err(e) if taken(&e) => rule(format!(
-            "the address {address} already belongs to a requester"
-        )),
-        Err(e) => Err(e.into()),
-        Ok(_) => Ok(()),
-    }
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(
+        |(name, phone_numbers, job_title, notes, site_id, departed)| {
+            let details = RequesterDetails {
+                name,
+                phone_numbers,
+                job_title,
+                notes,
+                site_id,
+            };
+            (details, departed)
+        },
+    ))
 }
 
 /// The requester of `customer` the address belongs to, registered with `name` if new; an address
