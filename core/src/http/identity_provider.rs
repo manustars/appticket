@@ -72,8 +72,9 @@ async fn begin(
 
 /// Where the identity provider sends the browser back: opens the product's session and goes to
 /// the help desk, or back to the sign-in page with `sign_in_error` saying why not:
-/// `not_in_authorized_group`, `email_of_another_agent`, `email_not_verified`, `not_an_agent`,
-/// `deactivated` or `failed`. Someone in the authorized group who is not an agent yet becomes one.
+/// `not_in_authorized_group`, `no_email`, `email_of_another_agent`, `email_not_verified`,
+/// `not_an_agent`, `deactivated` or `failed`. Someone in the authorized group who is not an agent
+/// yet becomes one.
 #[utoipa::path(get, path = "/api/session/identity-provider/callback", tag = "session",
     params(CallbackQuery),
     responses((status = SEE_OTHER, description = "To the help desk, signed in, or to the \
@@ -122,6 +123,7 @@ impl Refusal {
     pub fn code(self) -> &'static str {
         match self {
             Refusal::NotInAuthorizedGroup => "not_in_authorized_group",
+            Refusal::NoEmail => "no_email",
             Refusal::EmailOfAnotherAgent => "email_of_another_agent",
             Refusal::EmailNotVerified => "email_not_verified",
             Refusal::NotAnAgent => "not_an_agent",
@@ -742,6 +744,32 @@ mod tests {
         let answer = sign_in_as(&state, "lena").await;
         assert_eq!(answer.location, "/?sign_in_error=email_of_another_agent");
         assert!(answer.cookie("hd_session").is_none());
+    }
+
+    /// Each refusal reaches the sign-in page as its own reason, the one the UI shows a message
+    /// for (`providerErrors` in web/src/App.tsx).
+    #[test]
+    fn each_refusal_has_its_own_reason_on_the_sign_in_page() {
+        use crate::identities::Refusal;
+        assert_eq!(
+            [
+                Refusal::NotInAuthorizedGroup,
+                Refusal::NoEmail,
+                Refusal::EmailNotVerified,
+                Refusal::NotAnAgent,
+                Refusal::Deactivated,
+                Refusal::EmailOfAnotherAgent,
+            ]
+            .map(Refusal::code),
+            [
+                "not_in_authorized_group",
+                "no_email",
+                "email_not_verified",
+                "not_an_agent",
+                "deactivated",
+                "email_of_another_agent",
+            ]
+        );
     }
 
     /// Sign-ins under way from `address`, ending in `minutes` (negative: ended).

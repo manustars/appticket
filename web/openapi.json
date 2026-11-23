@@ -4100,7 +4100,7 @@
         "tags": [
           "session"
         ],
-        "summary": "Where the identity provider sends the browser back: opens the product's session and goes to\nthe help desk, or back to the sign-in page with `sign_in_error` saying why not:\n`not_in_authorized_group`, `email_of_another_agent`, `email_not_verified`, `not_an_agent`,\n`deactivated` or `failed`. Someone in the authorized group who is not an agent yet becomes one.",
+        "summary": "Where the identity provider sends the browser back: opens the product's session and goes to\nthe help desk, or back to the sign-in page with `sign_in_error` saying why not:\n`not_in_authorized_group`, `no_email`, `email_of_another_agent`, `email_not_verified`,\n`not_an_agent`, `deactivated` or `failed`. Someone in the authorized group who is not an agent\nyet becomes one.",
         "operationId": "callback",
         "parameters": [
           {
@@ -5805,7 +5805,7 @@
           "id",
           "email",
           "name",
-          "local_password",
+          "has_local_password",
           "role_name",
           "administrator",
           "permissions"
@@ -5818,13 +5818,13 @@
           "email": {
             "type": "string"
           },
+          "has_local_password": {
+            "type": "boolean",
+            "description": "Whether the agent has a local password to sign in and change; agents created by signing\nin through the identity provider have none."
+          },
           "id": {
             "type": "string",
             "format": "uuid"
-          },
-          "local_password": {
-            "type": "boolean",
-            "description": "Whether the agent has a local password to sign in and change; agents created by signing\nin through the identity provider have none."
           },
           "name": {
             "type": "string"

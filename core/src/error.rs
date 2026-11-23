@@ -19,6 +19,17 @@ pub fn rule<T>(why: impl Into<String>) -> Result<T> {
     Err(Error::Rule(why.into()))
 }
 
+impl Error {
+    /// The error for a caller that works with `anyhow`: an internal error as it came, so that the
+    /// database error inside it can still be told apart.
+    pub fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Error::Internal(error) => error,
+            other => anyhow::anyhow!("{other}"),
+        }
+    }
+}
+
 impl<E: Into<anyhow::Error>> From<E> for Error {
     fn from(error: E) -> Self {
         Error::Internal(error.into())

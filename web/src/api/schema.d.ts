@@ -1191,8 +1191,9 @@ export interface paths {
         /**
          * Where the identity provider sends the browser back: opens the product's session and goes to
          *     the help desk, or back to the sign-in page with `sign_in_error` saying why not:
-         *     `not_in_authorized_group`, `email_of_another_agent`, `email_not_verified`, `not_an_agent`,
-         *     `deactivated` or `failed`. Someone in the authorized group who is not an agent yet becomes one.
+         *     `not_in_authorized_group`, `no_email`, `email_of_another_agent`, `email_not_verified`,
+         *     `not_an_agent`, `deactivated` or `failed`. Someone in the authorized group who is not an agent
+         *     yet becomes one.
          */
         get: operations["callback"];
         put?: never;
@@ -1648,13 +1649,13 @@ export interface components {
             /** @description Whether the agent's role is the Administrator role. */
             administrator: boolean;
             email: string;
-            /** Format: uuid */
-            id: string;
             /**
              * @description Whether the agent has a local password to sign in and change; agents created by signing
              *     in through the identity provider have none.
              */
-            local_password: boolean;
+            has_local_password: boolean;
+            /** Format: uuid */
+            id: string;
             name: string;
             /** @description Everything the agent's role allows beyond reading; every permission for an Administrator. */
             permissions: components["schemas"]["Permission"][];

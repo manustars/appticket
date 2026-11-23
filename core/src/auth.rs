@@ -121,11 +121,11 @@ pub async fn agent_for(db: &PgPool, token: &str) -> anyhow::Result<Option<Signed
     .fetch_optional(db)
     .await?;
     Ok(row.map(
-        |(id, email, name, local_password, role_name, administrator, permissions)| SignedIn {
+        |(id, email, name, has_local_password, role_name, administrator, permissions)| SignedIn {
             id,
             email,
             name,
-            local_password,
+            has_local_password,
             role_name,
             grant: Grant::from_stored(administrator, &permissions),
             token: token.to_owned(),
@@ -141,7 +141,7 @@ pub struct SignedIn {
     pub email: String,
     pub name: String,
     /// Whether the agent has a local password.
-    pub local_password: bool,
+    pub has_local_password: bool,
     pub role_name: String,
     /// What the agent's role allows, read with the session on every request.
     pub grant: Grant,

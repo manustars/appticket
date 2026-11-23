@@ -17,6 +17,7 @@ export interface Messages {
   "signIn.localSignInOff": { plural: false; placeholders: never; tags: never }
   "signIn.noWayIn": { plural: false; placeholders: never; tags: never }
   "signIn.refused.notInAuthorizedGroup": { plural: false; placeholders: never; tags: never }
+  "signIn.refused.noEmail": { plural: false; placeholders: never; tags: never }
   "signIn.refused.emailOfAnotherAgent": { plural: false; placeholders: never; tags: never }
   "signIn.refused.emailNotVerified": { plural: false; placeholders: never; tags: never }
   "signIn.refused.notAnAgent": { plural: false; placeholders: never; tags: never }

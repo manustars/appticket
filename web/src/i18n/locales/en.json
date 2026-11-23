@@ -13,6 +13,7 @@
   "signIn.localSignInOff": "Signing in with a password has been switched off. Sign in through the identity provider.",
   "signIn.noWayIn": "Nobody can sign in right now: signing in with a password is switched off and no identity provider is configured. An administrator can switch password sign-in back on from the command line.",
   "signIn.refused.notInAuthorizedGroup": "You are not in the group, at the identity provider, whose members may sign in to this help desk. Ask an administrator.",
+  "signIn.refused.noEmail": "The identity provider did not send your e-mail address, so it cannot say which agent you are. Ask an administrator to give you an address there.",
   "signIn.refused.emailOfAnotherAgent": "Your e-mail address at the identity provider belongs to another agent, so you were not signed in. An administrator can sort it out.",
   "signIn.refused.emailNotVerified": "The identity provider has not verified your e-mail address, so it cannot say which agent you are. Verify the address there, or ask an administrator.",
   "signIn.refused.notAnAgent": "You are not an agent of this help desk. Ask an administrator to add you.",

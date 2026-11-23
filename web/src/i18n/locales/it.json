@@ -13,6 +13,7 @@
   "signIn.localSignInOff": "L'accesso con password è stato disattivato. Accedi tramite il provider di identità.",
   "signIn.noWayIn": "Al momento nessuno può accedere: l'accesso con password è disattivato e non è configurato alcun provider di identità. Un amministratore può riattivare l'accesso con password dalla riga di comando.",
   "signIn.refused.notInAuthorizedGroup": "Non fai parte del gruppo, presso il provider di identità, i cui membri possono accedere a questo help desk. Chiedi a un amministratore.",
+  "signIn.refused.noEmail": "Il provider di identità non ha inviato il tuo indirizzo e-mail, quindi non può dire quale operatore sei. Chiedi a un amministratore di assegnarti un indirizzo presso il provider.",
   "signIn.refused.emailOfAnotherAgent": "Il tuo indirizzo e-mail presso il provider di identità appartiene a un altro operatore, quindi l'accesso non è avvenuto. Un amministratore può sistemare la cosa.",
   "signIn.refused.emailNotVerified": "Il provider di identità non ha verificato il tuo indirizzo e-mail, quindi non può dire quale operatore sei. Verifica l'indirizzo presso il provider o chiedi a un amministratore.",
   "signIn.refused.notAnAgent": "Non sei un operatore di questo help desk. Chiedi a un amministratore di aggiungerti.",

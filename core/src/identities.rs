@@ -1,7 +1,6 @@
 //! Identities of an identity provider linked to agents (docs/domain-rules.md, "Signing in";
 //! ADR 0008).
 
-use anyhow::Context;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -46,6 +45,9 @@ pub struct SignedIn {
 pub enum Refusal {
     /// The installation names an authorized group, and the person is not in it.
     NotInAuthorizedGroup,
+    /// The provider sent no usable e-mail address, and the identity is not linked yet: there is
+    /// nobody to link and nothing to make an agent with.
+    NoEmail,
     /// The provider did not say the e-mail address is verified, and the identity is not linked yet.
     EmailNotVerified,
     /// No agent has the e-mail address, and the identity is not linked to one.
@@ -61,6 +63,9 @@ pub enum Refusal {
 /// and 2, oidc 3).
 const FIRST_SIGN_IN_LOCK_CLASS: i32 = 4;
 
+/// The constraint that keeps agents' addresses apart.
+const AGENTS_EMAIL_CONSTRAINT: &str = "agents_email_key";
+
 /// Signs in the agent the identity is linked to, linking it first by verified e-mail, or making
 /// the agent when the person is in the authorized group and not an agent yet; opens a session
 /// lasting `lifetime`.
@@ -74,14 +79,18 @@ pub async fn sign_in(
     if identity.authorized_group == AuthorizedGroup::NotMember {
         return Ok(Err(Refusal::NotInAuthorizedGroup));
     }
-    match sign_in_once(db, identity, lifetime).await {
+    match sign_in_transaction(db, identity, lifetime).await {
         // An address another sign-in or change took at the same moment.
-        Err(error) if is_unique_violation(&error) => Ok(Err(Refusal::EmailOfAnotherAgent)),
+        Err(error) if violates(&error, AGENTS_EMAIL_CONSTRAINT) => {
+            Ok(Err(Refusal::EmailOfAnotherAgent))
+        }
         answer => answer,
     }
 }
 
-async fn sign_in_once(
+/// The sign-in's transaction: finds, links or makes the agent, takes over the provider's name and
+/// e-mail, and opens the session, all or nothing.
+async fn sign_in_transaction(
     db: &PgPool,
     identity: &Identity,
     lifetime: time::Duration,
@@ -155,9 +164,8 @@ async fn first_sign_in(
     identity: &Identity,
     email: Option<&str>,
 ) -> anyhow::Result<Result<Uuid, Refusal>> {
-    // Without an address there is nobody to link and nothing to make an agent with.
     let Some(email) = email else {
-        return Ok(Err(Refusal::EmailNotVerified));
+        return Ok(Err(Refusal::NoEmail));
     };
     let agent: Option<(Uuid, bool)> =
         sqlx::query_as("SELECT id, deactivated_at IS NULL FROM agents WHERE email = $1 FOR UPDATE")
@@ -183,16 +191,12 @@ async fn first_sign_in(
             }
             agent
         }
-        None => match identity.authorized_group {
-            AuthorizedGroup::Member => new_agent(tx, identity, email).await?,
-            AuthorizedGroup::NotConfigured | AuthorizedGroup::NotMember => {
-                return Ok(Err(if identity.email_verified {
-                    Refusal::NotAnAgent
-                } else {
-                    Refusal::EmailNotVerified
-                }));
-            }
-        },
+        // Nobody has the address: only the authorized group makes agents.
+        None if identity.authorized_group == AuthorizedGroup::Member => {
+            new_agent(tx, identity, email).await?
+        }
+        None if identity.email_verified => return Ok(Err(Refusal::NotAnAgent)),
+        None => return Ok(Err(Refusal::EmailNotVerified)),
     };
     sqlx::query("INSERT INTO agent_identities (issuer, subject, agent_id) VALUES ($1, $2, $3)")
         .bind(&identity.issuer)
@@ -203,31 +207,21 @@ async fn first_sign_in(
     Ok(Ok(agent))
 }
 
-/// Makes the person an agent with the default role and no local password. Being in the
-/// authorized group says who may enter, not what they may do: even the very first agent gets the
-/// default role.
+/// Makes the person an agent with the default role and no local password, named as the provider
+/// names them, or by their address without a name. Being in the authorized group says who may
+/// enter, not what they may do: even the very first agent gets the default role.
 async fn new_agent(
     tx: &mut Transaction<'_, Postgres>,
     identity: &Identity,
     email: &str,
 ) -> anyhow::Result<Uuid> {
-    let role: Option<Uuid> = sqlx::query_scalar("SELECT id FROM roles WHERE is_default")
-        .fetch_optional(&mut **tx)
-        .await?;
-    let role = role.context("there is no default role for new agents")?;
-    let id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO agents (id, email, name, password_hash, role_id)
-         VALUES ($1, $2, $3, NULL, $4)",
-    )
-    .bind(id)
-    .bind(email)
-    // Without a name from the provider, the agent is named by their address.
-    .bind(provider_name(identity).unwrap_or(email))
-    .bind(role)
-    .execute(&mut **tx)
-    .await?;
-    Ok(id)
+    let role = crate::agents::default_role(tx)
+        .await
+        .map_err(crate::error::Error::into_anyhow)?;
+    let name = provider_name(identity).unwrap_or(email);
+    crate::agents::insert(tx, email, name, role, None)
+        .await
+        .map_err(crate::error::Error::into_anyhow)
 }
 
 /// The name the provider gives, trimmed; none when missing or blank.
@@ -239,11 +233,12 @@ fn provider_name(identity: &Identity) -> Option<&str> {
         .filter(|name| !name.is_empty())
 }
 
-fn is_unique_violation(error: &anyhow::Error) -> bool {
+/// Whether the error is the database refusing a row for the constraint `constraint`.
+fn violates(error: &anyhow::Error, constraint: &str) -> bool {
     error
         .downcast_ref::<sqlx::Error>()
         .and_then(sqlx::Error::as_database_error)
-        .is_some_and(|error| error.is_unique_violation())
+        .is_some_and(|error| error.constraint() == Some(constraint))
 }
 
 #[cfg(test)]
@@ -448,7 +443,7 @@ mod tests {
             };
             assert_eq!(
                 sign_in(&db, &without, HOURS_12).await.unwrap().unwrap_err(),
-                Refusal::EmailNotVerified
+                Refusal::NoEmail
             );
         }
         assert_eq!(agent_count(&db).await, 0);
@@ -562,7 +557,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap_err(),
-            Refusal::EmailNotVerified
+            Refusal::NoEmail
         );
         assert_eq!(linked(&db, "sub-otto").await, None);
         assert_eq!(sessions(&db).await, 0);

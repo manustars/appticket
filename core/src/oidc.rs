@@ -81,12 +81,12 @@ pub struct Settings {
 
 /// Where the authorized group is looked for: a claim of the ID token, and the value it must hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GroupClaim {
+pub struct AuthorizedGroupClaim {
     pub claim: String,
     pub value: String,
 }
 
-impl GroupClaim {
+impl AuthorizedGroupClaim {
     /// Whether the ID token's claims put the person in the authorized group: the claim is the
     /// value, or a list that holds it, compared exactly. Anything else is not.
     fn check(&self, claims: &OtherClaims) -> AuthorizedGroup {
@@ -117,7 +117,7 @@ pub struct Config {
     /// How long a session opened through the provider lasts.
     pub session: time::Duration,
     /// The authorized group, when the installation names one.
-    pub authorized_group: Option<GroupClaim>,
+    pub authorized_group: Option<AuthorizedGroupClaim>,
 }
 
 impl Config {
@@ -192,7 +192,7 @@ impl Config {
                         "HD_OIDC_GROUP_CLAIM is empty: name the claim the authorized group is in"
                     );
                 }
-                Some(GroupClaim {
+                Some(AuthorizedGroupClaim {
                     claim: claim.to_owned(),
                     value,
                 })
@@ -541,7 +541,7 @@ mod tests {
         let groups = Config::from_settings(groups, PUBLIC_URL).unwrap().unwrap();
         assert_eq!(
             groups.authorized_group,
-            Some(GroupClaim {
+            Some(AuthorizedGroupClaim {
                 claim: "groups".to_owned(),
                 value: "helpdesk-agents".to_owned()
             })
@@ -555,7 +555,7 @@ mod tests {
         let roles = Config::from_settings(roles, PUBLIC_URL).unwrap().unwrap();
         assert_eq!(
             roles.authorized_group,
-            Some(GroupClaim {
+            Some(AuthorizedGroupClaim {
                 claim: "roles".to_owned(),
                 value: "Helpdesk.Agent".to_owned()
             })
@@ -592,7 +592,7 @@ mod tests {
 
     #[test]
     fn the_group_claim_holds_the_authorized_group_as_one_of_a_list_or_alone() {
-        let rule = GroupClaim {
+        let rule = AuthorizedGroupClaim {
             claim: "roles".to_owned(),
             value: "Helpdesk.Agent".to_owned(),
         };

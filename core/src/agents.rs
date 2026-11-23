@@ -111,27 +111,56 @@ pub async fn add(
             let first: bool = sqlx::query_scalar("SELECT NOT EXISTS (SELECT 1 FROM agents)")
                 .fetch_one(&mut *tx)
                 .await?;
-            let id: Option<Uuid> = if first {
-                Some(roles::administrator_id(&mut tx).await?)
+            if first {
+                roles::administrator_id(&mut tx).await?
             } else {
-                sqlx::query_scalar("SELECT id FROM roles WHERE is_default")
-                    .fetch_optional(&mut *tx)
-                    .await?
-            };
-            id.ok_or_else(|| {
-                Error::Rule("there is no default role for new agents: name one".into())
-            })?
+                default_role(&mut tx).await?
+            }
         }
     };
     let (grant, _) = roles::grant_of(&mut tx, role).await?;
     by.require_covers(&grant, "give a role")?;
-    if email_taken(&mut *tx, &email, None).await? {
+    let generated = password.is_none().then(generate_password);
+    let password = password.or(generated.as_deref()).unwrap_or_default();
+    let id = insert(
+        &mut tx,
+        &email,
+        name,
+        role,
+        Some(&auth::hash_password(password)?),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Added {
+        id,
+        generated_password: generated,
+    })
+}
+
+/// The role new agents get when none is named.
+pub(crate) async fn default_role(tx: &mut Transaction<'_, Postgres>) -> Result<Uuid> {
+    let id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM roles WHERE is_default")
+        .fetch_optional(&mut **tx)
+        .await?;
+    id.ok_or_else(|| Error::Rule("there is no default role for new agents: name one".into()))
+}
+
+/// Inserts an agent with `role`, and with the hash of their local password or none: every new
+/// agent goes through here, whoever makes them. The address and the name are kept as every
+/// agent's are, and no other agent may have the address.
+pub(crate) async fn insert(
+    tx: &mut Transaction<'_, Postgres>,
+    email: &str,
+    name: &str,
+    role: Uuid,
+    password_hash: Option<&str>,
+) -> Result<Uuid> {
+    let (email, name) = email_and_name(email, name)?;
+    if email_taken(&mut **tx, &email, None).await? {
         return rule(format!(
             "there is already an agent with the address {email}"
         ));
     }
-    let generated = password.is_none().then(generate_password);
-    let password = password.or(generated.as_deref()).unwrap_or_default();
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO agents (id, email, name, password_hash, role_id) VALUES ($1, $2, $3, $4, $5)",
@@ -139,15 +168,11 @@ pub async fn add(
     .bind(id)
     .bind(&email)
     .bind(name)
-    .bind(auth::hash_password(password)?)
+    .bind(password_hash)
     .bind(role)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    tx.commit().await?;
-    Ok(Added {
-        id,
-        generated_password: generated,
-    })
+    Ok(id)
 }
 
 /// Whether a (normalized) address can be an agent's: something on both sides of an `@`.
