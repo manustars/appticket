@@ -438,13 +438,13 @@ mod tests {
             .unwrap();
     }
 
-    /// Writes an announcement from ticket `number` straight to the database, with one recipient
-    /// at `address` when it is given; returns the database's refusal, if any.
+    /// Writes an announcement from ticket `number` straight to the database, to each requester of
+    /// `to` at the address given; returns its id, or the database's refusal.
     async fn write(
         db: &PgPool,
         number: i64,
-        to: Option<(Uuid, &str)>,
-    ) -> std::result::Result<(), String> {
+        to: &[(Uuid, &str)],
+    ) -> std::result::Result<Uuid, String> {
         let mut tx = db.begin().await.unwrap();
         let id = Uuid::new_v4();
         let wrote = async {
@@ -457,7 +457,7 @@ mod tests {
             .bind(number)
             .execute(&mut *tx)
             .await?;
-            if let Some((requester, address)) = to {
+            for (requester, address) in to {
                 sqlx::query(
                     "INSERT INTO announcement_recipients
                          (announcement_id, requester_id, customer_id, address)
@@ -469,7 +469,7 @@ mod tests {
                 .execute(&mut *tx)
                 .await?;
             }
-            tx.commit().await
+            tx.commit().await.map(|_| id)
         };
         wrote.await.map_err(|e| e.to_string())
     }
@@ -487,7 +487,7 @@ mod tests {
         let child = testing::ticket(&db, brightfield, None, "a@brightfield.test").await;
         attach(&db, child, outage).await.unwrap();
         let other = testing::ticket(&db, brightfield, None, "b@brightfield.test").await;
-        let to = Some((ada, "ada@brightfield.test"));
+        let to = &[(ada, "ada@brightfield.test")];
 
         let why = write(&db, child, to).await.unwrap_err();
         assert!(why.contains("from a parent ticket"), "{why}");
@@ -499,5 +499,107 @@ mod tests {
             .unwrap();
         let why = write(&db, outage, to).await.unwrap_err();
         assert!(why.contains("closed"), "{why}");
+    }
+
+    /// The database keeps an announcement going to someone, each person once, and only to key
+    /// requesters at their contact address, of the customers of the parent's children and of the
+    /// users of its services, also when the code is bypassed.
+    #[sqlx::test]
+    async fn the_database_keeps_who_an_announcement_goes_to(db: PgPool) {
+        let own = testing::help_desk(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let delta = testing::customer(&db, "Delta Works").await;
+        let echo = testing::customer(&db, "Echo Farms").await;
+        let mail = crate::catalog::create_service(&db, "Hosted mail", "")
+            .await
+            .unwrap();
+        crate::catalog::use_service(&db, mail, delta).await.unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        crate::requesters::add_address(&db, ada, "ada@home.test")
+            .await
+            .unwrap();
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        let nora = testing::requester(&db, delta, "nora@delta.test").await;
+        let eva = testing::requester(&db, echo, "eva@echo.test").await;
+        crate::key_requesters::mark(&db, ada, Some("ada@brightfield.test"))
+            .await
+            .unwrap();
+        for key in [nora, eva] {
+            crate::key_requesters::mark(&db, key, None).await.unwrap();
+        }
+        testing::agent(&db, "marco@northgate.test").await;
+        let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
+        crate::catalog::link_service(&db, outage, mail, true)
+            .await
+            .unwrap();
+        let child = testing::ticket(&db, brightfield, None, "a@brightfield.test").await;
+        attach(&db, child, outage).await.unwrap();
+
+        let why = write(&db, outage, &[]).await.unwrap_err();
+        assert!(why.contains("goes to someone"), "{why}");
+        for (to, what) in [
+            ((lena, "lena@brightfield.test"), "not a key requester"),
+            ((ada, "ada@home.test"), "not their contact address"),
+            (
+                (eva, "eva@echo.test"),
+                "a customer the failure does not affect",
+            ),
+        ] {
+            let why = write(&db, outage, &[to]).await.unwrap_err();
+            assert!(why.contains("a key requester"), "{what}: {why}");
+        }
+        let why = write(
+            &db,
+            outage,
+            &[(ada, "ada@brightfield.test"), (ada, "ada@brightfield.test")],
+        )
+        .await
+        .unwrap_err();
+        assert!(why.contains("announcement_recipients_pkey"), "{why}");
+        let sent = write(
+            &db,
+            outage,
+            &[(ada, "ada@brightfield.test"), (nora, "nora@delta.test")],
+        )
+        .await
+        .unwrap();
+
+        // Its messages go to its recipients, on the parent it was sent from.
+        let message = |number: i64, to: &'static str| {
+            sqlx::query(
+                "INSERT INTO messages (id, ticket_id, direction, from_address, to_address,
+                                       author_id, subject, announcement_id)
+                 SELECT $1, t.id, 'outbound', 'helpdesk@helpdesk.test', $3,
+                        (SELECT id FROM agents LIMIT 1), 'Outage', $4
+                 FROM tickets t WHERE t.number = $2",
+            )
+            .bind(Uuid::new_v4())
+            .bind(number)
+            .bind(to)
+            .bind(sent)
+            .execute(&db)
+        };
+        let why = message(outage, "lena@brightfield.test")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            why.contains("messages_to_an_announcement_recipient"),
+            "{why}"
+        );
+        let why = message(child, "ada@brightfield.test")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(why.contains("on the ticket it was sent from"), "{why}");
+        message(outage, "ada@brightfield.test").await.unwrap();
+        let why = message(outage, "ada@brightfield.test")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            why.contains("messages_one_per_announcement_recipient"),
+            "{why}"
+        );
     }
 }

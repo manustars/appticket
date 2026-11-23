@@ -60,6 +60,51 @@ CREATE TABLE announcement_recipients (
     UNIQUE (announcement_id, address)
 );
 
+-- An announcement goes to someone. The check runs at commit, so that an announcement and its
+-- recipients can be added in one transaction.
+CREATE FUNCTION announcements_have_recipients() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM announcement_recipients WHERE announcement_id = NEW.id) THEN
+        RAISE EXCEPTION 'an announcement goes to someone: a key requester of a customer the failure affects'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER announcements_have_recipients
+    AFTER INSERT ON announcements
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION announcements_have_recipients();
+
+-- Each recipient is, when the announcement is sent, a key requester at their contact address, of a
+-- customer of one of the parent's children or that uses a service the parent links. The key
+-- requester is locked, so that one being unmarked at the same time is seen.
+CREATE FUNCTION announcements_go_to_key_requesters_affected() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM announcements n
+        JOIN key_requesters k ON k.requester_id = NEW.requester_id
+        WHERE n.id = NEW.announcement_id
+          AND k.customer_id = NEW.customer_id AND k.contact_address = NEW.address
+          AND (EXISTS (SELECT 1 FROM tickets t
+                       WHERE t.parent_id = n.ticket_id AND t.customer_id = k.customer_id)
+               OR EXISTS (SELECT 1 FROM ticket_services ts
+                          JOIN customer_services cs ON cs.service_id = ts.service_id
+                          WHERE ts.ticket_id = n.ticket_id AND cs.customer_id = k.customer_id))
+        FOR SHARE OF k) THEN
+        RAISE EXCEPTION 'an announcement goes to a key requester, at their contact address, of a customer of the parent''s children or of its services'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER announcements_go_to_key_requesters_affected
+    AFTER INSERT OR UPDATE ON announcement_recipients
+    FOR EACH ROW EXECUTE FUNCTION announcements_go_to_key_requesters_affected();
+
 -- The message an announcement is sent in, one per recipient: it leaves through the outbox like a
 -- reply, and a reply to it comes back to the parent.
 ALTER TABLE messages
