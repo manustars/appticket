@@ -65,6 +65,26 @@ core:
     # every sign-in counts under the controller's address.
     trustedProxies: []
 
+  # HD_PUBLIC_URL: the address agents open the help desk at, such as
+  # https://helpdesk.example.com; the identity provider sends them back to it. Empty: https:// and
+  # ingress.host when the Ingress is enabled.
+  publicUrl: ""
+
+  # Signing in through an OpenID Connect identity provider (docs/deploy.md). Off while the issuer
+  # is empty; agents then sign in with their local password only.
+  oidc:
+    # HD_OIDC_ISSUER, such as https://login.example.com/realms/staff.
+    issuer: ""
+    # HD_OIDC_CLIENT_ID: the client registered at the provider for the help desk.
+    clientId: ""
+    # A Secret with the client's secret (HD_OIDC_CLIENT_SECRET); required with an issuer.
+    existingSecret: ""
+    secretKey: client-secret
+    # HD_OIDC_LABEL: the sign-in button reads "Sign in with <label>". Empty: "OpenID Connect".
+    label: ""
+    # HD_OIDC_SESSION_HOURS: how long a session opened through the provider lasts (1 to 24).
+    sessionHours: 12
+
   # HD_LOG: a tracing filter.
   log: "info,sqlx=warn"
 
