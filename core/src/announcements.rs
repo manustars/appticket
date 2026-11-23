@@ -104,6 +104,11 @@ pub async fn send(
     if affected_customers(&mut tx, ticket).await? != customers {
         return rule("the ticket's children have just changed; reload and try again");
     }
+    if keys.is_empty() {
+        return rule(
+            "the customers of the ticket's children and the users of its services have no key requesters: there is nobody to announce to",
+        );
+    }
 
     let id = Uuid::new_v4();
     let subject = format!("{} [#{parent}]", title.trim());
@@ -399,6 +404,38 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(queued, 0);
+    }
+
+    /// An announcement needs something to say and someone to say it to: an empty one is refused,
+    /// and so is one from a parent whose children's customers and service users have no key
+    /// requesters, or that has neither children nor services.
+    #[sqlx::test]
+    async fn an_announcement_to_nobody_is_refused(db: PgPool) {
+        let own = testing::help_desk(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        let alone = testing::ticket(&db, own, None, "alone@northgate.test").await;
+        let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
+        let child = testing::ticket(&db, brightfield, None, "a@brightfield.test").await;
+        attach(&db, child, outage).await.unwrap();
+        let sender = testing::sender();
+
+        for number in [alone, outage] {
+            let Err(Error::Rule(why)) = send(&db, &sender, number, agent, "Still down.").await
+            else {
+                panic!("announced to nobody");
+            };
+            assert!(why.contains("no key requesters"), "{why}");
+            assert!(listed(&db, number).await.is_empty());
+        }
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        crate::key_requesters::mark(&db, ada, None).await.unwrap();
+        let Err(Error::Rule(_)) = send(&db, &sender, outage, agent, "  ").await else {
+            panic!("an empty announcement");
+        };
+        send(&db, &sender, outage, agent, "Still down.")
+            .await
+            .unwrap();
     }
 
     /// Writes an announcement from ticket `number` straight to the database, with one recipient
