@@ -1295,6 +1295,50 @@ mod tests {
         );
     }
 
+    /// A closed ticket stays at the sites it was at when it was closed, whatever happens to its
+    /// assets and its requester afterwards, while one still open follows them.
+    #[sqlx::test]
+    async fn a_closed_ticket_keeps_its_sites(db: PgPool) {
+        let c = testing::customer(&db, "Brightfield").await;
+        let head = site(&db, c, "Head office").await;
+        let lab = site(&db, c, "Lab").await;
+        let ada = testing::requester(&db, c, "ada@brightfield.test").await;
+        put_at(&db, ada, Some(head)).await;
+        let laptop = crate::asset_kinds::create(&db, "Laptop", true)
+            .await
+            .unwrap();
+        let pc = crate::catalog::create_asset(
+            &db,
+            c,
+            &testing::asset_details(laptop, "PC-0042", None, None, Some(ada)),
+        )
+        .await
+        .unwrap();
+        let by_asset = testing::ticket(&db, c, None, "a1@brightfield.test").await;
+        crate::catalog::link_asset(&db, by_asset, pc, true)
+            .await
+            .unwrap();
+        let by_requester = testing::ticket(&db, c, Some(ada), "a2@brightfield.test").await;
+        let open = testing::ticket(&db, c, Some(ada), "a3@brightfield.test").await;
+        for n in [by_asset, by_requester] {
+            set_state(&db, n, TicketState::Closed).await.unwrap();
+        }
+
+        put_at(&db, ada, Some(lab)).await;
+        assert_eq!(at(&db, open).await, ["Lab"], "an open ticket follows");
+        crate::catalog::update_asset(
+            &db,
+            pc,
+            &testing::asset_details(laptop, "PC-0042", None, Some(lab), None),
+        )
+        .await
+        .unwrap();
+        crate::sites::retire(&db, head).await.unwrap();
+        for n in [by_asset, by_requester] {
+            assert_eq!(at(&db, n).await, ["Head office"], "ticket {n}");
+        }
+    }
+
     #[test]
     fn reply_subjects_do_not_stack() {
         assert_eq!(
