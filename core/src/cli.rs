@@ -397,12 +397,33 @@ Sites file (--sites); a site is recognised by its name within its customer, igno
   name                The site's name (required column and value).
   address             The site's address (required column; required to create a site).
 
-The customers file is taken first, so that a site can be at a customer it creates. A row that
-breaks a rule is left out with its reason, as are the sites of a customer row left out; the
-rest is imported. The rows left out are written to <kind>-left-out.csv, with the same columns
-and an error column, ready to correct and import again; never over a file being imported.";
+Requesters file (--requesters); a requester is recognised by any of their e-mail addresses.
+A row is about one requester of its customer who has not departed: a row with an address of
+another customer's requester, of a departed requester, or of two requesters is left out. An
+import moves, merges and brings back no one, and marks no one departed:
+  customer            The requester's customer, by name.
+  customer_external_system
+  customer_external_name
+                      Or by one of its external references, as in the sites file.
+  email_addresses     The requester's e-mail addresses (required column and value), separated
+                      by commas, semicolons, spaces or line ends; those the requester does not
+                      have are added, none is taken away.
+  name                The requester's name.
+  phone_numbers       Phone numbers, separated by semicolons or line ends; those the requester
+                      does not have are added.
+  job_title           The job title.
+  site                The requester's site, by name: one of the customer's that is not retired.
+  notes               Internal notes, seen only by agents; they replace the ones there.
 
-/// Import customers and sites from CSV files: shows what it would do, and does it with --apply.
+The files are taken customers first, then sites, then requesters, so that a row can refer to
+something an earlier file creates. A row that breaks a rule is left out with its reason, as are
+the sites and requesters of a customer row left out and the requesters of a site row left out;
+the rest is imported. The rows left out are written to <kind>-left-out.csv, with the same
+columns and an error column, ready to correct and import again; never over a file being
+imported.";
+
+/// Import customers, sites and requesters from CSV files: shows what it would do, and does it
+/// with --apply.
 #[derive(clap::Args)]
 #[command(after_long_help = IMPORT_HELP)]
 pub struct ImportArgs {
@@ -412,6 +433,9 @@ pub struct ImportArgs {
     /// A sites file; `-` reads it from standard input.
     #[arg(long)]
     sites: Option<PathBuf>,
+    /// A requesters file; `-` reads it from standard input.
+    #[arg(long)]
+    requesters: Option<PathBuf>,
     /// Import; without it nothing changes, and the command only shows what it would do.
     #[arg(long)]
     apply: bool,
@@ -425,7 +449,11 @@ pub async fn import(db: &PgPool, args: ImportArgs, out: &mut impl Write) -> anyh
     use crate::import::{File, Kind, Mode, Outcome};
     let mut files = Vec::new();
     let mut paths = Vec::new();
-    for (kind, path) in [(Kind::Customers, args.customers), (Kind::Sites, args.sites)] {
+    for (kind, path) in [
+        (Kind::Customers, args.customers),
+        (Kind::Sites, args.sites),
+        (Kind::Requesters, args.requesters),
+    ] {
         let Some(path) = path else { continue };
         let content = if path.as_os_str() == "-" {
             let mut content = Vec::new();
@@ -439,7 +467,7 @@ pub async fn import(db: &PgPool, args: ImportArgs, out: &mut impl Write) -> anyh
         paths.push((kind, path));
     }
     if files.is_empty() {
-        anyhow::bail!("name a file to import: --customers, --sites (see hd import --help)");
+        anyhow::bail!("name a file to import: --customers, --sites, --requesters (see hd import --help)");
     }
     if paths.iter().filter(|(_, p)| p.as_os_str() == "-").count() > 1 {
         anyhow::bail!("only one file can be read from standard input");
@@ -562,6 +590,7 @@ mod tests {
         for column in crate::import::CUSTOMER_COLUMNS
             .iter()
             .chain(crate::import::SITE_COLUMNS)
+            .chain(crate::import::REQUESTER_COLUMNS)
         {
             assert!(
                 IMPORT_HELP
@@ -583,6 +612,7 @@ mod tests {
             let args = ImportArgs {
                 customers: Some(corrected.clone()),
                 sites: None,
+                requesters: None,
                 apply: true,
                 left_out,
             };
@@ -616,6 +646,7 @@ mod tests {
         let args = |apply| ImportArgs {
             customers: Some(customers.clone()),
             sites: Some(sites.clone()),
+            requesters: None,
             apply,
             left_out: None,
         };
@@ -648,6 +679,52 @@ mod tests {
             .map(|c| c.name)
             .collect();
         assert_eq!(names, ["Brightfield"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[sqlx::test]
+    async fn requesters_are_imported_from_the_command_line(db: PgPool) {
+        let dir = std::env::temp_dir().join(format!("hd-import-{}", Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let customers = dir.join("customers.csv");
+        std::fs::write(&customers, "name\nBrightfield\n").unwrap();
+        let requesters = dir.join("requesters.csv");
+        std::fs::write(
+            &requesters,
+            "customer;email_addresses;name\n\
+             Brightfield;ada@brightfield.test;Ada Ferrini\n\
+             Nowhere;bo@nowhere.test;Bo Vale\n",
+        )
+        .unwrap();
+        let args = ImportArgs {
+            customers: Some(customers),
+            sites: None,
+            requesters: Some(requesters),
+            apply: true,
+            left_out: None,
+        };
+
+        let mut out = Vec::new();
+        import(&db, args, &mut out).await.unwrap();
+        let shown = String::from_utf8(out).unwrap();
+        assert!(
+            shown.contains("requesters file: 1 created, 0 updated, 0 unchanged, 1 left out"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("line 2  create     Brightfield / Ada Ferrini (ada@brightfield.test)"),
+            "{shown}"
+        );
+        let left_out = std::fs::read_to_string(dir.join("requesters-left-out.csv")).unwrap();
+        assert!(
+            left_out.starts_with(
+                "customer;email_addresses;name;error\r\nNowhere;bo@nowhere.test;Bo Vale;"
+            ),
+            "{left_out}"
+        );
+        let brightfield = crate::customers::list(&db).await.unwrap()[0].id;
+        let shown = crate::customers::detail(&db, brightfield).await.unwrap();
+        assert_eq!(shown.requester_list[0].addresses, ["ada@brightfield.test"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
