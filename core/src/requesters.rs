@@ -560,6 +560,8 @@ pub struct MovePreview {
     pub tickets: i64,
     /// The site the requester is at, which they would leave: it is one of the old customer's.
     pub site: Option<SiteRef>,
+    /// The requester is a key requester of the old customer, which they would stop being.
+    pub key_requester: bool,
     /// The assets linked to their tickets: they belong to the old customer, so they are unlinked.
     pub assets: Vec<crate::catalog::LinkedAsset>,
     /// The services linked to their tickets that the new customer does not use: unlinked too.
@@ -590,9 +592,15 @@ pub async fn move_preview(db: &PgPool, id: Uuid, customer: Uuid) -> Result<MoveP
         .fetch_all(&mut *conn)
         .await?;
     let (assets, services) = crate::catalog::unfit_for_move(&mut conn, &tickets, customer).await?;
+    let key_requester: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM key_requesters WHERE requester_id = $1)")
+            .bind(id)
+            .fetch_one(&mut *conn)
+            .await?;
     Ok(MovePreview {
         tickets: tickets.len() as i64,
         site,
+        key_requester,
         assets,
         services,
     })

@@ -201,12 +201,15 @@ pub struct NewReply {
     then: Option<TicketState>,
     /// One of the requester's addresses, picked by the agent on a ticket the requester has not
     /// written on; needed then when they have several. Where they last wrote from on the ticket,
-    /// the reply goes there, and any other address is refused.
+    /// the reply goes there, and any other address is refused. On a ticket without a requester
+    /// none is picked.
     #[serde(default)]
     to: Option<String>,
 }
 
-/// Queues a reply to the ticket's requester. It is sent by e-mail shortly after.
+/// Queues a reply to the ticket's requester or, on a ticket without one, to each key requester of
+/// its customer at their contact address, in a message of their own; a ticket with neither cannot
+/// be replied to. It is sent by e-mail shortly after.
 #[utoipa::path(post, path = "/api/tickets/{number}/replies", tag = "tickets",
     params(("number" = i64, Path, description = "The ticket's number")),
     request_body = NewReply,
@@ -364,11 +367,13 @@ async fn clear_parent(
 
 #[derive(Deserialize, ToSchema)]
 pub struct ResolveChildren {
-    /// Sent as a reply to the requester of every child that has one.
+    /// Sent to each child's requester and to the key requesters of each child's customer, each
+    /// person once.
     body: String,
 }
 
-/// Resolves every open or waiting child of this parent ticket, replying to each requester.
+/// Resolves every open or waiting child of this parent ticket, writing to each child's requester
+/// and to the key requesters of each child's customer, one message to each person.
 #[utoipa::path(post, path = "/api/tickets/{number}/resolve-children", tag = "tickets",
     params(("number" = i64, Path, description = "The parent ticket's number")),
     request_body = ResolveChildren,

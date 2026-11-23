@@ -1381,3 +1381,103 @@ async fn a_requester_is_moved_from_their_page_through_the_api(db: PgPool) {
     let (status, json) = mover.call("POST", &moving, Some(to_harbor)).await;
     assert_eq!(status, StatusCode::CONFLICT, "{json}");
 }
+
+/// Key requesters are marked, given another contact address and unmarked on the customer's page by
+/// agents who manage customers; a departed requester is not marked. A reply on a ticket without a
+/// requester, by an agent who replies to requesters, goes to each key requester, and is refused
+/// when the customer has none.
+#[sqlx::test]
+async fn key_requesters_are_marked_and_written_to_through_the_api(db: PgPool) {
+    use crate::roles::Permission;
+    let manager = role_with(&db, "Manager", &[Permission::ManageCustomers]).await;
+    let manager = Client::with_role(&db, "mara@northgate.test", manager).await;
+    let replier = role_with(&db, "Replier", &[Permission::Reply]).await;
+    let replier = Client::with_role(&db, "remo@northgate.test", replier).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let harbor = testing::customer(&db, "Harbor Lane").await;
+    let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+    crate::requesters::add_address(&db, ada, "ada@home.test")
+        .await
+        .unwrap();
+    let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+    let gone = testing::requester(&db, brightfield, "rino@brightfield.test").await;
+    crate::requesters::depart(&db, gone).await.unwrap();
+    let n = testing::ticket(&db, brightfield, None, "alert@monitor.test").await;
+    let other = testing::ticket(&db, harbor, None, "alert2@monitor.test").await;
+    let key = |id: Uuid| format!("/api/requesters/{id}/key");
+    let at = |address: &str| Some(serde_json::json!({ "contact_address": address }));
+
+    let (status, _) = replier.call("PUT", &key(ada), at("ada@home.test")).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "marking needs managing customers"
+    );
+    for (id, address) in [
+        (ada, "ada@brightfield.test"),
+        (lena, "lena@brightfield.test"),
+    ] {
+        let (status, json) = manager.call("PUT", &key(id), at(address)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    }
+    let (status, json) = manager.call("PUT", &key(ada), at("ada@home.test")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    let (status, json) = manager
+        .call("PUT", &key(gone), at("rino@brightfield.test"))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "a departed requester: {json}");
+    let (status, _) = replier.call("DELETE", &key(lena), None).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "unmarking needs managing customers"
+    );
+    let (status, json) = manager.call("DELETE", &key(lena), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+
+    let page = manager.get(&format!("/api/customers/{brightfield}")).await;
+    let contacts: Vec<(String, Value)> = page["requester_list"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["id"].as_str().unwrap().to_owned(),
+                r["contact_address"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        contacts,
+        [
+            (ada.to_string(), Value::from("ada@home.test")),
+            (lena.to_string(), Value::Null),
+            (gone.to_string(), Value::Null)
+        ]
+    );
+
+    let ticket = replier.get(&format!("/api/tickets/{n}")).await;
+    assert_eq!(
+        ticket["key_requesters"][0]["contact_address"],
+        "ada@home.test"
+    );
+    let reply = Some(serde_json::json!({ "body": "We are on it." }));
+    let (status, json) = replier
+        .call("POST", &format!("/api/tickets/{n}/replies"), reply.clone())
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{json}");
+    let ticket = replier.get(&format!("/api/tickets/{n}")).await;
+    assert_eq!(ticket["requester"], Value::Null);
+    let to: Vec<&Value> = ticket["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["direction"] == "outbound")
+        .map(|e| &e["to_address"])
+        .collect();
+    assert_eq!(to, [&Value::from("ada@home.test")]);
+    let (status, json) = replier
+        .call("POST", &format!("/api/tickets/{other}/replies"), reply)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "nobody to reply to: {json}");
+}
