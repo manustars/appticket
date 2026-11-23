@@ -474,7 +474,9 @@ fn decide_ticket(
         Some(_) => {}
     }
 
-    // A draft only answers a requester who wrote last; an agent may already have replied.
+    // A draft only answers a requester who wrote last; an agent may already have replied. It is
+    // written in the requester's language, so a ticket without a requester gets none: its replies
+    // go to the customer's key requesters, whose language the Assistant does not know.
     let requester_wrote_last = ticket
         .timeline
         .iter()
