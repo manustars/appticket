@@ -1,8 +1,6 @@
 //! The part of the API add-ons call, with `Authorization: Bearer <token>`. Each operation needs
 //! a scope the add-on was registered with.
 
-use std::collections::HashMap;
-
 use axum::{
     Json,
     extract::{FromRequestParts, Path, Query, State},
@@ -17,6 +15,7 @@ use uuid::Uuid;
 use super::{ApiError, AppState, Problem};
 use crate::addons::{self, Caller, DIRECTORY_READ, PROPOSALS_WRITE, TICKETS_READ};
 use crate::catalog::Asset;
+use crate::external_references::{self, NameInSystem};
 use crate::proposals::{self, Content, Target};
 use crate::tickets::{self, Priority, TicketDetail, TicketState};
 
@@ -106,14 +105,7 @@ pub struct AddonCustomer {
     /// The names other systems use for the customer, by system and name. A name names exactly
     /// one customer within its system; systems and names are compared ignoring case.
     #[sqlx(skip)]
-    external_references: Vec<AddonExternalReference>,
-}
-
-/// A name another system uses for a customer, such as a group in a monitoring tool.
-#[derive(Serialize, ToSchema)]
-pub struct AddonExternalReference {
-    system: String,
-    name: String,
+    external_references: Vec<NameInSystem>,
 }
 
 /// Customers that can get tickets, with their mail domains and external references. Scope
@@ -135,17 +127,9 @@ async fn customers(
     .fetch_all(&state.db)
     .await?;
     // Only the references of the customers listed: the add-on sees nothing of the others.
-    let at: HashMap<Uuid, usize> = customers
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.id, i))
-        .collect();
-    for (customer, system, name) in crate::external_references::all(&state.db).await? {
-        if let Some(&i) = at.get(&customer) {
-            customers[i]
-                .external_references
-                .push(AddonExternalReference { system, name });
-        }
+    let mut references = external_references::by_customer(&state.db).await?;
+    for customer in &mut customers {
+        customer.external_references = references.remove(&customer.id).unwrap_or_default();
     }
     Ok(Json(customers))
 }

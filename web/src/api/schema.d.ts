@@ -644,6 +644,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/external-references/systems": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The systems external references are in, across all customers: one spelling per system,
+         *     ignoring case, offered so that a system is spelled alike everywhere.
+         */
+        get: operations["external_systems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/external-references/{id}": {
         parameters: {
             query?: never;
@@ -1307,16 +1327,11 @@ export interface components {
              * @description The names other systems use for the customer, by system and name. A name names exactly
              *     one customer within its system; systems and names are compared ignoring case.
              */
-            external_references: components["schemas"]["AddonExternalReference"][];
+            external_references: components["schemas"]["NameInSystem"][];
             /** Format: uuid */
             id: string;
             is_help_desk: boolean;
             name: string;
-        };
-        /** @description A name another system uses for a customer, such as a group in a monitoring tool. */
-        AddonExternalReference: {
-            name: string;
-            system: string;
         };
         AddonIdentity: {
             /** @description The languages of the agents' UI: write each rationale in all of them. */
@@ -1695,6 +1710,11 @@ export interface components {
              * @description How many asset and service links were removed because they did not fit the new customer.
              */
             unlinked: number;
+        };
+        /** @description An external reference as add-ons read it: a name in a system, without the core's id. */
+        NameInSystem: {
+            name: string;
+            system: string;
         };
         NewAddress: {
             address: string;
@@ -3943,6 +3963,33 @@ export interface operations {
                 };
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    external_systems: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
