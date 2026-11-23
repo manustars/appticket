@@ -19,6 +19,7 @@ mod error;
 mod external_references;
 mod http;
 mod imap;
+mod key_requesters;
 mod mail;
 mod mail_status;
 mod outbound;

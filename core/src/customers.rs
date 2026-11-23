@@ -58,6 +58,9 @@ pub struct RequesterEntry {
     pub site_id: Option<Uuid>,
     /// The requester has left the customer.
     pub departed: bool,
+    /// Set while the requester is one of the customer's key requesters: the address the replies
+    /// on its tickets without a requester, and the messages about failures that affect it, go to.
+    pub contact_address: Option<String>,
 }
 
 /// Customer summaries: all of them (offboarded ones last), or only `$1` when it is not null.
@@ -96,7 +99,9 @@ pub async fn detail(db: &PgPool, id: Uuid) -> Result<CustomerDetail> {
         "SELECT r.id, r.name, r.site_id, r.departed_at IS NOT NULL AS departed,
                 coalesce((SELECT array_agg(a.address ORDER BY a.created_at, a.address)
                  FROM requester_addresses a WHERE a.requester_id = r.id), '{}') AS addresses,
-                (SELECT count(*) FROM tickets t WHERE t.requester_id = r.id) AS tickets
+                (SELECT count(*) FROM tickets t WHERE t.requester_id = r.id) AS tickets,
+                (SELECT k.contact_address FROM key_requesters k WHERE k.requester_id = r.id)
+                    AS contact_address
          FROM requesters r WHERE r.customer_id = $1
          ORDER BY r.departed_at IS NOT NULL, requester_first_address(r.id), r.name, r.id",
     )

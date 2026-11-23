@@ -180,7 +180,8 @@ pub async fn add_address(db: &PgPool, requester: Uuid, address: &str) -> Result<
     Ok(())
 }
 
-/// Takes an address from the requester, who keeps at least one.
+/// Takes an address from the requester, who keeps at least one. A key requester's contact address
+/// stays until an agent picks another.
 pub async fn remove_address(db: &PgPool, requester: Uuid, address: &str) -> Result<()> {
     let address = address.trim().to_lowercase();
     let mut tx = db.begin().await?;
@@ -191,6 +192,18 @@ pub async fn remove_address(db: &PgPool, requester: Uuid, address: &str) -> Resu
     }
     if addresses.len() == 1 {
         return rule("a requester keeps at least one address");
+    }
+    let contact: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM key_requesters WHERE requester_id = $1 AND contact_address = $2)",
+    )
+    .bind(requester)
+    .bind(&address)
+    .fetch_one(&mut *tx)
+    .await?;
+    if contact {
+        return rule(format!(
+            "{address} is the requester's contact address as a key requester: pick another on the customer's page first"
+        ));
     }
     sqlx::query("DELETE FROM requester_addresses WHERE address = $1")
         .bind(&address)
@@ -301,10 +314,12 @@ pub async fn detail(db: &PgPool, id: Uuid) -> Result<RequesterDetail> {
     })
 }
 
-/// Marks a requester departed: they left their customer. Their history stays.
+/// Marks a requester departed: they left their customer. Their history stays, and they stop being
+/// a key requester.
 pub async fn depart(db: &PgPool, id: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
     lock_with_customer(&mut tx, id).await?;
+    crate::key_requesters::unmark_in(&mut tx, id).await?;
     let left = sqlx::query(
         "UPDATE requesters SET departed_at = now() WHERE id = $1 AND departed_at IS NULL",
     )
@@ -346,7 +361,8 @@ pub async fn bring_back(db: &PgPool, id: Uuid) -> Result<()> {
 
 /// Merges `merged` into `kept`: two requesters of the same customer who are one person. The
 /// addresses and tickets of `merged` pass to `kept`, which remains, and `merged` is removed; the
-/// details `kept` lacks are taken from `merged`, so that nothing about the person is lost. A merge
+/// details `kept` lacks are taken from `merged`, so that nothing about the person is lost, and
+/// `kept` is a key requester when either was, written to where `merged` was if not already. A merge
 /// cannot be undone. Requesters of different customers are never merged, nor those of an
 /// offboarded customer. `merged` may have departed; `kept` may not, since tickets are not given to
 /// a departed requester.
@@ -412,6 +428,9 @@ pub async fn merge(db: &PgPool, kept: Uuid, merged: Uuid) -> Result<()> {
     .bind(merged)
     .execute(&mut *tx)
     .await?;
+    // A key requester merged away leaves `kept` one, written to at the same address, which passes
+    // to `kept` below; a key requester that remains keeps their own contact address.
+    let contact = crate::key_requesters::unmark_in(&mut tx, merged).await?;
     // Passed addresses count as newly registered, in their order, so the first address of `kept`
     // stays first.
     sqlx::query(
@@ -424,6 +443,17 @@ pub async fn merge(db: &PgPool, kept: Uuid, merged: Uuid) -> Result<()> {
     .bind(merged)
     .execute(&mut *tx)
     .await?;
+    if let Some(contact) = contact {
+        sqlx::query(
+            "INSERT INTO key_requesters (requester_id, customer_id, contact_address)
+             VALUES ($1, $2, $3) ON CONFLICT (requester_id) DO NOTHING",
+        )
+        .bind(kept)
+        .bind(customer)
+        .bind(contact)
+        .execute(&mut *tx)
+        .await?;
+    }
     sqlx::query("UPDATE tickets SET requester_id = $1, updated_at = now() WHERE requester_id = $2")
         .bind(kept)
         .bind(merged)
@@ -485,7 +515,8 @@ pub(crate) async fn lock_for_move(
 
 /// Moves a requester identified with the wrong customer to `customer`, with all of their tickets,
 /// closed ones included; links that do not fit the new customer are removed. Their site is one of
-/// the old customer's, so they leave it. Called with [`lock_for_move`] held. A parent ticket stays
+/// the old customer's, so they leave it, and they stop being a key requester. Called with
+/// [`lock_for_move`] held. A parent ticket stays
 /// with the help desk's own organization, so a requester of one does not move.
 pub(crate) async fn move_requester(
     tx: &mut Transaction<'_, Postgres>,
@@ -505,6 +536,7 @@ pub(crate) async fn move_requester(
         return rule("a parent ticket stays with the help desk's own organization");
     }
     let unlinked = crate::catalog::unlink_for_move(tx, &tickets, customer).await?;
+    crate::key_requesters::unmark_in(tx, requester).await?;
     // The foreign key cascades the new customer to every ticket of the requester.
     sqlx::query("UPDATE requesters SET customer_id = $2, site_id = NULL WHERE id = $1")
         .bind(requester)
@@ -616,7 +648,10 @@ pub async fn update(db: &PgPool, id: Uuid, details: &RequesterDetails) -> Result
 
 /// Locks the requester's customer, which must not be offboarded, then the requester, for any
 /// change to the requester; retiring a site locks the customer first too. Returns the customer.
-async fn lock_with_customer(tx: &mut Transaction<'_, Postgres>, requester: Uuid) -> Result<Uuid> {
+pub(crate) async fn lock_with_customer(
+    tx: &mut Transaction<'_, Postgres>,
+    requester: Uuid,
+) -> Result<Uuid> {
     let customer: Uuid = sqlx::query_scalar("SELECT customer_id FROM requesters WHERE id = $1")
         .bind(requester)
         .fetch_optional(&mut **tx)
