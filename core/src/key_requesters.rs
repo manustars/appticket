@@ -31,6 +31,54 @@ pub async fn of_customer<'e>(db: impl PgExecutor<'e>, customer: Uuid) -> Result<
     .await?)
 }
 
+/// The key requesters of `customers`, each with their customer, locked until the transaction ends
+/// so that none is unmarked or written to elsewhere meanwhile. Key requesters are locked after
+/// customers and requesters and before tickets.
+pub(crate) async fn locked_of_customers(
+    tx: &mut Transaction<'_, Postgres>,
+    customers: &[Uuid],
+) -> Result<Vec<(Uuid, KeyRequester)>> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        customer_id: Uuid,
+        #[sqlx(flatten)]
+        key: KeyRequester,
+    }
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT k.customer_id, r.id, r.name, k.contact_address
+         FROM key_requesters k JOIN requesters r ON r.id = k.requester_id
+         WHERE k.customer_id = ANY($1)
+         ORDER BY k.requester_id
+         FOR SHARE OF k",
+    )
+    .bind(customers)
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut keys: Vec<(Uuid, KeyRequester)> =
+        rows.into_iter().map(|r| (r.customer_id, r.key)).collect();
+    keys.sort_by(|a, b| a.1.contact_address.cmp(&b.1.contact_address));
+    Ok(keys)
+}
+
+/// Who a reply on a ticket of `customer` without a requester goes to: its key requesters, locked
+/// as [`locked_of_customers`] does. With none, there is nobody to reply to and it is refused.
+pub(crate) async fn to_reply_to(
+    tx: &mut Transaction<'_, Postgres>,
+    customer: Uuid,
+) -> Result<Vec<KeyRequester>> {
+    let keys: Vec<KeyRequester> = locked_of_customers(tx, &[customer])
+        .await?
+        .into_iter()
+        .map(|(_, key)| key)
+        .collect();
+    if keys.is_empty() {
+        return rule(
+            "the ticket has no requester and its customer has no key requesters: there is nobody to reply to",
+        );
+    }
+    Ok(keys)
+}
+
 /// Makes the requester a key requester of their customer, written to at `contact_address`, one
 /// of their addresses; for a key requester already, it changes their contact address. Without
 /// one, a requester with a single address is written to there, and a key requester keeps theirs.
@@ -232,6 +280,28 @@ mod tests {
         let mut expected = [(ada, None), (lena, None)];
         expected.sort();
         assert_eq!(at_harbor, expected);
+    }
+
+    /// While a reply is being written to a customer's key requesters, they stay key requesters:
+    /// unmarking one waits until the reply is queued.
+    #[sqlx::test]
+    async fn key_requesters_being_written_to_are_not_unmarked_meanwhile(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        mark(&db, lena, None).await.unwrap();
+
+        let mut writing = db.begin().await.unwrap();
+        let keys = to_reply_to(&mut writing, brightfield).await.unwrap();
+        assert_eq!(keys[0].contact_address, "lena@brightfield.test");
+        let unmarking = tokio::spawn({
+            let db = db.clone();
+            async move { unmark(&db, lena).await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(!unmarking.is_finished(), "unmarked while being written to");
+        writing.commit().await.unwrap();
+        unmarking.await.unwrap().unwrap();
+        assert_eq!(contacts(&db, brightfield).await, [(lena, None)]);
     }
 
     /// Merging a key requester into another leaves the one that remains a key requester: written

@@ -159,41 +159,72 @@ pub async fn reply(
         return rule("a reply cannot be empty");
     }
     let mut tx = db.begin().await?;
-    let (ticket_id, state) = lock(&mut tx, number).await?;
+    // Read before any lock: the key requesters are locked before the ticket.
+    let read: Option<(Uuid, Option<Uuid>, TicketState)> =
+        sqlx::query_as("SELECT customer_id, requester_id, state FROM tickets WHERE number = $1")
+            .bind(number)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let (customer, requester, state) = read.ok_or(Error::NotFound("ticket"))?;
     not_closed(state)?;
-    let customer: Uuid = sqlx::query_scalar("SELECT customer_id FROM tickets WHERE id = $1")
-        .bind(ticket_id)
-        .fetch_one(&mut *tx)
-        .await?;
-    let recipients = match crate::requesters::recipient(&mut tx, ticket_id).await? {
-        Some(recipient) => vec![recipient.choose(to)?],
+    let keys = match requester {
+        Some(_) => None,
         None => {
             if to.is_some_and(|to| !to.trim().is_empty()) {
                 return rule(
                     "the ticket has no requester: the reply goes to every key requester of its customer, and no address is picked",
                 );
             }
-            let keys = crate::key_requesters::of_customer(&mut *tx, customer).await?;
-            if keys.is_empty() {
-                return rule(
-                    "the ticket has no requester and its customer has no key requesters: there is nobody to reply to",
-                );
-            }
-            keys.into_iter().map(|key| key.contact_address).collect()
+            Some(crate::key_requesters::to_reply_to(&mut tx, customer).await?)
         }
     };
-    let outgoing = Outgoing::on(&mut tx, ticket_id, author, body).await?;
+    let (ticket_id, state) = lock(&mut tx, number).await?;
+    not_closed(state)?;
+    let now: (Uuid, Option<Uuid>) =
+        sqlx::query_as("SELECT customer_id, requester_id FROM tickets WHERE id = $1")
+            .bind(ticket_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if now != (customer, requester) {
+        return rule("the ticket has just changed; reload and try again");
+    }
+    let recipients = match keys {
+        Some(keys) => keys.into_iter().map(|key| key.contact_address).collect(),
+        None => {
+            let recipient = crate::requesters::recipient(&mut tx, ticket_id)
+                .await?
+                .ok_or(Error::NotFound("requester"))?;
+            vec![recipient.choose(to)?]
+        }
+    };
+    let queued = send(&mut tx, sender, ticket_id, author, body, &recipients, then).await?;
+    tx.commit().await?;
+    Ok(queued)
+}
+
+/// Queues `body` on the ticket to each of `recipients`, in a message of their own threaded with
+/// the conversation, moves the ticket to `then` and clears the author's draft there. Returns the
+/// queued messages.
+pub(crate) async fn send(
+    tx: &mut Transaction<'_, Postgres>,
+    sender: &Sender,
+    ticket: Uuid,
+    author: Uuid,
+    body: &str,
+    recipients: &[String],
+    then: TicketState,
+) -> Result<Vec<Uuid>> {
+    let outgoing = Outgoing::on(tx, ticket, author, body).await?;
     let mut queued = Vec::new();
-    for to in &recipients {
-        queued.push(outgoing.queue(&mut tx, sender, to).await?);
+    for to in recipients {
+        queued.push(outgoing.queue(tx, sender, to).await?);
     }
     sqlx::query("UPDATE tickets SET state = $2, updated_at = now() WHERE id = $1")
-        .bind(ticket_id)
+        .bind(ticket)
         .bind(then)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    crate::drafts::clear(&mut tx, ticket_id, author).await?;
-    tx.commit().await?;
+    crate::drafts::clear(tx, ticket, author).await?;
     Ok(queued)
 }
 
@@ -246,7 +277,10 @@ impl<'a> Outgoing<'a> {
         })
     }
 
-    /// Puts the message to `to` in the outbox, as a message of its own; returns its id.
+    /// Puts the message to `to` in the outbox, as a message of its own; returns its id. The
+    /// database refuses a recipient who is neither the ticket's requester nor a key requester of
+    /// its customer at their contact address; one who just stopped being either is a change the
+    /// agent reloads for.
     pub(crate) async fn queue(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -254,7 +288,7 @@ impl<'a> Outgoing<'a> {
         to: &str,
     ) -> Result<Uuid> {
         let id = Uuid::new_v4();
-        sqlx::query(
+        let queued = sqlx::query(
             "INSERT INTO messages (id, ticket_id, direction, rfc_message_id, in_reply_to,
                                    \"references\", from_address, from_name, to_address, author_id,
                                    subject, body_text)
@@ -272,8 +306,19 @@ impl<'a> Outgoing<'a> {
         .bind(&self.subject)
         .bind(self.body)
         .execute(&mut **tx)
-        .await?;
-        Ok(id)
+        .await;
+        match queued {
+            Err(sqlx::Error::Database(e))
+                if e.message()
+                    .contains("a message goes to the ticket's requester or to a key requester") =>
+            {
+                rule(format!(
+                    "{to} is no longer the ticket's requester or a key requester of its customer; reload and try again"
+                ))
+            }
+            Err(e) => Err(e.into()),
+            Ok(_) => Ok(id),
+        }
     }
 }
 
@@ -473,8 +518,10 @@ pub struct TicketDetail {
     pub customer: TicketCustomer,
     pub requester: Option<Requester>,
     /// The key requesters of the ticket's customer. Without a requester, a reply on the ticket goes
-    /// to each of them, at their contact address; with none either, it cannot be replied to.
-    pub key_requesters: Vec<crate::key_requesters::KeyRequester>,
+    /// to each of them, at their contact address; with none either, it cannot be replied to. Given
+    /// to agents only: add-ons never get it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_requesters: Option<Vec<crate::key_requesters::KeyRequester>>,
     pub assignee: Option<Party>,
     /// Assets of the ticket's customer the ticket is about.
     pub assets: Vec<crate::catalog::LinkedAsset>,
@@ -679,7 +726,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
                 ticket_count: row.requester_tickets.unwrap_or(1),
                 departed: row.requester_departed.unwrap_or(false),
             }),
-        key_requesters,
+        key_requesters: Some(key_requesters),
         assignee: row.assignee_id.map(|id| Party {
             id,
             name: row.assignee_name.unwrap_or_default(),
@@ -1035,6 +1082,31 @@ mod tests {
             add_note(&db, n, a, "   ").await,
             Err(Error::Rule(_))
         ));
+    }
+
+    /// A key requester unmarked after the recipients were read, by code that does not hold their
+    /// lock, is refused as a change to reload, not as a failure of the help desk.
+    #[sqlx::test]
+    async fn a_recipient_who_stopped_being_key_is_a_conflict(db: PgPool) {
+        let c = testing::customer(&db, "Brightfield").await;
+        let lena = testing::requester(&db, c, "lena@brightfield.test").await;
+        crate::key_requesters::mark(&db, lena, None).await.unwrap();
+        let a = testing::agent(&db, "marco@northgate.test").await;
+        let n = testing::ticket(&db, c, None, "n1@brightfield.test").await;
+
+        let mut tx = db.begin().await.unwrap();
+        let (ticket, _) = lock(&mut tx, n).await.unwrap();
+        let outgoing = Outgoing::on(&mut tx, ticket, a, "We are on it.")
+            .await
+            .unwrap();
+        crate::key_requesters::unmark(&db, lena).await.unwrap();
+        let Err(Error::Rule(why)) = outgoing
+            .queue(&mut tx, &sender(), "lena@brightfield.test")
+            .await
+        else {
+            panic!("queued to someone who is no longer a key requester");
+        };
+        assert!(why.contains("reload"), "{why}");
     }
 
     /// The database sends a message on a ticket only to its requester or to a key requester of its

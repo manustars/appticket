@@ -314,7 +314,7 @@ async fn move_requester(
 }
 
 #[derive(Deserialize, ToSchema)]
-pub struct KeyRequesterContact {
+pub struct KeyRequesterMark {
     /// One of the requester's addresses, where the messages for key requesters go. It can be
     /// left out for a requester with one address, and for a key requester, who keeps theirs.
     #[serde(default)]
@@ -324,17 +324,17 @@ pub struct KeyRequesterContact {
 /// Makes the requester a key requester of their customer, written to at their contact address;
 /// for a key requester, it changes the contact address. A departed requester cannot be one.
 #[utoipa::path(put, path = "/api/requesters/{id}/key", tag = "customers",
-    params(("id" = Uuid, Path, description = "The requester")), request_body = KeyRequesterContact,
+    params(("id" = Uuid, Path, description = "The requester")), request_body = KeyRequesterMark,
     responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn mark_key_requester(
     State(state): State<AppState>,
     agent: SignedIn,
     Path(id): Path<Uuid>,
-    Json(contact): Json<KeyRequesterContact>,
+    Json(mark): Json<KeyRequesterMark>,
 ) -> Result<StatusCode, ApiError> {
     agent.grant.require(Permission::ManageCustomers)?;
-    key_requesters::mark(&state.db, id, contact.contact_address.as_deref()).await?;
+    key_requesters::mark(&state.db, id, mark.contact_address.as_deref()).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

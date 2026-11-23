@@ -304,7 +304,7 @@ function Children({ ticket, onChanged, onSignedOut }: Props) {
       )}
       {done && (
         <p className="done" role="status">
-          {t('parent.resolved', { count: done.resolved })} {t('parent.replied', { count: done.replied })}
+          {t('parent.resolved', { count: done.resolved })} {t('parent.writtenTo', { count: done.people_written_to })}
         </p>
       )}
       {pending > 0 && !open && (

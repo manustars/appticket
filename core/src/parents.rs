@@ -1,7 +1,7 @@
 //! Parent and child tickets: one failure that affects several customers is tracked by a parent
 //! ticket of the help desk's own organization, and each customer's ticket about it is a child.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -127,9 +127,44 @@ pub async fn related(
 pub struct ResolvedChildren {
     /// Children moved to resolved.
     pub resolved: i64,
-    /// Messages queued: one to each person written to, the children's requesters and the key
-    /// requesters of the children's customers.
-    pub replied: i64,
+    /// How many people the message was queued to, one message each: the children's requesters and
+    /// the key requesters of the children's customers.
+    pub people_written_to: i64,
+}
+
+/// A child being resolved.
+#[derive(Debug, PartialEq, Eq, sqlx::FromRow)]
+struct Child {
+    number: i64,
+    id: Uuid,
+    customer_id: Uuid,
+    requester_id: Option<Uuid>,
+}
+
+/// The parent's children that are open or waiting, by number; locked when `lock` is set.
+async fn open_children(
+    tx: &mut Transaction<'_, Postgres>,
+    parent: i64,
+    lock: bool,
+) -> Result<Vec<Child>> {
+    let sql = if lock {
+        "SELECT t.number, t.id, t.customer_id, t.requester_id
+         FROM tickets t
+         JOIN tickets p ON p.id = t.parent_id
+         WHERE p.number = $1 AND t.state IN ('open', 'waiting')
+         ORDER BY t.number
+         FOR UPDATE OF t"
+    } else {
+        "SELECT t.number, t.id, t.customer_id, t.requester_id
+         FROM tickets t
+         JOIN tickets p ON p.id = t.parent_id
+         WHERE p.number = $1 AND t.state IN ('open', 'waiting')
+         ORDER BY t.number"
+    };
+    Ok(sqlx::query_as(sql)
+        .bind(parent)
+        .fetch_all(&mut **tx)
+        .await?)
 }
 
 /// Resolves every child that is still open or waiting, sending `body` to each child's requester
@@ -150,19 +185,18 @@ pub async fn resolve_children(
         return rule("the message to the requesters cannot be empty");
     }
     let mut tx = db.begin().await?;
-    let children: Vec<(i64, Uuid, Uuid, Option<Uuid>)> = sqlx::query_as(
-        "SELECT t.number, t.id, t.customer_id, t.requester_id
-         FROM tickets t
-         JOIN tickets p ON p.id = t.parent_id
-         WHERE p.number = $1 AND t.state IN ('open', 'waiting')
-         ORDER BY t.number
-         FOR UPDATE OF t",
-    )
-    .bind(parent)
-    .fetch_all(&mut *tx)
-    .await?;
+    // Read before any lock: the key requesters of the children's customers are locked before the
+    // children, and the children must not change in between.
+    let children = open_children(&mut tx, parent, false).await?;
     if children.is_empty() {
         return rule("the ticket has no open or waiting children");
+    }
+    let mut customers: Vec<Uuid> = children.iter().map(|c| c.customer_id).collect();
+    let mut seen = HashSet::new();
+    customers.retain(|c| seen.insert(*c));
+    let keys = crate::key_requesters::locked_of_customers(&mut tx, &customers).await?;
+    if open_children(&mut tx, parent, true).await? != children {
+        return rule("the children have just changed; reload and try again");
     }
 
     // Who is written to, and on which child.
@@ -172,12 +206,14 @@ pub async fn resolve_children(
     // reply there went. A requester with several addresses and neither on all their children needs
     // an agent to pick one: refuse before changing anything.
     let mut undecided: BTreeMap<Uuid, Vec<i64>> = BTreeMap::new();
-    for (number, id, _, requester) in &children {
-        let Some(requester) = requester else { continue };
-        if written.contains(requester) {
+    for child in &children {
+        let Some(requester) = child.requester_id else {
+            continue;
+        };
+        if written.contains(&requester) {
             continue;
         }
-        let Some(recipient) = crate::requesters::recipient(&mut tx, *id).await? else {
+        let Some(recipient) = crate::requesters::recipient(&mut tx, child.id).await? else {
             continue;
         };
         if recipient.addresses.is_empty() {
@@ -185,11 +221,11 @@ pub async fn resolve_children(
         }
         match recipient.choose(None) {
             Ok(to) => {
-                written.insert(*requester);
-                undecided.remove(requester);
-                messages.push((*id, to));
+                written.insert(requester);
+                undecided.remove(&requester);
+                messages.push((child.id, to));
             }
-            Err(_) => undecided.entry(*requester).or_default().push(*number),
+            Err(_) => undecided.entry(requester).or_default().push(child.number),
         }
     }
     if !undecided.is_empty() {
@@ -203,47 +239,52 @@ pub async fn resolve_children(
             numbers.join(", ")
         ));
     }
-    let mut customers: Vec<Uuid> = children.iter().map(|(_, _, c, _)| *c).collect();
-    let mut seen = HashSet::new();
-    customers.retain(|c| seen.insert(*c));
     for customer in customers {
         let on = children
             .iter()
-            .filter(|(_, _, c, _)| *c == customer)
-            .min_by_key(|(number, _, _, requester)| (requester.is_some(), *number))
-            .map(|(_, id, _, _)| *id)
+            .filter(|c| c.customer_id == customer)
+            .min_by_key(|c| (c.requester_id.is_some(), c.number))
+            .map(|c| c.id)
             .expect("a child of the customer");
-        for key in crate::key_requesters::of_customer(&mut *tx, customer).await? {
+        for (_, key) in keys.iter().filter(|(c, _)| *c == customer) {
             if written.insert(key.id) {
-                messages.push((on, key.contact_address));
+                messages.push((on, key.contact_address.clone()));
             }
         }
     }
 
-    // Each message threads with its child's conversation as it was before any of them.
-    let mut outgoing = HashMap::new();
-    for (ticket, _) in &messages {
-        if !outgoing.contains_key(ticket) {
-            let message = tickets::Outgoing::on(&mut tx, *ticket, author, body).await?;
-            outgoing.insert(*ticket, message);
+    // The children written on, in order, each with its recipients.
+    let mut on_child: Vec<(Uuid, Vec<String>)> = Vec::new();
+    for (ticket, to) in &messages {
+        match on_child.iter_mut().find(|(t, _)| t == ticket) {
+            Some((_, recipients)) => recipients.push(to.clone()),
+            None => on_child.push((*ticket, vec![to.clone()])),
         }
     }
-    for (ticket, to) in &messages {
-        outgoing[ticket].queue(&mut tx, sender, to).await?;
-    }
-    for ticket in outgoing.keys() {
-        crate::drafts::clear(&mut tx, *ticket, author).await?;
-    }
-    let ids: Vec<Uuid> = children.iter().map(|(_, id, _, _)| *id).collect();
-    sqlx::query("UPDATE tickets SET state = $2, updated_at = now() WHERE id = ANY($1)")
-        .bind(&ids)
-        .bind(TicketState::Resolved)
-        .execute(&mut *tx)
+    for (ticket, recipients) in &on_child {
+        tickets::send(
+            &mut tx,
+            sender,
+            *ticket,
+            author,
+            body,
+            recipients,
+            TicketState::Resolved,
+        )
         .await?;
+    }
+    let ids: Vec<Uuid> = children.iter().map(|c| c.id).collect();
+    sqlx::query(
+        "UPDATE tickets SET state = $2, updated_at = now() WHERE id = ANY($1) AND state <> $2",
+    )
+    .bind(&ids)
+    .bind(TicketState::Resolved)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(ResolvedChildren {
         resolved: children.len() as i64,
-        replied: messages.len() as i64,
+        people_written_to: messages.len() as i64,
     })
 }
 
@@ -322,7 +363,7 @@ mod tests {
         let done = resolve_children(&db, &testing::sender(), outage, agent, "Mail works again.")
             .await
             .unwrap();
-        assert_eq!((done.resolved, done.replied), (3, 2));
+        assert_eq!((done.resolved, done.people_written_to), (3, 2));
         for child in [a, b, c] {
             assert_eq!(testing::state(&db, child).await, "resolved");
         }
@@ -392,7 +433,7 @@ mod tests {
         let done = resolve_children(&db, &testing::sender(), outage, agent, "Mail works again.")
             .await
             .unwrap();
-        assert_eq!((done.resolved, done.replied), (5, 4));
+        assert_eq!((done.resolved, done.people_written_to), (5, 4));
         assert_eq!(
             sent(&db, &children).await,
             [
@@ -428,7 +469,7 @@ mod tests {
         let done = resolve_children(&db, &testing::sender(), outage, agent, "Fixed.")
             .await
             .unwrap();
-        assert_eq!((done.resolved, done.replied), (1, 0));
+        assert_eq!((done.resolved, done.people_written_to), (1, 0));
         assert_eq!(testing::state(&db, child).await, "resolved");
     }
 

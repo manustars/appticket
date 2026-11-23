@@ -51,9 +51,10 @@ CREATE TRIGGER departed_requesters_are_not_key
     WHEN (NEW.departed_at IS NOT NULL)
     EXECUTE FUNCTION key_requesters_are_present();
 
--- A message the help desk sends on a ticket goes to one person (docs/domain-rules.md, "Tickets"):
--- the ticket's requester, at one of their addresses, or a key requester of the ticket's customer,
--- at their contact address. A ticket with neither gets no message.
+-- Each message the help desk sends on a ticket has one recipient, never shared between people: the
+-- ticket's requester, at one of their addresses, or a key requester of the ticket's customer, at
+-- their contact address (who replies and resolved children go to: docs/domain-rules.md, "Tickets").
+-- A ticket with neither gets no message.
 CREATE FUNCTION messages_go_to_the_requester_or_key_requesters() RETURNS trigger
     LANGUAGE plpgsql AS $$
 BEGIN

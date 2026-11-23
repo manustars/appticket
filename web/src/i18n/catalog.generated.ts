@@ -128,6 +128,7 @@ export interface Messages {
   "entry.retrying": { plural: false; placeholders: "error"; tags: never }
   "composer.modes": { plural: false; placeholders: never; tags: never }
   "composer.reply": { plural: false; placeholders: never; tags: never }
+  "composer.replyKeyRequesters": { plural: false; placeholders: never; tags: never }
   "composer.note": { plural: false; placeholders: never; tags: never }
   "composer.hintReply": { plural: false; placeholders: "email"; tags: "strong" }
   "composer.hintReplyWroteFrom": { plural: false; placeholders: "email"; tags: "strong" }
@@ -137,8 +138,10 @@ export interface Messages {
   "composer.hintNote": { plural: false; placeholders: never; tags: "strong" }
   "composer.hintNoRequester": { plural: false; placeholders: never; tags: never }
   "composer.replyLabel": { plural: false; placeholders: never; tags: never }
+  "composer.replyKeyRequestersLabel": { plural: false; placeholders: never; tags: never }
   "composer.noteLabel": { plural: false; placeholders: never; tags: never }
   "composer.replyPlaceholder": { plural: false; placeholders: never; tags: never }
+  "composer.replyKeyRequestersPlaceholder": { plural: false; placeholders: never; tags: never }
   "composer.notePlaceholder": { plural: false; placeholders: never; tags: never }
   "composer.then": { plural: false; placeholders: never; tags: never }
   "composer.to": { plural: false; placeholders: never; tags: never }
@@ -189,7 +192,7 @@ export interface Messages {
   "parent.resolveHint": { plural: true; placeholders: "count"; tags: never }
   "parent.confirmResolve": { plural: true; placeholders: "count" | "number"; tags: never }
   "parent.resolved": { plural: true; placeholders: "count"; tags: never }
-  "parent.replied": { plural: true; placeholders: "count"; tags: never }
+  "parent.writtenTo": { plural: true; placeholders: "count"; tags: never }
   "customers.title": { plural: false; placeholders: never; tags: never }
   "customers.name": { plural: false; placeholders: never; tags: never }
   "customers.domains": { plural: false; placeholders: never; tags: never }

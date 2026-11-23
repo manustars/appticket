@@ -212,7 +212,8 @@ async fn open_tickets(
     ))
 }
 
-/// A ticket with its messages and links, without internal notes. Scope `tickets:read`.
+/// A ticket with its messages and links, without internal notes and without its customer's key
+/// requesters. Scope `tickets:read`.
 #[utoipa::path(get, path = "/api/addon/tickets/{number}", tag = "add-ons",
     params(("number" = i64, Path, description = "The ticket's number")),
     responses((status = OK, body = TicketDetail), (status = NOT_FOUND, body = Problem),
@@ -228,6 +229,8 @@ async fn ticket(
     detail
         .timeline
         .retain(|entry| !matches!(entry, tickets::TimelineEntry::Note(_)));
+    // Nor the customer's key requesters and where they are written to: no add-on needs them.
+    detail.key_requesters = None;
     Ok(Json(detail))
 }
 

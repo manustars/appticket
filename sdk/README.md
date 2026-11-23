@@ -91,11 +91,6 @@ written on it; `last_picked` is then the address an agent picked for the last re
 `email`, there and in `requester_email` of the ticket lists, is the address a reply goes to:
 `reply_to` when there is one, else `last_picked`, else the first address.
 
-A ticket's `key_requesters` are the key requesters of its customer, each with the
-`contact_address` they are written to at. On a ticket without a requester, a reply goes to each of
-them in a message of its own, so the ticket's outbound messages can have different `to_address`es;
-a ticket with neither a requester nor key requesters cannot be replied to.
-
 A customer's `external_references` are the names other systems use for it, each a `system` and a
 `name` in it, such as a group in a monitoring tool: `[{"system": "Watchtower", "name":
 "Brightfield/Offices"}]`. A customer can have several in the same system, and a name names exactly

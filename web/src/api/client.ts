@@ -377,7 +377,7 @@ export async function removeRequesterAddress(id: string, address: string): Promi
  * departed requester.
  */
 export async function markKeyRequester(id: string, contactAddress: string): Promise<void> {
-  const request: Schemas['KeyRequesterContact'] = { contact_address: contactAddress }
+  const request: Schemas['KeyRequesterMark'] = { contact_address: contactAddress }
   await call('PUT', `${requesterPath(id)}/key`, request)
 }
 

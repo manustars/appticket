@@ -290,7 +290,7 @@
         "tags": [
           "add-ons"
         ],
-        "summary": "A ticket with its messages and links, without internal notes. Scope `tickets:read`.",
+        "summary": "A ticket with its messages and links, without internal notes and without its customer's key\nrequesters. Scope `tickets:read`.",
         "operationId": "ticket",
         "parameters": [
           {
@@ -3040,7 +3040,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/KeyRequesterContact"
+                "$ref": "#/components/schemas/KeyRequesterMark"
               }
             }
           },
@@ -6222,7 +6222,7 @@
           }
         }
       },
-      "KeyRequesterContact": {
+      "KeyRequesterMark": {
         "type": "object",
         "properties": {
           "contact_address": {
@@ -7274,13 +7274,13 @@
         "description": "What resolving the children did.",
         "required": [
           "resolved",
-          "replied"
+          "people_written_to"
         ],
         "properties": {
-          "replied": {
+          "people_written_to": {
             "type": "integer",
             "format": "int64",
-            "description": "Messages queued: one to each person written to, the children's requesters and the key\nrequesters of the children's customers."
+            "description": "How many people the message was queued to, one message each: the children's requesters and\nthe key requesters of the children's customers."
           },
           "resolved": {
             "type": "integer",
@@ -7551,7 +7551,6 @@
           "state",
           "priority",
           "customer",
-          "key_requesters",
           "assets",
           "services",
           "children",
@@ -7597,11 +7596,14 @@
             "format": "uuid"
           },
           "key_requesters": {
-            "type": "array",
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "$ref": "#/components/schemas/KeyRequester"
             },
-            "description": "The key requesters of the ticket's customer. Without a requester, a reply on the ticket goes\nto each of them, at their contact address; with none either, it cannot be replied to."
+            "description": "The key requesters of the ticket's customer. Without a requester, a reply on the ticket goes\nto each of them, at their contact address; with none either, it cannot be replied to. Given\nto agents only: add-ons never get it."
           },
           "number": {
             "type": "integer",
