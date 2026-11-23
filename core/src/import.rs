@@ -1328,12 +1328,7 @@ mod tests {
                 "Customers file.",
                 "Sites file.",
             ),
-            (
-                "sites",
-                SITE_COLUMNS,
-                "Sites file.",
-                "Requesters file.",
-            ),
+            ("sites", SITE_COLUMNS, "Sites file.", "Requesters file."),
             (
                 "requesters",
                 REQUESTER_COLUMNS,
@@ -1388,10 +1383,7 @@ mod tests {
     }
 
     /// The customer's requesters, as their pages show them.
-    async fn requesters_of(
-        db: &PgPool,
-        customer: Uuid,
-    ) -> Vec<crate::requesters::RequesterDetail> {
+    async fn requesters_of(db: &PgPool, customer: Uuid) -> Vec<crate::requesters::RequesterDetail> {
         let mut shown = Vec::new();
         for entry in crate::customers::detail(db, customer)
             .await
@@ -1451,8 +1443,16 @@ mod tests {
         assert_eq!(
             outcomes(&preview),
             [[
-                (2, Outcome::Update, "Brightfield / Ada.Ferrini@brightfield.test"),
-                (3, Outcome::Create, "Brightfield / Bo Vale (bo@brightfield.test)"),
+                (
+                    2,
+                    Outcome::Update,
+                    "Brightfield / Ada.Ferrini@brightfield.test"
+                ),
+                (
+                    3,
+                    Outcome::Create,
+                    "Brightfield / Bo Vale (bo@brightfield.test)"
+                ),
             ]]
         );
         assert_eq!(
@@ -1503,8 +1503,11 @@ mod tests {
                 bo.site.is_none(),
             ),
             (
-                ["bo@brightfield.test".to_owned(), "bo.vale@brightfield.test".to_owned()]
-                    .as_slice(),
+                [
+                    "bo@brightfield.test".to_owned(),
+                    "bo.vale@brightfield.test".to_owned()
+                ]
+                .as_slice(),
                 Some("Bo Vale"),
                 ["000 000 0102".to_owned(), "000 000 0103".to_owned()].as_slice(),
                 Some("Technician"),
@@ -1541,11 +1544,17 @@ mod tests {
         let report = import(&db, vec![requesters(file)], Mode::Apply).await;
         let reasons = reasons(&report.files[0]);
         let expected = [
-            (2, "cleo@harbor.test already belongs to a requester of Harbor Lane"),
+            (
+                2,
+                "cleo@harbor.test already belongs to a requester of Harbor Lane",
+            ),
             (3, "departed from Harbor Lane"),
             (4, "merge them"),
             (5, "has departed from Brightfield: bring them back"),
-            (6, "cleo@harbor.test already belongs to a requester of Harbor Lane"),
+            (
+                6,
+                "cleo@harbor.test already belongs to a requester of Harbor Lane",
+            ),
         ];
         assert_eq!(reasons.len(), expected.len(), "{reasons:?}");
         for ((line, why), (expected_line, expected)) in reasons.iter().zip(expected) {
@@ -1554,12 +1563,11 @@ mod tests {
                 "line {line}: {why}"
             );
         }
-        let mut shown: Vec<(Vec<String>, Option<String>, bool)> =
-            requesters_of(&db, brightfield)
-                .await
-                .into_iter()
-                .map(|r| (r.addresses, r.name, r.departed_at.is_some()))
-                .collect();
+        let mut shown: Vec<(Vec<String>, Option<String>, bool)> = requesters_of(&db, brightfield)
+            .await
+            .into_iter()
+            .map(|r| (r.addresses, r.name, r.departed_at.is_some()))
+            .collect();
         shown.sort();
         assert_eq!(
             shown,
@@ -1573,7 +1581,11 @@ mod tests {
         let cleo = crate::requesters::detail(&db, cleo).await.unwrap();
         assert_eq!((cleo.addresses.len(), cleo.name), (1, None));
         let dan = crate::requesters::detail(&db, dan).await.unwrap();
-        assert_eq!(dan.addresses, ["dan@harbor.test"], "the address stays with Dan");
+        assert_eq!(
+            dan.addresses,
+            ["dan@harbor.test"],
+            "the address stays with Dan"
+        );
     }
 
     #[sqlx::test]
@@ -1627,7 +1639,10 @@ mod tests {
             .into_iter()
             .map(|r| (r.addresses, r.site.map(|s| s.id)))
             .collect();
-        assert_eq!(shown, [(vec!["f@brightfield.test".to_owned()], Some(office))]);
+        assert_eq!(
+            shown,
+            [(vec!["f@brightfield.test".to_owned()], Some(office))]
+        );
         assert!(requesters_of(&db, gone).await.is_empty());
     }
 
@@ -1669,9 +1684,18 @@ mod tests {
         );
         let reasons = reasons(&report.files[2]);
         let expected = [
-            (3, "the row of its customer, line 3 of the customers file, is left out"),
-            (4, "the row of its site, line 3 of the sites file, is left out"),
-            (5, "the row of its customer, line 4 of the customers file, is left out"),
+            (
+                3,
+                "the row of its customer, line 3 of the customers file, is left out",
+            ),
+            (
+                4,
+                "the row of its site, line 3 of the sites file, is left out",
+            ),
+            (
+                5,
+                "the row of its customer, line 4 of the customers file, is left out",
+            ),
         ];
         assert_eq!(reasons.len(), expected.len(), "{reasons:?}");
         for ((line, why), (expected_line, expected)) in reasons.iter().zip(expected) {
@@ -1684,8 +1708,14 @@ mod tests {
         let shown = requesters_of(&db, harbor).await;
         assert_eq!(shown.len(), 1);
         assert_eq!(
-            (shown[0].addresses.as_slice(), shown[0].site.as_ref().map(|s| s.name.as_str())),
-            (["cleo@harbor.test".to_owned()].as_slice(), Some("Head office")),
+            (
+                shown[0].addresses.as_slice(),
+                shown[0].site.as_ref().map(|s| s.name.as_str())
+            ),
+            (
+                ["cleo@harbor.test".to_owned()].as_slice(),
+                Some("Head office")
+            ),
             "a requester at a site the sites file creates"
         );
         assert!(requesters_of(&db, brightfield).await.is_empty());
@@ -2623,7 +2653,8 @@ mod tests {
                 .unwrap();
         }
 
-        let file = requesters("customer,email_addresses,name\nBrightfield,ada.f@brightfield.test,Ada\n");
+        let file =
+            requesters("customer,email_addresses,name\nBrightfield,ada.f@brightfield.test,Ada\n");
         let importing = tokio::spawn({
             let db = db.clone();
             async move { run(&db, &Grant::command_line(), vec![file], Mode::Apply).await }
