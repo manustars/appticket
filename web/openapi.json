@@ -6632,7 +6632,8 @@
         "enum": [
           "customers",
           "sites",
-          "requesters"
+          "requesters",
+          "assets"
         ]
       },
       "ImportOutcome": {
@@ -6666,7 +6667,7 @@
       },
       "ImportRequest": {
         "type": "object",
-        "description": "CSV files to import, at most one of each kind; they are taken customers first, then sites,\nthen requesters.",
+        "description": "CSV files to import, at most one of each kind; they are taken customers first, then sites,\nthen requesters, then assets. Importing needs managing customers, and managing the catalog\ntoo for an assets file.",
         "required": [
           "files"
         ],
@@ -6697,7 +6698,7 @@
           },
           "label": {
             "type": "string",
-            "description": "What the row is about: a customer's name, a site's customer and name, or a requester's\ncustomer, name and first address."
+            "description": "What the row is about: a customer's name, a site's customer and name, a requester's\ncustomer, name and first address, or an asset's customer, name and serial number."
           },
           "line": {
             "type": "integer",

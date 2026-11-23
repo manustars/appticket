@@ -1767,6 +1767,12 @@ mod tests {
                 "requesters",
                 REQUESTER_COLUMNS,
                 "Requesters file.",
+                "Assets file.",
+            ),
+            (
+                "assets",
+                ASSET_COLUMNS,
+                "Assets file.",
                 "From the command line",
             ),
         ] {

@@ -144,22 +144,25 @@ in has it, `hd agent set-role <e-mail> Administrator` gives it back; the command
 limited by roles. Upgrading from a version without roles makes every existing agent an
 Administrator.
 
-### Importing customers, sites and requesters
+### Importing customers, sites, requesters and assets
 
-Customers, their sites and their requesters can be imported from CSV files, in the UI
-(Customers, then Import from CSV files) by an agent who manages customers, or with `hd import`.
-Each kind has its own file, in UTF-8 (Excel: "CSV UTF-8"), separated by commas or semicolons,
-with a header row of the column names below in any order. The files of one import are taken
-customers first, then sites, then requesters, so that a row can refer to something an earlier
-file creates. Every import first shows what it would create, update and leave out; nothing
-changes until it is applied (the Import button, or `--apply`), and applying checks every row
-again.
+Customers, their sites, their requesters and their assets can be imported from CSV files, in
+the UI (Customers, then Import from CSV files) by an agent who manages customers, or with
+`hd import`; an assets file also needs managing the catalog, and without it the whole import is
+refused. Each kind has its own file, in UTF-8 (Excel: "CSV UTF-8"), separated by commas or
+semicolons, with a header row of the column names below in any order. The files of one import
+are taken customers first, then sites, then requesters, then assets, so that a row can refer to
+something an earlier file creates. Every import first shows what it would create, update and
+leave out; nothing changes until it is applied (the Import button, or `--apply`), and applying
+checks every row again.
 
 A filled cell sets a value and an empty one leaves it; an import never deletes, retires or
-offboards anything, never marks a requester departed, and never brings an offboarded customer,
-a retired site or a departed requester back. A row that breaks a rule is left out with its
-reason, as are the sites and requesters whose customer row is left out and the requesters whose
-site row is left out; the other rows are imported. The rows left out come back as a file with
+offboards anything, never marks a requester departed, never brings an offboarded customer, a
+retired site, a departed requester or a retired asset back, and never changes an asset an
+add-on is the source of. A row that breaks a rule is left out with its reason, as are the
+sites, requesters and assets whose customer row is left out, the requesters and assets whose
+site row is left out, and the assets whose holder's row is left out; the other rows are
+imported. The rows left out come back as a file with
 the same columns and an `error` column giving the reason, ready to correct and import again (an
 `error` column is ignored on import). A column without a name is ignored when all its cells are
 empty, as in the columns spreadsheets write after the last one. A file with an unknown or
@@ -213,6 +216,24 @@ takes no address from anyone. Those are done on the requester's page.
 | `site` | The requester's site, by name: one of their customer's sites, existing or created by the sites file, and not retired. |
 | `notes` | Internal notes; a filled cell replaces the notes there. |
 
+Assets file. An asset is recognised by its serial number within its customer, else by its name
+within its customer, ignoring case, and is imported once per file. A row is about one asset
+entered by hand and not retired, or about a new one when nothing matches. It is left out when it
+matches an asset an add-on is the source of (even when it would change nothing: only the add-on
+changes it), a retired asset, or two assets (two with its serial number, or, without one, two
+with its name); and when it is recognised by its name while that asset has another serial
+number, since an import replaces no serial number. Those are done on the asset's page.
+
+| Column | Meaning |
+|---|---|
+| `customer` | The asset's customer, by name. It must exist, or be created by the customers file, and not be offboarded. |
+| `customer_external_system`, `customer_external_name` | Or the customer by one of its external references. An assets file has the `customer` column, these two, or all three. |
+| `name` | The asset's name. The column is required; a new asset needs a value. |
+| `serial_number` | The serial number. It recognises the asset; one recognised by its name that has none gets it. |
+| `kind` | The asset kind, by name, ignoring case: one of the list the help desk manages (Administration, Asset kinds). The column is required; a new asset needs a value. |
+| `site` | The asset's own site, by name: one of its customer's sites, existing or created by the sites file, and not retired. |
+| `holder` | The requester the asset is given to, by one of their e-mail addresses: a requester of its customer, existing or created by the requesters file, who has not departed. |
+
 From the command line, inside the core's pod, whose file system is read-only, a file is read
 from standard input:
 
@@ -223,10 +244,10 @@ kubectl -n helpdesk exec -i deploy/hd-core -- hd import --customers - --apply < 
 
 The command lists every row with what it does, or why it is left out. Run on a machine with
 access to the database, `hd import --customers customers.csv --sites sites.csv --requesters
-requesters.csv` takes the three files in one import and writes the rows left out to
-`customers-left-out.csv`, `sites-left-out.csv` and `requesters-left-out.csv` beside them (or
-into `--left-out DIR`); it refuses to write one over a file it imports. `hd import --help`
-describes the columns too.
+requesters.csv --assets assets.csv` takes the four files in one import and writes the rows left
+out to `customers-left-out.csv`, `sites-left-out.csv`, `requesters-left-out.csv` and
+`assets-left-out.csv` beside them (or into `--left-out DIR`); it refuses to write one over a
+file it imports. `hd import --help` describes the columns too.
 
 ## The Assistant
 
