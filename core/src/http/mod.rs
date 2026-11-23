@@ -35,7 +35,7 @@ mod inbox;
 mod tickets;
 mod web;
 
-pub use client_address::{TrustedProxies, parse_proxy};
+pub use client_address::{TrustedProxies, parse_proxies};
 pub use web::with_web;
 
 #[derive(OpenApi)]

@@ -214,9 +214,7 @@ async fn repeated_failed_sign_ins_are_refused_for_known_and_unknown_accounts_ali
 async fn x_forwarded_for_is_ignored_from_a_connection_that_is_no_trusted_proxy(db: PgPool) {
     let api = Client::new(&db).await;
     let state = AppState {
-        trusted_proxies: super::TrustedProxies::new(vec![
-            super::parse_proxy("192.0.2.10").unwrap(),
-        ]),
+        trusted_proxies: super::parse_proxies("192.0.2.10").unwrap(),
         ..api.state.clone()
     };
     for n in 1..=9 {
@@ -240,9 +238,7 @@ async fn x_forwarded_for_is_ignored_from_a_connection_that_is_no_trusted_proxy(d
 async fn behind_a_trusted_proxy_clients_are_counted_under_their_forwarded_addresses(db: PgPool) {
     let api = Client::new(&db).await;
     let state = AppState {
-        trusted_proxies: super::TrustedProxies::new(vec![
-            super::parse_proxy("192.0.2.0/24").unwrap(),
-        ]),
+        trusted_proxies: super::parse_proxies("192.0.2.0/24").unwrap(),
         ..api.state.clone()
     };
     for n in 1..=9 {
