@@ -1,6 +1,8 @@
 //! Announcements from a parent ticket: while a failure is being worked on, the help desk tells the
 //! customers it affects how things stand. Rules are in docs/domain-rules.md ("Tickets", "People").
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
 use time::OffsetDateTime;
@@ -9,7 +11,7 @@ use uuid::Uuid;
 
 use crate::error::{Error, Result, rule};
 use crate::outbound::Sender;
-use crate::tickets::TicketState;
+use crate::tickets::{Outgoing, TicketState};
 
 /// An announcement sent from a parent ticket, with when it was sent and to whom.
 #[derive(Debug, Serialize, ToSchema)]
@@ -130,7 +132,7 @@ pub async fn send(
     }
 
     let id = Uuid::new_v4();
-    let subject = format!("{} [#{parent}]", title.trim());
+    let subject = crate::tickets::ticket_subject(&title, parent);
     sqlx::query(
         "INSERT INTO announcements (id, ticket_id, author_id, subject, body)
          VALUES ($1, $2, $3, $4, $5)",
@@ -142,6 +144,7 @@ pub async fn send(
     .bind(body)
     .execute(&mut *tx)
     .await?;
+    let message = Outgoing::announcing(ticket, author, body, subject, id);
     for (customer, key) in &keys {
         let recorded = sqlx::query(
             "INSERT INTO announcement_recipients
@@ -171,35 +174,23 @@ pub async fn send(
             Err(e) => return Err(e.into()),
             Ok(_) => {}
         }
-        sqlx::query(
-            "INSERT INTO messages (id, ticket_id, direction, rfc_message_id, from_address,
-                                   from_name, to_address, author_id, subject, body_text,
-                                   announcement_id)
-             VALUES ($1, $2, 'outbound', $3, $4, $5, $6, $7, $8, $9, $10)",
-        )
-        .bind(Uuid::new_v4())
-        .bind(ticket)
-        .bind(sender.new_message_id())
-        .bind(&sender.address)
-        .bind(&sender.name)
-        .bind(&key.contact_address)
-        .bind(author)
-        .bind(&subject)
-        .bind(body)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+        message.queue(&mut tx, sender, &key.contact_address).await?;
     }
     tx.commit().await?;
-    let mut sent = of_ticket(db, ticket).await?;
-    sent.retain(|a| a.id == id);
-    Ok(sent.pop().expect("the announcement just sent"))
+    let sent = load(db, ticket, Some(id)).await?.pop();
+    Ok(sent.expect("the announcement just sent"))
 }
 
 /// The announcements sent from the ticket, oldest first.
 pub async fn of_ticket(db: &PgPool, ticket: Uuid) -> Result<Vec<Announcement>> {
+    load(db, ticket, None).await
+}
+
+/// The announcements sent from the ticket, oldest first, or only the one with id `only`; each with
+/// its recipients, by customer and address.
+async fn load(db: &PgPool, ticket: Uuid, only: Option<Uuid>) -> Result<Vec<Announcement>> {
     #[derive(sqlx::FromRow)]
-    struct Row {
+    struct Head {
         id: Uuid,
         author_name: String,
         subject: String,
@@ -207,48 +198,52 @@ pub async fn of_ticket(db: &PgPool, ticket: Uuid) -> Result<Vec<Announcement>> {
         created_at: OffsetDateTime,
     }
     #[derive(sqlx::FromRow)]
-    struct To {
+    struct RecipientOf {
         announcement_id: Uuid,
         #[sqlx(flatten)]
         recipient: AnnouncementRecipient,
     }
-    let rows: Vec<Row> = sqlx::query_as(
+    let heads: Vec<Head> = sqlx::query_as(
         "SELECT n.id, a.name AS author_name, n.subject, n.body, n.created_at
          FROM announcements n JOIN agents a ON a.id = n.author_id
-         WHERE n.ticket_id = $1
+         WHERE n.ticket_id = $1 AND ($2::uuid IS NULL OR n.id = $2)
          ORDER BY n.created_at, n.id",
     )
     .bind(ticket)
+    .bind(only)
     .fetch_all(db)
     .await?;
-    let mut to: Vec<To> = sqlx::query_as(
+    let recipients: Vec<RecipientOf> = sqlx::query_as(
         "SELECT r.announcement_id, r.requester_id, r.name, r.address, r.customer_id,
-                c.name AS customer_name, m.sent_at,
-                (m.sent_at IS NULL AND m.send_attempts >= $2) AS gave_up
+                c.name AS customer_name, m.sent_at, message_gave_up(m, $3) AS gave_up
          FROM announcements n
          JOIN announcement_recipients r ON r.announcement_id = n.id
          JOIN customers c ON c.id = r.customer_id
          JOIN messages m ON m.announcement_id = r.announcement_id AND m.to_address = r.address
-         WHERE n.ticket_id = $1
+         WHERE n.ticket_id = $1 AND ($2::uuid IS NULL OR n.id = $2)
          ORDER BY c.name, r.address",
     )
     .bind(ticket)
+    .bind(only)
     .bind(crate::outbound::MAX_ATTEMPTS)
     .fetch_all(db)
     .await?;
-    Ok(rows
+    let mut by_announcement: HashMap<Uuid, Vec<AnnouncementRecipient>> = HashMap::new();
+    for row in recipients {
+        by_announcement
+            .entry(row.announcement_id)
+            .or_default()
+            .push(row.recipient);
+    }
+    Ok(heads
         .into_iter()
-        .map(|row| {
-            let (mine, rest) = to.drain(..).partition(|t| t.announcement_id == row.id);
-            to = rest;
-            Announcement {
-                id: row.id,
-                author_name: row.author_name,
-                subject: row.subject,
-                body: row.body,
-                created_at: row.created_at,
-                recipients: mine.into_iter().map(|t: To| t.recipient).collect(),
-            }
+        .map(|head| Announcement {
+            recipients: by_announcement.remove(&head.id).unwrap_or_default(),
+            id: head.id,
+            author_name: head.author_name,
+            subject: head.subject,
+            body: head.body,
+            created_at: head.created_at,
         })
         .collect())
 }

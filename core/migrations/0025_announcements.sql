@@ -177,3 +177,10 @@ CREATE OR REPLACE FUNCTION ticket_picked_address(ticket uuid) RETURNS text LANGU
     ORDER BY m.created_at DESC, m.id
     LIMIT 1
 $$;
+
+-- Whether the outbox gave up on the message: an outbound message still unsent after
+-- `max_attempts` (the outbox's limit), for the ticket's messages and announcements alike.
+CREATE FUNCTION message_gave_up(m messages, max_attempts integer) RETURNS boolean
+    LANGUAGE sql STABLE AS $$
+    SELECT m.direction = 'outbound' AND m.sent_at IS NULL AND m.send_attempts >= max_attempts
+$$;

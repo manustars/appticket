@@ -232,7 +232,8 @@ pub(crate) async fn send(
 }
 
 /// A message an agent sends on a ticket, before it has a recipient: it threads with the
-/// conversation so far, answering the last message received (else the last one).
+/// conversation so far, answering the last message received (else the last one); or, sent in an
+/// announcement from the ticket, it starts a conversation of its own.
 pub(crate) struct Outgoing<'a> {
     ticket: Uuid,
     author: Uuid,
@@ -240,9 +241,30 @@ pub(crate) struct Outgoing<'a> {
     subject: String,
     in_reply_to: Option<String>,
     references: Vec<String>,
+    announcement: Option<Uuid>,
 }
 
 impl<'a> Outgoing<'a> {
+    /// A message of the announcement `announcement` sent from `ticket`, under `subject`. It
+    /// answers nothing: an announcement is not part of the ticket's conversation.
+    pub(crate) fn announcing(
+        ticket: Uuid,
+        author: Uuid,
+        body: &'a str,
+        subject: String,
+        announcement: Uuid,
+    ) -> Outgoing<'a> {
+        Outgoing {
+            ticket,
+            author,
+            body,
+            subject,
+            in_reply_to: None,
+            references: Vec::new(),
+            announcement: Some(announcement),
+        }
+    }
+
     pub(crate) async fn on(
         tx: &mut Transaction<'_, Postgres>,
         ticket: Uuid,
@@ -278,13 +300,14 @@ impl<'a> Outgoing<'a> {
             subject: reply_subject(&title, number),
             in_reply_to,
             references: messages.into_iter().map(|(id, _)| id).collect(),
+            announcement: None,
         })
     }
 
     /// Puts the message to `to` in the outbox, as a message of its own; returns its id. The
     /// database refuses a recipient who is neither the ticket's requester nor a key requester of
-    /// its customer at their contact address; one who just stopped being either is a change the
-    /// agent reloads for.
+    /// its customer at their contact address (nor, for an announcement, one of its recipients);
+    /// one who just stopped being either is a change the agent reloads for.
     pub(crate) async fn queue(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -295,8 +318,8 @@ impl<'a> Outgoing<'a> {
         let queued = sqlx::query(
             "INSERT INTO messages (id, ticket_id, direction, rfc_message_id, in_reply_to,
                                    \"references\", from_address, from_name, to_address, author_id,
-                                   subject, body_text)
-             VALUES ($1, $2, 'outbound', $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                                   subject, body_text, announcement_id)
+             VALUES ($1, $2, 'outbound', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind(id)
         .bind(self.ticket)
@@ -309,6 +332,7 @@ impl<'a> Outgoing<'a> {
         .bind(self.author)
         .bind(&self.subject)
         .bind(self.body)
+        .bind(self.announcement)
         .execute(&mut **tx)
         .await;
         match queued {
@@ -520,13 +544,19 @@ pub async fn sites<'e>(
 
 /// "Re: <title> [#<number>]", without stacking "Re:".
 pub fn reply_subject(title: &str, number: i64) -> String {
+    format!("Re: {}", ticket_subject(title, number))
+}
+
+/// "<title> [#<number>]": the subject of a message about the ticket, its title without a leading
+/// "Re:" and tagged with its number.
+pub fn ticket_subject(title: &str, number: i64) -> String {
     let bare = title
         .trim()
         .strip_prefix("Re:")
         .or_else(|| title.trim().strip_prefix("RE:"))
         .map(str::trim)
         .unwrap_or(title.trim());
-    format!("Re: {bare} [#{number}]")
+    format!("{bare} [#{number}]")
 }
 
 async fn touch(tx: &mut Transaction<'_, Postgres>, ticket_id: Uuid) -> Result<()> {
@@ -701,7 +731,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
     let messages: Vec<MessageEntry> = sqlx::query_as(
         "SELECT m.id, m.direction, m.from_address, m.from_name, m.to_address,
                 a.name AS author_name, m.subject, m.body_text, m.created_at, m.sent_at, m.last_error,
-                (m.direction = 'outbound' AND m.sent_at IS NULL AND m.send_attempts >= $2) AS gave_up
+                message_gave_up(m, $2) AS gave_up
          FROM messages m LEFT JOIN agents a ON a.id = m.author_id
          WHERE m.ticket_id = $1 AND m.announcement_id IS NULL",
     )
