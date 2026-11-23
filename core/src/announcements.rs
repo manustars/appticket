@@ -520,8 +520,7 @@ mod tests {
 
     /// Announcements stay out of the parent's own conversation with its requester: sending one to
     /// the requester's contact address as a key requester picks no address for replies there, and
-    /// a reply there neither answers nor refers to an announcement. A recipient who answers an
-    /// announcement writes back to the parent, as any reply comes back to its ticket.
+    /// a reply there neither answers nor refers to an announcement.
     #[sqlx::test]
     async fn announcements_stay_out_of_the_parents_conversation(db: PgPool) {
         let own = testing::help_desk(&db).await;
@@ -580,32 +579,97 @@ mod tests {
         .unwrap();
         assert_eq!(in_reply_to.as_deref(), Some("outage@northgate.test"));
         assert_eq!(references, ["outage@northgate.test"]);
+    }
 
+    /// A key requester of another customer who answers an announcement writes back to the parent,
+    /// as any reply comes back to its ticket, and reopens it when resolved. They are not the
+    /// parent's requester nor a key requester of its customer, so agents do not reply to them from
+    /// the parent: a reply there goes to the help desk's own key requesters.
+    #[sqlx::test]
+    async fn an_answer_to_an_announcement_comes_back_to_the_parent(db: PgPool) {
+        let own = testing::help_desk(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let sara = testing::requester(&db, own, "sara@northgate.test").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        for key in [sara, ada] {
+            crate::key_requesters::mark(&db, key, None).await.unwrap();
+        }
+        let agent = testing::agent(&db, "marco@northgate.test").await;
+        let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
+        let child = testing::ticket(&db, brightfield, None, "a@brightfield.test").await;
+        attach(&db, child, outage).await.unwrap();
+        let sender = testing::sender();
+        let sent = send(&db, &sender, outage, agent, "Mail is down.")
+            .await
+            .unwrap();
+        tickets::set_state(&db, outage, TicketState::Resolved)
+            .await
+            .unwrap();
         let announced: String = sqlx::query_scalar(
-            "SELECT rfc_message_id FROM messages WHERE announcement_id IS NOT NULL",
+            "SELECT rfc_message_id FROM messages WHERE to_address = 'ada@brightfield.test'",
         )
         .fetch_one(&db)
         .await
         .unwrap();
+
         let answer = crate::mail::Incoming {
-            rfc_message_id: Some("answer@home.test".into()),
+            rfc_message_id: Some("answer@brightfield.test".into()),
             in_reply_to: vec![announced],
             references: Vec::new(),
-            from_address: "sara@home.test".into(),
-            from_name: None,
-            subject: "Re: Printer jams".into(),
-            body_text: "Thanks.".into(),
+            from_address: "ada@brightfield.test".into(),
+            from_name: Some("Ada Ferrini".into()),
+            subject: format!("Re: {}", sent.subject),
+            body_text: "Our office has no mail either.".into(),
             raw: Vec::new(),
         };
         let mut tx = db.begin().await.unwrap();
         let routed = crate::mail::route(&mut tx, &answer).await.unwrap();
         tx.commit().await.unwrap();
-        let parent: Uuid = sqlx::query_scalar("SELECT id FROM tickets WHERE number = $1")
-            .bind(outage)
-            .fetch_one(&db)
-            .await
-            .unwrap();
-        assert_eq!(routed, crate::mail::Routed::Reply { ticket_id: parent });
+        let ticket = tickets::detail(&db, outage).await.unwrap();
+        assert_eq!(
+            routed,
+            crate::mail::Routed::Reply {
+                ticket_id: ticket.id
+            }
+        );
+        assert_eq!(ticket.state, TicketState::Open, "the answer reopens it");
+        assert!(
+            ticket.requester.is_none(),
+            "she does not become its requester"
+        );
+
+        let Err(Error::Rule(_)) = tickets::reply(
+            &db,
+            &sender,
+            outage,
+            agent,
+            "Thanks, we know.",
+            Some("ada@brightfield.test"),
+            TicketState::Waiting,
+        )
+        .await
+        else {
+            panic!("replied from the parent to another customer's key requester");
+        };
+        tickets::reply(
+            &db,
+            &sender,
+            outage,
+            agent,
+            "Brightfield is affected too.",
+            None,
+            TicketState::Waiting,
+        )
+        .await
+        .unwrap();
+        let replied: Vec<String> = sqlx::query_scalar(
+            "SELECT to_address FROM messages
+             WHERE direction = 'outbound' AND announcement_id IS NULL",
+        )
+        .fetch_all(&db)
+        .await
+        .unwrap();
+        assert_eq!(replied, ["sara@northgate.test"]);
     }
 
     /// An offboarded customer is no longer served: an announcement does not go to its key
