@@ -227,6 +227,38 @@ does not start, and says which are missing (the chart already refuses an issuer 
 URL). The core reads the provider's configuration and keys when an agent signs in, not at
 startup, so a provider that is down does not keep the core or local passwords from working.
 
+#### Checking the identity provider
+
+`hd sign-in check` says whether the configured provider answers and accepts the client, before
+any agent tries to sign in. It reads the same settings as the core, needs no database, and is run
+where the core runs:
+
+```sh
+kubectl -n helpdesk exec deploy/hd-core -- hd sign-in check
+```
+
+It reads the provider's configuration and keys from `<issuer>/.well-known/openid-configuration`
+as a sign-in does, then asks the provider's token endpoint, with the client id and secret, to
+exchange a code the provider never issued. A provider that accepts the client refuses only the
+code (`invalid_grant`), and the check passes; the provider may log that refusal as a failed
+sign-in. The check fails, exits with 1 and says which of these it found:
+
+- the provider cannot be reached at the issuer (the reason follows: connection refused, a name
+  that does not resolve, a timeout, a certificate the core does not trust);
+- no OpenID Connect configuration at the issuer, such as a realm that does not exist;
+- a wrong issuer: the provider names its issuer otherwise, and `issuer` must match it exactly,
+  trailing slash included;
+- the client rejected (`invalid_client` or `unauthorized_client`): a wrong client id or secret, or
+  a client not allowed to use the authorization code flow;
+- an answer that says neither that the provider accepts the client nor that it rejects it, shown
+  as the provider gave it.
+
+It also exits with 1, saying so, when no identity provider is configured, or with only some of
+its settings. The client secret is never printed. The check does not use the client credentials
+grant, which a sign-in client usually may not use. It does not check that the provider accepts the
+redirect URI, nor what its ID tokens hold (the e-mail, whether it is verified, the authorized
+group's claim): signing in once shows those.
+
 Anyone can open the sign-in through the provider, so at most 20 sign-ins may be under way from
 one address at a time (the address is taken as for [failed sign-ins](#failed-sign-ins), so set
 `core.signIn.trustedProxies` behind a proxy); beyond that the core answers 429 with
@@ -352,7 +384,8 @@ and the API refuses every local password, right or wrong, with 403 before checki
 counted as a failed sign-in). It is refused while no identity provider is configured: `hd` reads
 the provider's settings from its environment, so run it in the core's container as above, where
 the chart sets them. Make sure an agent with the Administrator role can sign in through the provider
-before switching it off. Agents keep their local passwords, unused while it is off.
+before switching it off; [`hd sign-in check`](#checking-the-identity-provider) first tells whether
+the provider answers and accepts the client. Agents keep their local passwords, unused while it is off.
 
 The command line can always switch local sign-in back on: it needs nothing but the database. If
 the provider cannot be reached, or its settings were removed, while local sign-in is off:

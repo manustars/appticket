@@ -205,6 +205,18 @@ while local sign-in is off:
 
 and that agent signs in with the password.";
 
+const SIGN_IN_CHECK_HELP: &str = "\
+Reads the identity provider's configuration and keys from <issuer>/.well-known/openid-configuration
+as a sign-in does, then asks its token endpoint, with the client id and secret, to exchange a code
+it never issued: a provider that accepts the client refuses only the code (invalid_grant). It needs
+no database, and fails, exiting with 1, when the provider cannot be reached, answers for another
+issuer or for none, rejects the client, or answers in a way that says neither; also when no
+identity provider is configured. The secret is never shown. The provider may log the code it
+refused as a failed sign-in.
+
+Not checked: that the provider accepts the redirect URI, and what its ID tokens hold (the e-mail,
+whether it is verified, the authorized group's claim); signing in once shows those.";
+
 #[derive(Subcommand)]
 pub enum SignInCommand {
     /// Show whether agents can sign in with a local password, or switch it on or off (--help
@@ -213,6 +225,16 @@ pub enum SignInCommand {
     Local {
         #[command(subcommand)]
         switch: Option<LocalSignIn>,
+    },
+    /// Check that the configured identity provider answers and accepts the client, before any
+    /// agent signs in through it (needs no database).
+    #[command(after_long_help = SIGN_IN_CHECK_HELP)]
+    Check {
+        #[command(flatten, next_help_heading = "Identity provider (as for serve)")]
+        identity_provider: Box<crate::oidc::Settings>,
+        /// The core's public URL, as for serve.
+        #[arg(long, env = "HD_PUBLIC_URL")]
+        public_url: Option<String>,
     },
 }
 
@@ -239,7 +261,13 @@ pub async fn sign_in(
     out: &mut impl Write,
 ) -> anyhow::Result<()> {
     let fail = |e: crate::error::Error| anyhow::anyhow!("{e}");
-    let SignInCommand::Local { switch } = command;
+    let switch = match command {
+        SignInCommand::Local { switch } => switch,
+        SignInCommand::Check {
+            identity_provider,
+            public_url,
+        } => return sign_in_check(*identity_provider, public_url, out).await,
+    };
     match switch {
         None => {
             let on = crate::local_sign_in::is_on(db).await.map_err(fail)?;
@@ -265,6 +293,44 @@ pub async fn sign_in(
             )?;
         }
     }
+    Ok(())
+}
+
+/// `hd sign-in check`: whether the identity provider the settings configure answers and accepts
+/// the client. Needs no database.
+pub async fn sign_in_check(
+    identity_provider: crate::oidc::Settings,
+    public_url: Option<String>,
+    out: &mut impl Write,
+) -> anyhow::Result<()> {
+    let Some(config) =
+        crate::oidc::Config::from_settings(identity_provider, public_url.as_deref())?
+    else {
+        anyhow::bail!(
+            "no identity provider is configured, so there is nothing to check: set \
+             HD_OIDC_ISSUER, HD_OIDC_CLIENT_ID, HD_OIDC_CLIENT_SECRET (or \
+             HD_OIDC_CLIENT_SECRET_FILE) and HD_PUBLIC_URL as for serve, or run the command \
+             where the core runs, such as in its container"
+        );
+    };
+    let client_id = config.client_id.as_str().to_owned();
+    let redirect = config.redirect.as_str().to_owned();
+    let checked = crate::oidc::Provider::new(config)?.check().await?;
+    writeln!(
+        out,
+        "issuer {}: configuration and keys read",
+        checked.issuer
+    )?;
+    writeln!(
+        out,
+        "client {client_id}: accepted by {}",
+        checked.token_endpoint
+    )?;
+    writeln!(
+        out,
+        "not checked: that the provider accepts the redirect URI {redirect}, and the claims its \
+         ID tokens hold; sign in once to see those"
+    )?;
     Ok(())
 }
 
@@ -788,6 +854,71 @@ mod tests {
             .to_string();
         assert!(why.contains("HD_PUBLIC_URL"), "{why}");
         assert!(crate::local_sign_in::is_on(&db).await.unwrap());
+    }
+
+    /// What `hd sign-in check` prints, or the error `hd` would print, as main prints it.
+    async fn run_check(identity_provider: crate::oidc::Settings, public_url: &str) -> String {
+        let mut out = Vec::new();
+        let done = sign_in_check(identity_provider, Some(public_url.to_owned()), &mut out).await;
+        let mut said = String::from_utf8(out).unwrap();
+        if let Err(error) = done {
+            said.push_str(&format!("Error: {error:?}"));
+        }
+        said
+    }
+
+    fn keycloak(secret: &str) -> crate::oidc::Settings {
+        crate::oidc::Settings {
+            issuer: Some("http://127.0.0.1:55080/realms/helpdesk".to_owned()),
+            client_id: Some("hd-core".to_owned()),
+            client_secret: Some(secret.to_owned()),
+            ..provider_settings(&[]).0
+        }
+    }
+
+    #[tokio::test]
+    async fn the_sign_in_check_says_when_no_identity_provider_is_configured() {
+        let (none, _) = provider_settings(&[]);
+        let mut out = Vec::new();
+        let error = sign_in_check(none, None, &mut out).await.unwrap_err();
+        let error = error.to_string();
+        assert!(
+            error.contains("no identity provider is configured"),
+            "{error}"
+        );
+        assert!(error.contains("HD_OIDC_ISSUER"), "{error}");
+        assert!(out.is_empty());
+        // One configured in part says what is missing, as serve does.
+        let (some, _) = provider_settings(&["issuer", "client_id", "client_secret"]);
+        let error = sign_in_check(some, None, &mut out).await.unwrap_err();
+        assert!(error.to_string().contains("HD_PUBLIC_URL"), "{error}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
+    async fn the_sign_in_check_reports_keycloak_and_the_client_it_accepts() {
+        let said = run_check(keycloak("dev-only-client-secret"), "http://127.0.0.1:8080").await;
+        assert_eq!(
+            said,
+            "issuer http://127.0.0.1:55080/realms/helpdesk: configuration and keys read\n\
+             client hd-core: accepted by \
+             http://127.0.0.1:55080/realms/helpdesk/protocol/openid-connect/token\n\
+             not checked: that the provider accepts the redirect URI \
+             http://127.0.0.1:8080/api/session/identity-provider/callback, and the claims its \
+             ID tokens hold; sign in once to see those\n"
+        );
+        assert!(!said.contains("dev-only-client-secret"));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
+    async fn the_sign_in_check_fails_on_a_rejected_client_without_showing_the_secret() {
+        let said = run_check(keycloak("invented-wrong-secret"), "http://127.0.0.1:8080").await;
+        assert!(
+            said.starts_with("Error: the identity provider rejected the client hd-core"),
+            "{said}"
+        );
+        assert!(!said.contains("invented-wrong-secret"), "{said}");
     }
 
     #[sqlx::test]
