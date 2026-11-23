@@ -421,7 +421,7 @@ function Departure({ requester: r, onChanged, onSignedOut }: Omit<PartProps, 're
       const held = (await getRequester(r.id)).held_assets.map((a) => a.name)
       question = held.length === 0
         ? t('requester.confirmDepart', { name })
-        : `${t('requester.confirmDepart', { name })} ${t('requester.departLeavesAssets', { count: held.length, assets: held.join(', ') })}`
+        : t('requester.confirmDepartWithAssets', { name, count: held.length, assets: held.join(', ') })
     }).then((ok) => {
       if (!ok || !window.confirm(question)) return
       void action.run(() => departRequester(r.id)).then(async (done) => { if (done) await onChanged() })

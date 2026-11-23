@@ -1460,7 +1460,10 @@ export interface components {
             /** @description The new agent's first password, generated; it is not shown again. */
             password: string;
         };
-        /** @description An asset as add-ons read it: without its holder, who is a person. */
+        /**
+         * @description An asset as add-ons read it: what an add-on can be the source of, with its own site, but not
+         *     its holder, who is a person, nor the site it is at through them.
+         */
         AddonAsset: {
             /** Format: uuid */
             customer_id: string;
@@ -1474,6 +1477,8 @@ export interface components {
             name: string;
             /** Format: date-time */
             retired_at?: string | null;
+            serial_number?: string | null;
+            site?: components["schemas"]["SiteRef"] | null;
             /** @description The add-on it came from, when an add-on supplies it. */
             source_addon?: string | null;
         };
@@ -1964,7 +1969,7 @@ export interface components {
             /** @description The assets linked to their tickets: they belong to the old customer, so they are unlinked. */
             assets: components["schemas"]["LinkedAsset"][];
             /** @description The assets they hold: these stay with the old customer, without a holder. */
-            held_assets: components["schemas"]["LinkedAsset"][];
+            held_assets: components["schemas"]["Asset"][];
             /** @description The requester is a key requester of the old customer, which they would stop being. */
             key_requester: boolean;
             /** @description The services linked to their tickets that the new customer does not use: unlinked too. */

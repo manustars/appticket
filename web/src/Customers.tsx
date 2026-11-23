@@ -475,7 +475,7 @@ function ExternalReferences({ customer: c, readOnly, onChanged, onSignedOut }: P
 }
 
 function Sites({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
-  const { t, formatTime } = useI18n()
+  const { t, formatTime, formatNumber } = useI18n()
   const action = useAction(onSignedOut)
   // The site being edited, with what is typed for it.
   const [editing, setEditing] = useState<{ id: string; name: string; address: string } | null>(null)
@@ -504,20 +504,36 @@ function Sites({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
     })
   }
 
+  /** What retiring the site asks, naming the requesters at it and the assets that leave it. */
+  function retireQuestion(name: string, requesters: string[], assets: string[]): string {
+    const who = requesters.join(', ')
+    const what = assets.join(', ')
+    if (assets.length === 0) {
+      return requesters.length === 0
+        ? t('sites.confirmRetire', { name })
+        : t('sites.confirmRetireWithRequesters', { name, count: requesters.length, requesters: who })
+    }
+    if (requesters.length === 0) return t('sites.confirmRetireWithAssets', { name, count: assets.length, assets: what })
+    return requesters.length === 1
+      ? t('sites.confirmRetireWithRequesterAndAssets', { name, count: assets.length, requesters: who, assets: what })
+      : t('sites.confirmRetireWithRequestersAndAssets', {
+        name, count: assets.length, requesterCount: formatNumber(requesters.length), requesters: who, assets: what,
+      })
+  }
+
   function retire(siteId: string, siteName: string) {
     // The requesters and assets named are those at the site now, not when the page was loaded.
     let question = ''
     void action.run(async () => {
       const [fresh, assets] = await Promise.all([getCustomer(c.id), listCustomerAssets(c.id)])
       const requesters = fresh.requester_list.filter((r) => r.site_id === siteId).map((r) => requesterLabel(t, r.name, r.addresses[0]))
-      // Those whose own site it is: an asset with its holder elsewhere still has it to fall back on.
-      const there = assets.filter((a) => a.site?.id === siteId).map((a) => a.name)
-      question = [
-        t('sites.retireAsk', { name: siteName }),
-        requesters.length > 0 && t('sites.retireLeavesRequesters', { count: requesters.length, requesters: requesters.join(', ') }),
-        there.length > 0 && t('sites.retireLeavesAssets', { count: there.length, assets: there.join(', ') }),
-        t('sites.retireStays'),
-      ].filter(Boolean).join(' ')
+      // The active assets that will no longer be at the site: those at it now, also through a
+      // holder who is there and leaves it, and those whose own site it is, even while they are
+      // with their holder elsewhere.
+      const leaving = assets
+        .filter((a) => !a.retired_at && (a.at_site?.id === siteId || a.site?.id === siteId))
+        .map((a) => a.name)
+      question = retireQuestion(siteName, requesters, leaving)
     }).then((ok) => {
       if (!ok || !window.confirm(question)) return
       void action.run(() => retireSite(siteId)).then(async (done) => { if (done) await onChanged() })

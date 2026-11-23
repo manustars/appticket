@@ -95,6 +95,8 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
   const [editing, setEditing] = useState<Draft | null>(null)
   const [kind, setKind] = useState('')
   const [name, setName] = useState('')
+  const [serialNumber, setSerialNumber] = useState('')
+  const [siteId, setSiteId] = useState('')
   const id = useId()
   // An asset is put only at an active site, and given only to a requester who has not departed.
   const sites = c.sites.filter((s) => !s.retired_at)
@@ -103,10 +105,18 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
   function add(event: FormEvent) {
     event.preventDefault()
     if (!kind || !name.trim()) return
-    void action.run(() => createAsset(c.id, { kind_id: kind, name: name.trim() })).then(async (ok) => {
+    const fields = {
+      kind_id: kind,
+      name: name.trim(),
+      serial_number: serialNumber.trim() || null,
+      site_id: siteId || null,
+    }
+    void action.run(() => createAsset(c.id, fields)).then(async (ok) => {
       if (!ok) return
       setKind('')
       setName('')
+      setSerialNumber('')
+      setSiteId('')
       await assets.reload()
     })
   }
@@ -252,6 +262,17 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
           <label>
             {t('assets.name')}
             <input required value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label>
+            {t('assets.serialNumber')}
+            <input value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)} />
+          </label>
+          <label>
+            {t('assets.ownSite')}
+            <select value={siteId} onChange={(e) => setSiteId(e.target.value)}>
+              <option value="">{t('assets.noSite')}</option>
+              {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
           </label>
           <button type="submit" disabled={action.busy || !kind || !name.trim()}>{t('assets.add')}</button>
         </form>
