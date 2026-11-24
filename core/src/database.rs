@@ -138,6 +138,11 @@ impl Settings {
     /// How to connect to the database the settings give, TLS included. Logs a warning when a
     /// database on another host is reached without verify-full.
     pub fn connect_options(self) -> anyhow::Result<PgConnectOptions> {
+        // sqlx reads it only when it connects, and says then neither which file nor what for.
+        if let Some(ca_file) = given(self.ca_file.clone()) {
+            std::fs::metadata(&ca_file)
+                .with_context(|| format!("reading HD_DATABASE_CA_FILE {ca_file}"))?;
+        }
         let (options, warning) = self.tls_options()?;
         if let Some(warning) = warning {
             tracing::warn!("{warning}");
