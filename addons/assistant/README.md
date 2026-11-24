@@ -79,9 +79,9 @@ Environment variables, also read from a `.env` file in the working directory or 
 |---|---|---|
 | `HD_ASSISTANT_LISTEN` | `127.0.0.1:8090` | Where it receives events (`POST /events`). |
 | `HD_ASSISTANT_CORE_URL` | required | The core's base URL, such as `https://helpdesk.example.com`. |
-| `HD_ASSISTANT_TOKEN` | required | The token printed by `hd addon add`. |
+| `HD_ASSISTANT_TOKEN` | required (or its `_FILE`) | The token printed by `hd addon add`. |
 | `HD_ASSISTANT_TOKEN_FILE` | | A file holding `HD_ASSISTANT_TOKEN`, such as a mounted secret. |
-| `HD_ASSISTANT_EVENT_SECRET` | required | The event secret printed by `hd addon add`. |
+| `HD_ASSISTANT_EVENT_SECRET` | required (or its `_FILE`) | The event secret printed by `hd addon add`. |
 | `HD_ASSISTANT_EVENT_SECRET_FILE` | | A file holding `HD_ASSISTANT_EVENT_SECRET`. |
 | `HD_ASSISTANT_MODEL_PROVIDER` | required | The service that runs the model; see the table below. |
 | `HD_ASSISTANT_MODEL` | required | The model's id as the provider names it; for `azure-openai`, the deployment's name. |
@@ -96,7 +96,10 @@ Environment variables, also read from a `.env` file in the working directory or 
 
 A secret's file is used with the surrounding whitespace (such as a final newline) removed.
 Setting a variable and its `_FILE` together, or naming a missing or empty file, stops the
-Assistant with a message saying which, even for a provider that takes no key.
+Assistant with a message saying which, even for a provider that takes no key. The Helm chart
+sets the token and the event secret (and the key, when its Secret holds one) from its Secret as
+variables, so the `_FILE` variants are for installs outside the chart: adding one through the
+chart's `extraEnv` is refused as giving both.
 
 There is no default provider or model: whoever installs the Assistant chooses both, since it
 decides where customers' mail goes and what each message costs. The Assistant refuses to start

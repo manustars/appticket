@@ -443,23 +443,23 @@ mod tests {
     }
 
     /// The token, event secret and key of a provider that needs one, each given in its variable
-    /// unless `file` names it: that one is read from its `_FILE` variant.
-    fn anthropic_with_secret_file(file: &str, path: &str) -> anyhow::Result<Config> {
+    /// except `secret`, which is read from the file at `path` named by its `_FILE` variant.
+    fn anthropic_with_secret_file(secret: &str, path: &str) -> anyhow::Result<Config> {
         let mut vars = vec![
             ("HD_ASSISTANT_CORE_URL", "http://127.0.0.1:8080"),
             ("HD_ASSISTANT_MODEL_PROVIDER", "anthropic"),
             ("HD_ASSISTANT_MODEL", "claude-opus-5-5"),
         ];
-        let file_variable = format!("{file}_FILE");
-        for (secret, value) in [
+        let file_variable = format!("{secret}_FILE");
+        for (variable, value) in [
             ("HD_ASSISTANT_TOKEN", "t"),
             ("HD_ASSISTANT_EVENT_SECRET", "s"),
             ("HD_ASSISTANT_API_KEY", "k"),
         ] {
-            if secret == file {
+            if variable == secret {
                 vars.push((&file_variable, path));
             } else {
-                vars.push((secret, value));
+                vars.push((variable, value));
             }
         }
         config(&vars)
@@ -506,7 +506,7 @@ mod tests {
                 "{error}"
             );
             // Refused even where the key is optional: a file was named.
-            let error = error_with_file("HD_ASSISTANT_API_KEY_FILE", &path);
+            let error = ollama_error_with("HD_ASSISTANT_API_KEY_FILE", &path);
             assert!(
                 error.contains("HD_ASSISTANT_API_KEY_FILE") && error.contains(&path),
                 "{error}"
@@ -516,7 +516,7 @@ mod tests {
     }
 
     /// The error of an `ollama` configuration, which needs no key, with `variable` set to `value`.
-    fn error_with_file(variable: &str, value: &str) -> String {
+    fn ollama_error_with(variable: &str, value: &str) -> String {
         let mut vars: Vec<(&str, &str)> = with(&[
             ("HD_ASSISTANT_MODEL_PROVIDER", "ollama"),
             ("HD_ASSISTANT_MODEL", "m"),
@@ -596,7 +596,9 @@ mod tests {
             vars.push((&secret_file, &file));
             let error = error(&vars);
             assert!(
-                error.contains(&format!("{secret} ")) && error.contains(&secret_file),
+                error.contains(&format!("{secret} "))
+                    && error.contains(&secret_file)
+                    && error.contains("not both"),
                 "{error}"
             );
         }
