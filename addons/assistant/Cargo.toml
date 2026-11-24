@@ -1,6 +1,6 @@
 [package]
 name = "hd-assistant"
-version = "0.3.0"
+version = "0.3.1"
 description = "The Assistant: an add-on that reads incoming messages and proposes what to do."
 edition.workspace = true
 license.workspace = true
