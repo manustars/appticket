@@ -1,6 +1,15 @@
 {{- $core := .Values.core }}
 {{- $gm := .Values.greenmail }}
 {{- $name := include "hd.coreName" . }}
+{{- $db := $core.database }}
+{{- /* The CloudNativePG cluster's own Secret is in use: TLS verified against its authority. */}}
+{{- $cnpg := and .Values.postgresql.enabled (not $db.existingSecret) }}
+{{- if and $cnpg (or $db.sslMode $db.ca.existingSecret) }}
+{{- fail "core.database.sslMode and core.database.ca are for an external database (core.database.existingSecret); the CloudNativePG cluster is verified against its own authority" }}
+{{- end }}
+{{- $databaseCaSecret := ternary (printf "%s-ca" (include "hd.dbName" .)) $db.ca.existingSecret $cnpg }}
+{{- $databaseCaKey := ternary "ca.crt" $db.ca.secretKey $cnpg }}
+{{- $databaseSslMode := ternary "verify-full" $db.sslMode $cnpg }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -48,6 +57,14 @@ spec:
                 secretKeyRef:
                   name: {{ include "hd.databaseSecret" . }}
                   key: {{ $core.database.secretKey }}
+            {{- with $databaseSslMode }}
+            - name: HD_DATABASE_SSLMODE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if $databaseCaSecret }}
+            - name: HD_DATABASE_CA_FILE
+              value: "/etc/hd/database-ca/ca.crt"
+            {{- end }}
             {{- if $core.mail.imap.existingSecret }}
             - name: HD_IMAP_URL
               valueFrom:
@@ -153,11 +170,18 @@ spec:
             {{- toYaml $core.resources | nindent 12 }}
           securityContext:
             {{- include "hd.containerSecurityContext" . | nindent 12 }}
-          {{- if $core.mail.ca.existingSecret }}
+          {{- if or $core.mail.ca.existingSecret $databaseCaSecret }}
           volumeMounts:
+            {{- if $core.mail.ca.existingSecret }}
             - name: mail-ca
               mountPath: /etc/hd/mail-ca
               readOnly: true
+            {{- end }}
+            {{- if $databaseCaSecret }}
+            - name: database-ca
+              mountPath: /etc/hd/database-ca
+              readOnly: true
+            {{- end }}
           {{- end }}
         {{- if $gm.enabled }}
         # Staging only: a test mail server on the pod's loopback (see values: greenmail).
@@ -191,11 +215,23 @@ spec:
             capabilities:
               drop: ["ALL"]
         {{- end }}
-      {{- if $core.mail.ca.existingSecret }}
+      {{- if or $core.mail.ca.existingSecret $databaseCaSecret }}
       volumes:
+        {{- if $core.mail.ca.existingSecret }}
         - name: mail-ca
           secret:
             secretName: {{ $core.mail.ca.existingSecret }}
+        {{- end }}
+        {{- if $databaseCaSecret }}
+        # Only the certificate: a Secret such as CloudNativePG's <cluster>-ca also holds the
+        # authority's key.
+        - name: database-ca
+          secret:
+            secretName: {{ $databaseCaSecret }}
+            items:
+              - key: {{ $databaseCaKey }}
+                path: ca.crt
+        {{- end }}
       {{- end }}
       {{- with $core.nodeSelector }}
       nodeSelector:

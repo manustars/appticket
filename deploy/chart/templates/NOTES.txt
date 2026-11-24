@@ -17,6 +17,12 @@ First steps, with the `hd` command inside the core's pod (docs/deploy.md has the
   kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ include "hd.coreName" . }} -- hd agent add <agent e-mail> --name "<name>"
 
 The first agent gets the Administrator role and can add the others under Administration.
+{{- if .Values.core.database.existingSecret }}
+
+The core verifies the certificate of a database on another host (verify-full) unless
+core.database.sslMode or the URL's sslmode says otherwise; a core that cannot verify it does not
+start and logs why (docs/deploy.md, "TLS to the database").
+{{- end }}
 {{- if not .Values.assistant.enabled }}
 
 To add the Assistant, register it first:
