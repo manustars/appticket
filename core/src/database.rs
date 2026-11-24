@@ -140,7 +140,7 @@ impl Settings {
     pub fn connect_options(self) -> anyhow::Result<PgConnectOptions> {
         // sqlx reads it only when it connects, and says then neither which file nor what for.
         if let Some(ca_file) = given(self.ca_file.clone()) {
-            std::fs::metadata(&ca_file)
+            std::fs::read(&ca_file)
                 .with_context(|| format!("reading HD_DATABASE_CA_FILE {ca_file}"))?;
         }
         let (options, warning) = self.tls_options()?;
@@ -180,10 +180,10 @@ impl Settings {
             mode,
             url_mode: url
                 .as_ref()
-                .filter(|url| url.mode)
+                .filter(|url| url.carries_mode)
                 .map(|_| SslMode::from(options.get_ssl_mode())),
             ca_file: ca_file.is_some(),
-            url_root_cert: url.is_some_and(|url| url.root_cert),
+            url_root_cert: url.is_some_and(|url| url.carries_root_cert),
         })?;
         if let Some(mode) = tls.mode {
             options = options.ssl_mode(mode.into());
@@ -396,10 +396,10 @@ impl Place {
 
 /// What a connection string carries about TLS, with the spellings sqlx accepts.
 struct UrlTls {
-    /// An `sslmode` (or `ssl-mode`).
-    mode: bool,
-    /// Authorities to trust: `sslrootcert`, `ssl-root-cert` or `ssl-ca`.
-    root_cert: bool,
+    /// Whether it carries an `sslmode` (or `ssl-mode`).
+    carries_mode: bool,
+    /// Whether it carries authorities to trust: `sslrootcert`, `ssl-root-cert` or `ssl-ca`.
+    carries_root_cert: bool,
     /// The address to dial instead of the host's, the last one given as sqlx takes it.
     hostaddr: Option<IpAddr>,
 }
@@ -408,14 +408,14 @@ impl UrlTls {
     fn of(url: &str) -> anyhow::Result<Self> {
         let url = url::Url::parse(url).context("HD_DATABASE_URL is not a connection string")?;
         let mut tls = Self {
-            mode: false,
-            root_cert: false,
+            carries_mode: false,
+            carries_root_cert: false,
             hostaddr: None,
         };
         for (key, value) in url.query_pairs() {
             match &*key {
-                "sslmode" | "ssl-mode" => tls.mode = true,
-                "sslrootcert" | "ssl-root-cert" | "ssl-ca" => tls.root_cert = true,
+                "sslmode" | "ssl-mode" => tls.carries_mode = true,
+                "sslrootcert" | "ssl-root-cert" | "ssl-ca" => tls.carries_root_cert = true,
                 "hostaddr" => tls.hostaddr = value.parse().ok(),
                 _ => {}
             }
@@ -1079,18 +1079,24 @@ mod tests {
 
     #[test]
     fn a_ca_file_that_cannot_be_read_is_named() {
-        let missing = dir().join("database-ca.crt");
-        let error = Settings {
-            ca_file: Some(missing.display().to_string()),
-            ..parameters()
+        let dir = dir();
+        // Missing, or a folder where a file should be.
+        let folder = dir.join("database-ca-folder.crt");
+        std::fs::create_dir(&folder).unwrap();
+        for ca_file in [dir.join("database-ca.crt"), folder] {
+            let error = Settings {
+                ca_file: Some(ca_file.display().to_string()),
+                ..parameters()
+            }
+            .connect_options()
+            .unwrap_err();
+            let error = format!("{error:#}");
+            assert!(
+                error.contains("HD_DATABASE_CA_FILE")
+                    && error.contains(&ca_file.display().to_string()),
+                "{error}"
+            );
         }
-        .connect_options()
-        .unwrap_err();
-        let error = format!("{error:#}");
-        assert!(
-            error.contains("HD_DATABASE_CA_FILE") && error.contains("database-ca.crt"),
-            "{error}"
-        );
-        std::fs::remove_dir_all(missing.parent().unwrap()).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
