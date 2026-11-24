@@ -31,6 +31,7 @@ mod mail_status;
 mod oidc;
 mod outbound;
 mod parents;
+mod postgres_version;
 mod proposals;
 mod requesters;
 mod roles;
@@ -162,6 +163,7 @@ async fn main() -> anyhow::Result<()> {
         .connect_with(database)
         .await
         .context("connecting to the database")?;
+    postgres_version::check(&db).await?;
     sqlx::migrate!()
         .run(&db)
         .await
