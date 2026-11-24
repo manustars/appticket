@@ -17,6 +17,9 @@ stop cleanly on SIGTERM.
 
 - Kubernetes 1.27 or later, Helm 3.
 - The CloudNativePG operator, unless you bring your own PostgreSQL (`postgresql.enabled=false`).
+- For your own PostgreSQL, version 16 or later. At startup, before applying its migrations, the
+  core logs the server's version and stops on an older one with a message naming the version it
+  found.
 - An ingress controller and TLS for the agents' UI: the sign-in cookie is marked `Secure`, so the
   UI works only over HTTPS (or through a port-forward to `localhost`). A certificate of your own, or
   the ingress controller's default certificate (see [HTTPS](#https)).
