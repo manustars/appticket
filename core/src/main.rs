@@ -158,7 +158,7 @@ async fn main() -> anyhow::Result<()> {
     let database_url = cli
         .database_url
         .read()?
-        .context("set HD_DATABASE_URL (or HD_DATABASE_URL_FILE), or pass --database-url")?;
+        .context("set HD_DATABASE_URL or HD_DATABASE_URL_FILE (or pass --database-url or --database-url-file)")?;
     let db = PgPoolOptions::new()
         .max_connections(10)
         .connect(&database_url)

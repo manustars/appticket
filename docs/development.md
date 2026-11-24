@@ -58,10 +58,10 @@ Real mail servers need TLS:
   (STARTTLS, port 587).
 
 Percent-encode `@`, `/` and `:` inside the user or password. Either URL can be read from a file
-instead, with `HD_IMAP_URL_FILE` and `HD_SMTP_URL_FILE`, as every secret of the core. Certificates are checked against the
-public web PKI; for servers with a private certificate authority, point `HD_MAIL_CA_FILE` at a PEM
-file of that authority. Plain `imap://` and `smtp://` are accepted only for a server on this
-machine, such as the test one.
+instead, with `HD_IMAP_URL_FILE` and `HD_SMTP_URL_FILE`, as every secret of the core. Certificates
+are checked against the public web PKI; for servers with a private certificate authority, point
+`HD_MAIL_CA_FILE` at a PEM file of that authority. Plain `imap://` and `smtp://` are accepted only
+for a server on this machine, such as the test one.
 
 To sign in through the test Keycloak, add (the redirect is registered for the core on 8080 and
 for Vite on 5173):

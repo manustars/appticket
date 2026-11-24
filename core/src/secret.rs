@@ -13,8 +13,13 @@ use anyhow::Context;
 /// `--<long>-file` / `<ENV>_FILE`. The value is reached only through `read`, so that giving both
 /// is refused wherever the secret is used.
 macro_rules! secret {
-    ($name:ident, $long:literal, $env:literal, $value_name:literal, $help:literal
-        $(, global = $global:literal)?) => {
+    ($name:ident {
+        long: $long:literal,
+        env: $env:literal,
+        value_name: $value_name:literal,
+        help: $help:literal $(,
+        global: $global:literal)? $(,)?
+    }) => {
         #[derive(clap::Args, Debug, Clone, Default)]
         pub struct $name {
             #[arg(id = $env, long = $long, env = $env, hide_env_values = true,
@@ -56,56 +61,53 @@ macro_rules! secret {
     };
 }
 
-secret!(
-    DatabaseUrl,
-    "database-url",
-    "HD_DATABASE_URL",
-    "URL",
-    "PostgreSQL connection string",
-    global = true
-);
-secret!(
-    ImapUrl,
-    "imap-url",
-    "HD_IMAP_URL",
-    "URL",
-    "Mailbox to read, as imaps://user:password@host[:port]/MAILBOX (imap:// only for a server \
-     on this machine). Without it no mail is read."
-);
-secret!(
-    SmtpUrl,
-    "smtp-url",
-    "HD_SMTP_URL",
-    "URL",
-    "Server that sends replies: smtps://user:password@host[:port] or \
+secret!(DatabaseUrl {
+    long: "database-url",
+    env: "HD_DATABASE_URL",
+    value_name: "URL",
+    help: "PostgreSQL connection string",
+    global: true,
+});
+secret!(ImapUrl {
+    long: "imap-url",
+    env: "HD_IMAP_URL",
+    value_name: "URL",
+    help: "Mailbox to read, as imaps://user:password@host[:port]/MAILBOX (imap:// only for a server \
+     on this machine). Without it no mail is read.",
+});
+secret!(SmtpUrl {
+    long: "smtp-url",
+    env: "HD_SMTP_URL",
+    value_name: "URL",
+    help: "Server that sends replies: smtps://user:password@host[:port] or \
      smtp://user:password@host[:port]?tls=required (plain smtp:// only for a server on this \
-     machine). Without it replies wait in the outbox."
-);
-secret!(
-    AgentPassword,
-    "password",
-    "HD_AGENT_PASSWORD",
-    "PASSWORD",
-    "The password to set; prefer the variable or its file to the option, which other users of \
-     the machine can see. Without it one is generated and printed once."
-);
-secret!(
-    OidcClientSecret,
-    "oidc-client-secret",
-    "HD_OIDC_CLIENT_SECRET",
-    "SECRET",
-    "The client's secret"
-);
+     machine). Without it replies wait in the outbox.",
+});
+secret!(AgentPassword {
+    long: "password",
+    env: "HD_AGENT_PASSWORD",
+    value_name: "PASSWORD",
+    help: "The password to set; prefer the variable or its file to the option, which other users of \
+     the machine can see. Without it one is generated and printed once.",
+});
+secret!(OidcClientSecret {
+    long: "oidc-client-secret",
+    env: "HD_OIDC_CLIENT_SECRET",
+    value_name: "SECRET",
+    help: "The client's secret",
+});
 
 /// The secret `variable` gives, either as its `value` or read from its `_FILE` variant's `file`.
-/// An empty value counts as not given; the file's content is trimmed, and an empty file, a
-/// missing one or giving both is an error naming the variables.
+/// Either is trimmed of surrounding whitespace. A blank value counts as not given, as an unset
+/// variable does; a blank file, a missing one or giving both is an error naming the variables.
 pub fn read(
     variable: &str,
     value: Option<String>,
     file: Option<&Path>,
 ) -> anyhow::Result<Option<String>> {
-    let value = value.filter(|value| !value.is_empty());
+    let value = value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
     match (value, file) {
         (Some(_), Some(_)) => anyhow::bail!("set {variable} or {variable}_FILE, not both"),
         (Some(value), None) => Ok(Some(value)),
@@ -150,6 +152,14 @@ mod tests {
         assert_eq!(
             read("HD_IMAP_URL", Some(String::new()), None).unwrap(),
             None
+        );
+        assert_eq!(
+            read("HD_IMAP_URL", Some(" \n".to_owned()), None).unwrap(),
+            None
+        );
+        assert_eq!(
+            read("HD_IMAP_URL", Some(" given\n".to_owned()), None).unwrap(),
+            Some("given".to_owned())
         );
         std::fs::remove_dir_all(dir).unwrap();
     }
