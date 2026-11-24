@@ -18,7 +18,7 @@ the version in `deploy/chart/Chart.yaml`.
 ## Prerequisites
 
 - Kubernetes 1.27 or later, Helm 3.
-- The CloudNativePG operator, unless you bring your own PostgreSQL (`postgresql.enabled=false`).
+- The CloudNativePG operator, unless you bring your own PostgreSQL (`postgresql.mode=external`).
 - For your own PostgreSQL, a database prepared as
   [Running on a PostgreSQL database of your own](external-database.md#what-the-dba-creates) says:
   PostgreSQL 16 or later, a database dedicated to the help desk and owned by the core's user.
@@ -38,7 +38,8 @@ The chart never holds secrets; it refers to Secrets you create in the release's 
 
 | Secret | Keys | When |
 |---|---|---|
-| database | `uri`: `postgres://user:password@host:5432/db` | only with `postgresql.enabled=false`; set `core.database.existingSecret` (and `secretKey`) |
+| database | `uri`: `postgres://user:password@host:5432/db` | only with `postgresql.mode=external`, for a database given as a URL; set `core.database.existingSecret` (and `secretKey`) |
+| database password | `password` | only with `postgresql.mode=external`, for a database given as separate values; set `postgresql.external.password.existingSecret` (and `secretKey`) |
 | mail | `imap-url`, `smtp-url` | real mail: `core.mail.imap.existingSecret`, `core.mail.smtp.existingSecret` (may be the same Secret) |
 | mail CA | `ca.crt` | mail servers with a private certificate authority: `core.mail.ca.existingSecret` |
 | database CA | `ca.crt` | an external database whose certificate comes from a private authority: `core.database.ca.existingSecret` (see [TLS to the database](#tls-to-the-database)) |
@@ -56,16 +57,19 @@ kubectl -n helpdesk create secret generic hd-mail \
 
 Percent-encode `@`, `/` and `:` inside the user name or password.
 
-With `postgresql.enabled=true` (the default) nothing is needed for the database: CloudNativePG
-creates the Secret `<name>-db-app` (`hd-db-app` for a release named `hd`) and the core reads its
-`uri`, and verifies the cluster's certificate against the cluster's own authority (see
-[TLS to the database](#tls-to-the-database)).
+With `postgresql.mode=cloudnativepg` (the default) nothing is needed for the database:
+CloudNativePG creates the Secret `<name>-db-app` (`hd-db-app` for a release named `hd`) and the
+core reads its `uri`, and verifies the cluster's certificate against the cluster's own authority
+(see [TLS to the database](#tls-to-the-database)).
 
-The external database's `uri` is a connection string as
-[Connecting](external-database.md#connecting) describes, which also gives the separate parameters
-that can replace it outside the chart. There, every secret of the core and of the Assistant can
-also be read from a file instead of a variable
-([Secrets from files](external-database.md#secrets-from-files)).
+With `postgresql.mode=external` the chart takes the database in one of two forms, not both, as
+[Connecting](external-database.md#connecting) describes them: the `uri` of the database Secret,
+a connection string, or the separate parameters, from `postgresql.external.host`, `port`
+(default 5432), `name` and `user`, with the password as it is in its Secret. Values that belong to
+another mode stop the chart with a message, and so does `postgresql.enabled`, which
+`postgresql.mode` replaces (`true` was `cloudnativepg`, `false` was `external`). Outside the
+chart, every secret of the core and of the Assistant can also be read from a file instead of a
+variable ([Secrets from files](external-database.md#secrets-from-files)).
 
 ## Install
 
@@ -105,7 +109,9 @@ The most common settings:
 | `ingress.*` | Host, class, annotations and TLS (see [HTTPS](#https)). |
 | `core.signIn.*` | Failed sign-in limits and trusted proxies (see [Failed sign-ins](#failed-sign-ins)). |
 | `dumps.*` | Scheduled database dumps to a volume (see [Backups](#backups)). |
-| `postgresql.*` | Instances, storage size and class, backups. |
+| `postgresql.mode` | Where the database comes from: `cloudnativepg` (the default) or `external`. |
+| `postgresql.external.*` | An external database as separate values. |
+| `postgresql.*` | The CloudNativePG cluster's instances, storage size and class, backups. |
 | `assistant.*` | See [The Assistant](#the-assistant). |
 | `greenmail.enabled` | The staging test mail server. |
 | `networkPolicy.enabled` | Ingress NetworkPolicies; list the ingress controller's namespace in `networkPolicy.coreFrom`. |
@@ -134,9 +140,10 @@ The core reaches a database on another host over TLS and verifies its certificat
 (`verify-full`) unless told otherwise. [TLS](external-database.md#tls) in the guide to running on
 your own database gives the modes, the defaults, the warning a weaker mode logs and what stops the
 core. The chart sets its two variables from two values, which are for an external database
-(`core.database.existingSecret`) only and refused with the CloudNativePG cluster:
+(`postgresql.mode=external`, in either form) only and refused with the CloudNativePG cluster:
 
-- `core.database.sslMode`: `HD_DATABASE_SSLMODE`, for a URL without its own `sslmode`;
+- `core.database.sslMode`: `HD_DATABASE_SSLMODE`, for the separate values and for a URL without
+  its own `sslmode`;
 - `core.database.ca.existingSecret` and `secretKey`: a Secret holding the PEM file of a private
   authority, mounted as `HD_DATABASE_CA_FILE`.
 
@@ -619,7 +626,10 @@ cluster's time zone; default every day at 02:30). It writes a compressed dump in
 format to a volume, and keeps the latest `dumps.keep` (default 7). It needs no object storage and
 works with the CloudNativePG cluster or an external database; the volume (`dumps.storage.size`,
 `storageClass`, or `existingClaim`) is kept on `helm uninstall`. Keep the job's image
-(`dumps.image.tag`) at the database's major version or newer.
+(`dumps.image.tag`) at the database's major version or newer. `pg_dump` gets the database's URL
+or separate values, but not `core.database.sslMode` nor `core.database.ca`: it encrypts the
+connection when the server offers TLS, and verifies the server's certificate only when the URL
+asks for it.
 
 To take one now and to list the dumps:
 
@@ -659,17 +669,17 @@ point-in-time recovery. Turn them on with `postgresql.backup.enabled=true` and o
 The schedule has six fields, seconds first: `"0 0 2 * * *"` is every day at 02:00. An on-demand
 backup can be taken with a CloudNativePG `Backup` resource for the cluster `<release>-db`.
 Restoring means creating a new cluster that bootstraps from the backup (CloudNativePG's
-`bootstrap.recovery`), then pointing the core at it with `core.database.existingSecret` (its
-`<cluster>-app` Secret) and at its authority with `core.database.ca.existingSecret`
-(`<cluster>-ca`).
+`bootstrap.recovery`), then pointing the core at it with `postgresql.mode=external`,
+`core.database.existingSecret` (its `<cluster>-app` Secret) and, for its authority,
+`core.database.ca.existingSecret` (`<cluster>-ca`).
 
 ## Uninstalling
 
 `helm uninstall` removes the core, the Assistant and the rest, but leaves the database cluster
 (`postgresql.keepOnUninstall`, true by default) so that its data survives; installing again with
 the same release name takes it back. To delete the data too, delete the cluster by hand
-(`kubectl -n helpdesk delete cluster hd-db`). Turning `postgresql.enabled` off in an upgrade also
-leaves the kept cluster in place.
+(`kubectl -n helpdesk delete cluster hd-db`). Changing `postgresql.mode` to `external` in an
+upgrade also leaves the kept cluster in place.
 
 ## Upgrades
 
@@ -692,10 +702,10 @@ verifying it. Upgrade the chart together with the core: the new core under the 0
 `core.image.tag` changed) reaches the CloudNativePG cluster with `verify-full` but without its
 authority, and does not start.
 
-- **The CloudNativePG cluster** (`postgresql.enabled=true`, no `core.database.existingSecret`):
+- **The CloudNativePG cluster** (`postgresql.mode=cloudnativepg`):
   nothing to do. The chart sets `verify-full` and mounts the cluster's authority from
   `<name>-db-ca`, which CloudNativePG has created for every cluster the chart made.
-- **An external database** (`core.database.existingSecret`) on another host: from now on its
+- **An external database** (`postgresql.mode=external`) on another host: from now on its
   certificate must be from a trusted authority, for the host in the URL. Before upgrading, for a
   private authority put its certificate in a Secret and set `core.database.ca.existingSecret`; a
   certificate from a public authority needs nothing; a CloudNativePG cluster named in
