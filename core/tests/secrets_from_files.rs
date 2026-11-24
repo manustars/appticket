@@ -1,6 +1,6 @@
 //! The `hd` binary reads its secrets from files, as Compose and Kubernetes give them.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// The test database, as the other tests reach it.
@@ -18,7 +18,7 @@ fn dir() -> PathBuf {
 }
 
 /// Runs `hd` with only the variables given, and those the system needs to start a process.
-fn hd(dir: &PathBuf, args: &[&str], vars: &[(&str, &str)]) -> Output {
+fn hd(dir: &Path, args: &[&str], vars: &[(&str, &str)]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_hd"));
     command.args(args).current_dir(dir).env_clear();
     for name in ["PATH", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP"] {
