@@ -51,6 +51,11 @@ whose `X-Forwarded-For` is believed; Vite's development proxy is not one of them
 development every sign-in counts under `127.0.0.1`.
 Production deployment: [`deploy.md`](deploy.md).
 
+Instead of `HD_DATABASE_URL`, the database can be given as separate parameters: `HD_DATABASE_HOST`,
+`HD_DATABASE_PORT` (default 5432), `HD_DATABASE_NAME`, `HD_DATABASE_USER` and
+`HD_DATABASE_PASSWORD` (or `HD_DATABASE_PASSWORD_FILE`), the password with no percent-encoding.
+Not both: the URL beside any of them, or the separate parameters in part, stops the core.
+
 Real mail servers need TLS:
 
 - `HD_IMAP_URL=imaps://user:password@host/INBOX` (port 993 unless given);
@@ -152,6 +157,10 @@ of seconds per message, so proposals appear accordingly later.
 cargo test                    # needs the database: each test gets a fresh one from sqlx
 cargo test -- --ignored       # tests that also need the test mail server and Keycloak
 ```
+
+The tests of the separate database parameters (`core/tests/database_parameters.rs`) create a role
+and a database of their own on the `DATABASE_URL` server and drop them afterwards, so its user
+needs to be allowed to create both, as the superuser `hd` of the test server is.
 
 ## API specification
 

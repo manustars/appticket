@@ -54,12 +54,19 @@ With `postgresql.enabled=true` (the default) nothing is needed for the database:
 creates the Secret `<name>-db-app` (`hd-db-app` for a release named `hd`) and the core reads its
 `uri`.
 
+Outside the chart, the core's database can also be given as separate parameters instead of
+`HD_DATABASE_URL`: `HD_DATABASE_HOST`, `HD_DATABASE_PORT` (default 5432), `HD_DATABASE_NAME`,
+`HD_DATABASE_USER` and `HD_DATABASE_PASSWORD`, the password as the DBA gives it, with no
+percent-encoding. Every command of `hd` reads the same ones. Giving `HD_DATABASE_URL` (or its file)
+together with any separate parameter, the port included, or the separate parameters in part, stops
+the core with a message naming them.
+
 Outside the chart, every secret of the core can be read from a file instead of a variable, such
-as a mounted secret: `HD_DATABASE_URL_FILE`, `HD_IMAP_URL_FILE`, `HD_SMTP_URL_FILE`,
-`HD_OIDC_CLIENT_SECRET_FILE` and `HD_AGENT_PASSWORD_FILE`. The file's content is used with the
-surrounding whitespace (such as a final newline) removed. Setting a variable and its `_FILE`
-together, or naming a missing or empty file, stops the core with a message saying which. The
-Assistant's secrets can be read from files in the same way: `HD_ASSISTANT_TOKEN_FILE`,
+as a mounted secret: `HD_DATABASE_URL_FILE`, `HD_DATABASE_PASSWORD_FILE`, `HD_IMAP_URL_FILE`,
+`HD_SMTP_URL_FILE`, `HD_OIDC_CLIENT_SECRET_FILE` and `HD_AGENT_PASSWORD_FILE`. The file's content
+is used with the surrounding whitespace (such as a final newline) removed. Setting a variable and
+its `_FILE` together, or naming a missing or empty file, stops the core with a message saying
+which. The Assistant's secrets can be read from files in the same way: `HD_ASSISTANT_TOKEN_FILE`,
 `HD_ASSISTANT_EVENT_SECRET_FILE` and `HD_ASSISTANT_API_KEY_FILE`.
 
 ## Install

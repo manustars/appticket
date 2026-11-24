@@ -15,6 +15,7 @@ mod auth;
 mod catalog;
 mod cli;
 mod customers;
+mod database;
 mod drafts;
 mod error;
 mod external_references;
@@ -45,7 +46,7 @@ mod triage;
 #[command(about = "Help desk core")]
 struct Cli {
     #[command(flatten)]
-    database_url: secret::DatabaseUrl,
+    database: database::Settings,
 
     #[command(subcommand)]
     command: Command,
@@ -155,13 +156,10 @@ async fn main() -> anyhow::Result<()> {
         }
         command => command,
     };
-    let database_url = cli
-        .database_url
-        .read()?
-        .context("set HD_DATABASE_URL or HD_DATABASE_URL_FILE (or pass --database-url or --database-url-file)")?;
+    let database = cli.database.read()?.connect_options()?;
     let db = PgPoolOptions::new()
         .max_connections(10)
-        .connect(&database_url)
+        .connect_with(database)
         .await
         .context("connecting to the database")?;
     sqlx::migrate!()
@@ -322,6 +320,7 @@ mod tests {
         // A secret missing here is one the walk above no longer sees: its value is not hidden.
         for secret in [
             "HD_DATABASE_URL",
+            "HD_DATABASE_PASSWORD",
             "HD_IMAP_URL",
             "HD_SMTP_URL",
             "HD_AGENT_PASSWORD",

@@ -57,6 +57,16 @@ macro_rules! secret {
                     file: Some(file),
                 }
             }
+
+            /// The secret given both as a value and as a file, which `read` refuses.
+            #[cfg(test)]
+            #[allow(dead_code, reason = "not every secret is set by a test")]
+            pub fn given_and_from_file(value: &str, file: PathBuf) -> Self {
+                Self {
+                    value: Some(value.to_owned()),
+                    file: Some(file),
+                }
+            }
         }
     };
 }
@@ -65,7 +75,17 @@ secret!(DatabaseUrl {
     long: "database-url",
     env: "HD_DATABASE_URL",
     value_name: "URL",
-    help: "PostgreSQL connection string",
+    help: "PostgreSQL connection string, as postgres://user:password@host[:port]/database \
+     (percent-encode @, / and : inside the user name or password). Or give the database as separate \
+     parameters: HD_DATABASE_HOST, HD_DATABASE_PORT, HD_DATABASE_NAME, HD_DATABASE_USER and \
+     HD_DATABASE_PASSWORD.",
+    global: true,
+});
+secret!(DatabasePassword {
+    long: "database-password",
+    env: "HD_DATABASE_PASSWORD",
+    value_name: "PASSWORD",
+    help: "Password of HD_DATABASE_USER, as it is: no percent-encoding",
     global: true,
 });
 secret!(ImapUrl {
