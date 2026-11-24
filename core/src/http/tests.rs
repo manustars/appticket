@@ -330,8 +330,7 @@ async fn with_local_sign_in_off_a_password_is_refused_the_same_way_for_every_acc
     let settings = crate::oidc::Settings {
         issuer: Some("https://login.example.com/realms/staff".to_owned()),
         client_id: Some("helpdesk".to_owned()),
-        client_secret: Some("invented-secret".to_owned()),
-        client_secret_file: None,
+        client_secret: crate::secret::OidcClientSecret::given("invented-secret"),
         label: Some("Northgate".to_owned()),
         session_hours: 12,
         authorized_group: None,
@@ -404,8 +403,7 @@ async fn local_sign_in_off_and_an_unreachable_provider_are_recovered_with_the_co
     let settings = crate::oidc::Settings {
         issuer: Some("http://127.0.0.1:9/realms/staff".to_owned()),
         client_id: Some("helpdesk".to_owned()),
-        client_secret: Some("invented-secret".to_owned()),
-        client_secret_file: None,
+        client_secret: crate::secret::OidcClientSecret::given("invented-secret"),
         label: Some("Northgate".to_owned()),
         session_hours: 12,
         authorized_group: None,
@@ -453,13 +451,12 @@ async fn local_sign_in_off_and_an_unreachable_provider_are_recovered_with_the_co
     crate::cli::sign_in(&db, switch(LocalSignIn::On), &mut Vec::new())
         .await
         .unwrap();
+    let password = "a fresh password for Marco";
     let set_password = crate::cli::AgentCommand::SetPassword {
         email: "marco@northgate.test".to_owned(),
+        password: crate::secret::AgentPassword::given(password),
     };
-    let password = "a fresh password for Marco";
-    crate::cli::agent(&db, set_password, Some(password.to_owned()))
-        .await
-        .unwrap();
+    crate::cli::agent(&db, set_password).await.unwrap();
     let signed_in = sign_in_from(&state, "192.0.2.1", &[], "marco@northgate.test", password).await;
     assert_eq!(
         signed_in.status,
@@ -2432,8 +2429,7 @@ async fn the_sign_in_page_offers_the_identity_provider_only_when_configured(db: 
     let settings = crate::oidc::Settings {
         issuer: Some("https://login.example.com/realms/staff".to_owned()),
         client_id: Some("helpdesk".to_owned()),
-        client_secret: Some("invented-secret".to_owned()),
-        client_secret_file: None,
+        client_secret: crate::secret::OidcClientSecret::given("invented-secret"),
         label: Some("Northgate".to_owned()),
         session_hours: 12,
         authorized_group: None,

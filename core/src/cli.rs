@@ -80,8 +80,8 @@ pub async fn customer(db: &PgPool, command: CustomerCommand) -> anyhow::Result<(
 
 #[derive(Subcommand)]
 pub enum AgentCommand {
-    /// Add an agent. The password is read from the HD_AGENT_PASSWORD environment variable, or
-    /// generated and printed once when that is unset. Without --role, the very first agent gets
+    /// Add an agent. The password is read from HD_AGENT_PASSWORD or HD_AGENT_PASSWORD_FILE, or
+    /// generated and printed once when neither is set. Without --role, the very first agent gets
     /// the Administrator role and later ones the default role.
     Add {
         /// The agent's e-mail address, used to sign in.
@@ -92,6 +92,8 @@ pub enum AgentCommand {
         /// The role's name.
         #[arg(long)]
         role: Option<String>,
+        #[command(flatten)]
+        password: crate::secret::AgentPassword,
     },
     /// List agents with their roles.
     List,
@@ -102,11 +104,13 @@ pub enum AgentCommand {
         /// The role's name.
         role: String,
     },
-    /// Set an agent's password, from HD_AGENT_PASSWORD or generated and printed once, and end
-    /// the agent's sessions.
+    /// Set an agent's password, from HD_AGENT_PASSWORD or HD_AGENT_PASSWORD_FILE or generated
+    /// and printed once, and end the agent's sessions.
     SetPassword {
         /// The agent's e-mail address.
         email: String,
+        #[command(flatten)]
+        password: crate::secret::AgentPassword,
     },
     /// Deactivate an agent who left the help desk: they can no longer sign in, and their tickets
     /// that are not closed lose their assignee.
@@ -121,24 +125,19 @@ pub enum AgentCommand {
     },
 }
 
-/// The password `hd agent add` and `hd agent set-password` set, when one is given.
-pub fn password_from_env() -> Option<String> {
-    std::env::var("HD_AGENT_PASSWORD")
-        .ok()
-        .filter(|password| !password.is_empty())
-}
-
-/// Runs an agent command; `password` is the one to set (HD_AGENT_PASSWORD), generated and printed
-/// when `None`.
-pub async fn agent(
-    db: &PgPool,
-    command: AgentCommand,
-    password: Option<String>,
-) -> anyhow::Result<()> {
+/// Runs an agent command. `add` and `set-password` generate and print a password when none is
+/// given.
+pub async fn agent(db: &PgPool, command: AgentCommand) -> anyhow::Result<()> {
     let fail = |e: crate::error::Error| anyhow::anyhow!("{e}");
     let cli = Grant::command_line();
     match command {
-        AgentCommand::Add { email, name, role } => {
+        AgentCommand::Add {
+            email,
+            name,
+            role,
+            password,
+        } => {
+            let password = password.read()?;
             let role = match role {
                 Some(role) => Some(roles::id_by_name(db, &role).await.map_err(fail)?),
                 None => None,
@@ -168,7 +167,8 @@ pub async fn agent(
                 .await
                 .map_err(fail)?;
         }
-        AgentCommand::SetPassword { email } => {
+        AgentCommand::SetPassword { email, password } => {
+            let password = password.read()?;
             let agent = agents::id_by_email(db, &email).await.map_err(fail)?;
             if let Some(generated) = agents::reset_password(db, &cli, agent, password.as_deref())
                 .await
@@ -787,8 +787,11 @@ mod tests {
         let identity_provider = crate::oidc::Settings {
             issuer: has("issuer").then(|| "https://login.example.com/realms/staff".to_owned()),
             client_id: has("client_id").then(|| "helpdesk".to_owned()),
-            client_secret: has("client_secret").then(|| "invented-secret".to_owned()),
-            client_secret_file: None,
+            client_secret: if has("client_secret") {
+                crate::secret::OidcClientSecret::given("invented-secret")
+            } else {
+                Default::default()
+            },
             label: None,
             session_hours: 12,
             authorized_group: None,
