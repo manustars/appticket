@@ -58,7 +58,9 @@ Outside the chart, every secret of the core can be read from a file instead of a
 as a mounted secret: `HD_DATABASE_URL_FILE`, `HD_IMAP_URL_FILE`, `HD_SMTP_URL_FILE`,
 `HD_OIDC_CLIENT_SECRET_FILE` and `HD_AGENT_PASSWORD_FILE`. The file's content is used with the
 surrounding whitespace (such as a final newline) removed. Setting a variable and its `_FILE`
-together, or naming a missing or empty file, stops the core with a message saying which.
+together, or naming a missing or empty file, stops the core with a message saying which. The
+Assistant's secrets can be read from files in the same way: `HD_ASSISTANT_TOKEN_FILE`,
+`HD_ASSISTANT_EVENT_SECRET_FILE` and `HD_ASSISTANT_API_KEY_FILE`.
 
 ## Install
 

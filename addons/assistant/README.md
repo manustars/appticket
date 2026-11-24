@@ -67,7 +67,8 @@ hd addon add assistant --url http://127.0.0.1:8090 \
 ```
 
 The core prints a token and an event secret once: put them in `HD_ASSISTANT_TOKEN` and
-`HD_ASSISTANT_EVENT_SECRET`. `hd addon disable assistant` switches it off (its events wait),
+`HD_ASSISTANT_EVENT_SECRET`, or in files named by `HD_ASSISTANT_TOKEN_FILE` and
+`HD_ASSISTANT_EVENT_SECRET_FILE`. `hd addon disable assistant` switches it off (its events wait),
 `hd addon enable assistant` switches it back on.
 
 ## Configuration
@@ -79,16 +80,23 @@ Environment variables, also read from a `.env` file in the working directory or 
 | `HD_ASSISTANT_LISTEN` | `127.0.0.1:8090` | Where it receives events (`POST /events`). |
 | `HD_ASSISTANT_CORE_URL` | required | The core's base URL, such as `https://helpdesk.example.com`. |
 | `HD_ASSISTANT_TOKEN` | required | The token printed by `hd addon add`. |
+| `HD_ASSISTANT_TOKEN_FILE` | | A file holding `HD_ASSISTANT_TOKEN`, such as a mounted secret. |
 | `HD_ASSISTANT_EVENT_SECRET` | required | The event secret printed by `hd addon add`. |
+| `HD_ASSISTANT_EVENT_SECRET_FILE` | | A file holding `HD_ASSISTANT_EVENT_SECRET`. |
 | `HD_ASSISTANT_MODEL_PROVIDER` | required | The service that runs the model; see the table below. |
 | `HD_ASSISTANT_MODEL` | required | The model's id as the provider names it; for `azure-openai`, the deployment's name. |
 | `HD_ASSISTANT_MODEL_URL` | the provider's | The service's base URL; required for `azure-openai` and `openai-compatible`. |
 | `HD_ASSISTANT_API_KEY` | | The service's key; required by the hosted providers. |
+| `HD_ASSISTANT_API_KEY_FILE` | | A file holding `HD_ASSISTANT_API_KEY`. |
 | `HD_ASSISTANT_MODEL_EFFORT` | `medium` | `anthropic` only: how much the model thinks before answering (`low` to `max`); set it empty to send none, for models that do not take it. |
 | `HD_ASSISTANT_MODEL_CONCURRENCY` | 1 for `ollama` and `openai-compatible`, 4 otherwise | At most this many model calls at the same time. Self-hosted servers often run on a single GPU, perhaps shared with other work, so they get one call at a time; events wait their turn in the order they came. |
 | `HD_ASSISTANT_THINKING` | not sent | `openai-compatible` only: `off` asks the model not to think before answering, `on` asks it to, sent as `chat_template_kwargs.enable_thinking` (honoured by vLLM and SGLang servers with a template such as Qwen's). Unset leaves it to the server. Thinking off answers in a fraction of the time; whether the proposals stay as good is for each help desk to judge. |
 | `HD_ASSISTANT_AZURE_API_VERSION` | the v1 API | `azure-openai` only: a dated `api-version` (`2024-08-01-preview` or later, for structured outputs) to use the deployments path instead of Azure's v1 API. |
 | `HD_ASSISTANT_LOG` | `info` | A `tracing` filter. |
+
+A secret's file is used with the surrounding whitespace (such as a final newline) removed.
+Setting a variable and its `_FILE` together, or naming a missing or empty file, stops the
+Assistant with a message saying which, even for a provider that takes no key.
 
 There is no default provider or model: whoever installs the Assistant chooses both, since it
 decides where customers' mail goes and what each message costs. The Assistant refuses to start
