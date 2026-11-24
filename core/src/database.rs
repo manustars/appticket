@@ -9,7 +9,8 @@ use sqlx::postgres::{PgConnectOptions, PgSslMode};
 use crate::secret;
 
 /// The database settings of the command line, global so that every command that needs the
-/// database reads the same ones.
+/// database reads the same ones. Each argument's id is its variable, as with the secrets: a global
+/// argument with the id `name` would take the `name` of a command such as `hd customer add`.
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct Settings {
     #[command(flatten)]
@@ -17,6 +18,7 @@ pub struct Settings {
     /// Host name or address of the PostgreSQL server, when the database is given as separate
     /// parameters rather than as HD_DATABASE_URL.
     #[arg(
+        id = "HD_DATABASE_HOST",
         long = "database-host",
         env = "HD_DATABASE_HOST",
         value_name = "HOST",
@@ -25,6 +27,7 @@ pub struct Settings {
     host: Option<String>,
     /// Port of the PostgreSQL server [default: 5432].
     #[arg(
+        id = "HD_DATABASE_PORT",
         long = "database-port",
         env = "HD_DATABASE_PORT",
         value_name = "PORT",
@@ -33,6 +36,7 @@ pub struct Settings {
     port: Option<String>,
     /// Name of the database, dedicated to the help desk.
     #[arg(
+        id = "HD_DATABASE_NAME",
         long = "database-name",
         env = "HD_DATABASE_NAME",
         value_name = "NAME",
@@ -41,6 +45,7 @@ pub struct Settings {
     name: Option<String>,
     /// User the core connects as, which owns the database and applies the migrations.
     #[arg(
+        id = "HD_DATABASE_USER",
         long = "database-user",
         env = "HD_DATABASE_USER",
         value_name = "USER",
@@ -56,6 +61,7 @@ pub struct Settings {
     /// loopback address or a Unix socket). Anything but verify-full for another host is logged
     /// as a warning at startup.
     #[arg(
+        id = "HD_DATABASE_SSLMODE",
         long = "database-sslmode",
         env = "HD_DATABASE_SSLMODE",
         value_name = "MODE",
@@ -66,6 +72,7 @@ pub struct Settings {
     /// public web PKI's: for a server with a private authority. Only with verify-full or
     /// verify-ca.
     #[arg(
+        id = "HD_DATABASE_CA_FILE",
         long = "database-ca-file",
         env = "HD_DATABASE_CA_FILE",
         value_name = "FILE",
