@@ -61,7 +61,7 @@ whichever template renders first.
 {{- if hasKey $pg "enabled" }}
 {{- fail (printf "postgresql.enabled is no longer a value: set postgresql.mode=%s and remove postgresql.enabled" (ternary "cloudnativepg" "external" (eq (toString $pg.enabled) "true"))) }}
 {{- end }}
-{{- $mode := toString $pg.mode }}
+{{- $mode := $pg.mode | default "" | toString }}
 {{- if not (has $mode (list "standalone" "cloudnativepg" "external")) }}
 {{- fail (printf "postgresql.mode is %q: it must be standalone, cloudnativepg or external" $mode) }}
 {{- end }}
