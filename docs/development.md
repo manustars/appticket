@@ -56,6 +56,10 @@ Instead of `HD_DATABASE_URL`, the database can be given as separate parameters: 
 `HD_DATABASE_PASSWORD` (or `HD_DATABASE_PASSWORD_FILE`), the password with no percent-encoding.
 Not both: the URL beside any of them, or the separate parameters in part, stops the core.
 
+The database on `127.0.0.1` is reached as before, with TLS only if the server offers it; one on
+another host is reached with verified TLS unless `HD_DATABASE_SSLMODE` says otherwise
+([`deploy.md`](deploy.md#tls-to-the-database)).
+
 Real mail servers need TLS:
 
 - `HD_IMAP_URL=imaps://user:password@host/INBOX` (port 993 unless given);
@@ -155,7 +159,7 @@ of seconds per message, so proposals appear accordingly later.
 
 ```sh
 cargo test                    # needs the database: each test gets a fresh one from sqlx
-cargo test -- --ignored       # tests that also need the test mail server and Keycloak
+cargo test -- --ignored       # tests that also need the test mail server, Keycloak and the TLS test database
 ```
 
 The help desk supports PostgreSQL 16 and later: CI runs the core's tests on 16 and on 18, the
@@ -168,6 +172,24 @@ podman run -d --name hd-pg16 -p 127.0.0.1:55416:5432 \
 DATABASE_URL=postgres://hd:hd@127.0.0.1:55416/hd cargo test
 podman rm -f -v hd-pg16
 ```
+
+The test of verified TLS to the database (`core/tests/database_tls.rs`) connects with
+`verify-full` to a PostgreSQL serving TLS with a certificate from a test authority, with and
+without that authority in `HD_DATABASE_CA_FILE`. `scripts/tls-test-database.sh` makes the
+authority and the certificate with openssl, into the folder it is given (never the repository),
+starts the server in the container `hd-dev-db-tls` on 127.0.0.1:55455, and prints the two
+variables the test reads:
+
+```sh
+bash scripts/tls-test-database.sh target/tls-test-database
+# HD_TEST_TLS_DATABASE_URL=postgres://hd:hd@127.0.0.1:55455/hd
+# HD_TEST_TLS_DATABASE_CA_FILE=…/target/tls-test-database/ca.crt
+podman rm -f -v hd-dev-db-tls  # when done
+```
+
+Add the two lines to `.env` once: the script writes the same files each time it starts the
+server again. Without them the test says it is skipped, except in CI, where it fails;
+`CONTAINER_ENGINE=docker` runs the script with Docker, as CI does.
 
 The tests of the separate database parameters (`core/tests/database_parameters.rs`) create a
 PostgreSQL user and a database of their own on the `DATABASE_URL` server and drop them afterwards,
