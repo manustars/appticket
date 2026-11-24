@@ -1292,7 +1292,7 @@ dependencies = [
 
 [[package]]
 name = "hd-assistant"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1310,7 +1310,7 @@ dependencies = [
 
 [[package]]
 name = "hd-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "argon2",

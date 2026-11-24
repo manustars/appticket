@@ -632,7 +632,7 @@ leaves the kept cluster in place.
 ## Upgrades
 
 ```sh
-helm upgrade hd deploy/chart -n helpdesk -f my-values.yaml --set core.image.tag=0.3.0
+helm upgrade hd deploy/chart -n helpdesk -f my-values.yaml --set core.image.tag=0.3.1
 ```
 
 The core is stopped, then started with the new version, which applies its migrations before
