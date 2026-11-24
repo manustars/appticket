@@ -1076,4 +1076,21 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn a_ca_file_that_cannot_be_read_is_named() {
+        let missing = dir().join("database-ca.crt");
+        let error = Settings {
+            ca_file: Some(missing.display().to_string()),
+            ..parameters()
+        }
+        .connect_options()
+        .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("HD_DATABASE_CA_FILE") && error.contains("database-ca.crt"),
+            "{error}"
+        );
+        std::fs::remove_dir_all(missing.parent().unwrap()).unwrap();
+    }
 }
