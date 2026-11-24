@@ -45,13 +45,13 @@ pub async fn check(db: &PgPool) -> anyhow::Result<()> {
     .context("reading the database server's version")?;
     // The text can name the build too, such as the distribution's package.
     tracing::info!(version = %text, "the database server is PostgreSQL");
-    supported(&number)?;
+    supported_version(&number)?;
     Ok(())
 }
 
 /// The server's version, from its `server_version_num` setting, refused when it is older than
 /// [`MINIMUM`] or cannot be read.
-fn supported(server_version_num: &str) -> anyhow::Result<Version> {
+fn supported_version(server_version_num: &str) -> anyhow::Result<Version> {
     let version = Version(server_version_num.trim().parse().map_err(|_| {
         anyhow::anyhow!(
             "cannot read the database server's version: its server_version_num is \
@@ -79,7 +79,7 @@ mod tests {
             ("180001", "18.1"),
             ("190000", "19.0"),
         ] {
-            assert_eq!(supported(number).unwrap().to_string(), version);
+            assert_eq!(supported_version(number).unwrap().to_string(), version);
         }
     }
 
@@ -87,7 +87,7 @@ mod tests {
     fn an_older_server_is_refused_naming_its_version_and_the_minimum() {
         // Before 10, the second number was part of the major version too.
         for (number, version) in [("150010", "15.10"), ("120000", "12.0"), ("90624", "9.6.24")] {
-            let error = supported(number).unwrap_err().to_string();
+            let error = supported_version(number).unwrap_err().to_string();
             assert!(
                 error.contains(&format!("PostgreSQL {version},"))
                     && error.contains("PostgreSQL 16 or later"),
@@ -99,7 +99,7 @@ mod tests {
     #[test]
     fn a_version_that_cannot_be_read_is_refused_quoting_it() {
         for number in ["", "16.4", "sixteen"] {
-            let error = supported(number).unwrap_err().to_string();
+            let error = supported_version(number).unwrap_err().to_string();
             assert!(
                 error.contains(&format!("server_version_num is '{number}'")),
                 "{error}"

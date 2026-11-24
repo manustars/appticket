@@ -17,6 +17,9 @@ jobs:
       fail-fast: false
       matrix:
         postgres: ["16", "18"]
+        include:
+          - postgres: "18"
+            checks: true
     services:
       db:
         image: docker.io/library/postgres:${{ matrix.postgres }}
@@ -55,9 +58,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: postgres-${{ matrix.postgres }}
-      - if: matrix.postgres == '18'
+      - if: matrix.checks
         run: cargo fmt --check
-      - if: matrix.postgres == '18'
+      - if: matrix.checks
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Wait for Keycloak
         run: |
@@ -72,7 +75,7 @@ jobs:
       # Includes the tests that need the test mail server and Keycloak.
       - run: cargo test --locked -- --include-ignored
       - name: The UI's copy of the API specification is current
-        if: matrix.postgres == '18'
+        if: matrix.checks
         run: cargo run -q --locked -p hd-core -- openapi | diff -u web/openapi.json -
 
   web:
