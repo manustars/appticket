@@ -8,7 +8,7 @@
 # to give the key to the server's user with the permissions PostgreSQL wants.
 #
 # Usage:
-#   scripts/tls-test-database.sh DIR
+#   bash scripts/tls-test-database.sh DIR
 #
 # Prints the two variables the test reads, so that CI can append them to $GITHUB_ENV:
 #   HD_TEST_TLS_DATABASE_URL=postgres://hd:hd@127.0.0.1:<port>/hd
@@ -58,11 +58,11 @@ authorityKeyIdentifier = keyid
 EOF
 
 openssl req -x509 -new -config ca.cnf -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
-  -keyout ca.key -out ca.crt -days 2 2> /dev/null
+  -keyout ca.key -out ca.crt -days 2 >&2
 openssl req -new -config server.cnf -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
-  -keyout server.key -out server.csr 2> /dev/null
+  -keyout server.key -out server.csr >&2
 openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -set_serial "$(date +%s)" -days 2 \
-  -extfile server.cnf -extensions server -out server.crt 2> /dev/null
+  -extfile server.cnf -extensions server -out server.crt >&2
 
 "$engine" rm -f -v "$name" > /dev/null 2>&1 || true
 "$engine" run -d --name "$name" -p "127.0.0.1:$port:5432" \
