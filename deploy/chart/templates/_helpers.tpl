@@ -52,9 +52,8 @@ app.kubernetes.io/component: {{ .component }}
 {{/*
 Where the database comes from (postgresql.mode): "cloudnativepg", or for a database of the help
 desk's own "external-url" (a Secret holding the URL) or "external-values" (separate values, the
-password from a Secret). Every template that depends on
-the database includes this, so that values the chart refuses stop it with the same message
-whichever template renders first.
+password from a Secret). Every template that depends on the database includes this, so that
+values the chart refuses stop it with the same message whichever template renders first.
 */}}
 {{- define "hd.databaseSource" -}}
 {{- $pg := .Values.postgresql }}
