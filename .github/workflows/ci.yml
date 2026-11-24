@@ -51,11 +51,13 @@ jobs:
           -e KC_HOSTNAME=http://127.0.0.1:55080
           -v "$GITHUB_WORKSPACE/dev/keycloak:/opt/keycloak/data/import:ro"
           quay.io/keycloak/keycloak:26.8.2 start-dev --import-realm
-      # A PostgreSQL serving TLS with a certificate from a test authority made by the script, for
-      # the test that connects with verify-full. Not a service: the certificate is copied in.
+      # A PostgreSQL of the leg's version serving TLS with a certificate from a test authority made
+      # by the script, for the test that connects with verify-full. Not a service: the certificate
+      # is copied in.
       - name: Start the TLS test database
         run: >-
-          CONTAINER_ENGINE=docker bash scripts/tls-test-database.sh "$RUNNER_TEMP/tls-database"
+          CONTAINER_ENGINE=docker IMAGE=docker.io/library/postgres:${{ matrix.postgres }}
+          bash scripts/tls-test-database.sh "$RUNNER_TEMP/tls-database"
           >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
