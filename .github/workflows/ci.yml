@@ -147,3 +147,14 @@ jobs:
           target: assistant
           push: false
           cache-from: type=gha,scope=hd
+
+  # Publishing the chart, without a release: the script that a release runs (release.yml) pushes
+  # the chart to a throwaway registry, and what it pushed is pulled back and rendered.
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v5
+      - name: Start a throwaway registry
+        run: docker run -d -p 127.0.0.1:55466:5000 docker.io/library/registry:3.0.0
+      - run: bash scripts/test-publish-chart.sh 127.0.0.1:55466
