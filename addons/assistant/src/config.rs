@@ -1,10 +1,12 @@
-//! Settings, read from `HD_ASSISTANT_*` environment variables (and a `.env` file).
+//! Settings, read from `HD_ASSISTANT_*` environment variables (and a `.env` file); each secret
+//! can be read from a file instead.
 //!
 //! There is no default model service: whoever installs the Assistant chooses the provider and
 //! the model, since sending customers' mail to a service is their decision (ADR 0006).
 
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 
@@ -241,7 +243,13 @@ impl Config {
                 .map(|v| v.trim().to_owned())
                 .filter(|v| !v.is_empty())
         };
-        let required = |name: &str| get(name).with_context(|| format!("set {name}"));
+        let secret = |name: &str| {
+            debug_assert!(SECRETS.contains(&name), "{name} is not listed in SECRETS");
+            let file = get(&format!("{name}_FILE")).map(PathBuf::from);
+            read_secret(name, get(name), file.as_deref())
+        };
+        let required_secret =
+            |name: &str| secret(name)?.with_context(|| format!("set {name} or {name}_FILE"));
 
         let listen = get("HD_ASSISTANT_LISTEN")
             .unwrap_or_else(|| "127.0.0.1:8090".into())
@@ -277,9 +285,12 @@ impl Config {
                       http://127.0.0.1:8000/v1",
             }),
         };
-        let api_key = get("HD_ASSISTANT_API_KEY");
+        // Read even when the provider takes no key, so that giving both is refused there too.
+        let api_key = secret("HD_ASSISTANT_API_KEY")?;
         if api_key.is_none() && provider.needs_key() {
-            bail!("set HD_ASSISTANT_API_KEY to the {provider} API key");
+            bail!(
+                "set HD_ASSISTANT_API_KEY or HD_ASSISTANT_API_KEY_FILE to the {provider} API key"
+            );
         }
         // Azure: the v1 API unless a dated version is asked for (structured outputs need
         // 2024-08-01-preview or later).
@@ -321,9 +332,11 @@ impl Config {
         };
         Ok(Config {
             listen,
-            core_url: checked_url(&required("HD_ASSISTANT_CORE_URL")?)?,
-            token: required("HD_ASSISTANT_TOKEN")?,
-            event_secret: required("HD_ASSISTANT_EVENT_SECRET")?,
+            core_url: checked_url(
+                &get("HD_ASSISTANT_CORE_URL").context("set HD_ASSISTANT_CORE_URL")?,
+            )?,
+            token: required_secret("HD_ASSISTANT_TOKEN")?,
+            event_secret: required_secret("HD_ASSISTANT_EVENT_SECRET")?,
             model,
         })
     }
@@ -332,6 +345,40 @@ impl Config {
     pub fn from_env() -> anyhow::Result<Config> {
         let _ = dotenvy::dotenv();
         Config::from_vars(|name| std::env::var(name).ok())
+    }
+}
+
+/// The Assistant's secrets. Each can be given in its variable or read from the file its `_FILE`
+/// variant names, such as a mounted secret (ADR 0009); every secret is read through
+/// [`read_secret`], and a test checks that every variable read is either listed here or known
+/// not to be a secret.
+const SECRETS: [&str; 3] = [
+    "HD_ASSISTANT_TOKEN",
+    "HD_ASSISTANT_EVENT_SECRET",
+    "HD_ASSISTANT_API_KEY",
+];
+
+/// The secret `variable` gives, either as its `value` or read from its `_FILE` variant's `file`,
+/// trimmed of surrounding whitespace; `value` is already trimmed, and `None` when blank. A blank
+/// file, a missing one or giving both is an error naming the variables, as in the core.
+fn read_secret(
+    variable: &str,
+    value: Option<String>,
+    file: Option<&Path>,
+) -> anyhow::Result<Option<String>> {
+    match (value, file) {
+        (Some(_), Some(_)) => bail!("set {variable} or {variable}_FILE, not both"),
+        (Some(value), None) => Ok(Some(value)),
+        (None, Some(file)) => {
+            let content = std::fs::read_to_string(file)
+                .with_context(|| format!("reading {variable}_FILE {}", file.display()))?;
+            let secret = content.trim();
+            if secret.is_empty() {
+                bail!("{variable}_FILE {} is empty", file.display());
+            }
+            Ok(Some(secret.to_owned()))
+        }
+        (None, None) => Ok(None),
     }
 }
 
@@ -386,6 +433,174 @@ mod tests {
 
     fn error(pairs: &[(&str, &str)]) -> String {
         format!("{:#}", config(pairs).unwrap_err())
+    }
+
+    /// A new temporary directory for secret files.
+    fn dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("hd-assistant-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The token, event secret and key of a provider that needs one, each given in its variable
+    /// unless `file` names it: that one is read from its `_FILE` variant.
+    fn anthropic_with_secret_file(file: &str, path: &str) -> anyhow::Result<Config> {
+        let mut vars = vec![
+            ("HD_ASSISTANT_CORE_URL", "http://127.0.0.1:8080"),
+            ("HD_ASSISTANT_MODEL_PROVIDER", "anthropic"),
+            ("HD_ASSISTANT_MODEL", "claude-opus-5-5"),
+        ];
+        let file_variable = format!("{file}_FILE");
+        for (secret, value) in [
+            ("HD_ASSISTANT_TOKEN", "t"),
+            ("HD_ASSISTANT_EVENT_SECRET", "s"),
+            ("HD_ASSISTANT_API_KEY", "k"),
+        ] {
+            if secret == file {
+                vars.push((&file_variable, path));
+            } else {
+                vars.push((secret, value));
+            }
+        }
+        config(&vars)
+    }
+
+    #[test]
+    fn each_secret_can_be_read_from_its_file_trimmed() {
+        let dir = dir();
+        let path = dir.join("secret");
+        std::fs::write(&path, "  invented-secret-from-file\n").unwrap();
+        let path = path.display().to_string();
+
+        let c = anthropic_with_secret_file("HD_ASSISTANT_TOKEN", &path).unwrap();
+        assert_eq!(c.token, "invented-secret-from-file");
+        let c = anthropic_with_secret_file("HD_ASSISTANT_EVENT_SECRET", &path).unwrap();
+        assert_eq!(c.event_secret, "invented-secret-from-file");
+        // anthropic needs a key: the one from the file is enough.
+        let c = anthropic_with_secret_file("HD_ASSISTANT_API_KEY", &path).unwrap();
+        assert_eq!(
+            c.model.api_key.as_deref(),
+            Some("invented-secret-from-file")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_missing_unreadable_or_empty_file_is_refused_naming_the_variable_and_the_path() {
+        let dir = dir();
+        let missing = dir.join("missing");
+        let empty = dir.join("empty");
+        std::fs::write(&empty, " \n").unwrap();
+        // A directory cannot be read as a file.
+        let unreadable = dir.join("a-directory");
+        std::fs::create_dir(&unreadable).unwrap();
+
+        for file in [&missing, &empty, &unreadable] {
+            let path = file.display().to_string();
+            let error = format!(
+                "{:#}",
+                anthropic_with_secret_file("HD_ASSISTANT_TOKEN", &path).unwrap_err()
+            );
+            assert!(
+                error.contains("HD_ASSISTANT_TOKEN_FILE") && error.contains(&path),
+                "{error}"
+            );
+            // Refused even where the key is optional: a file was named.
+            let error = error_with_file("HD_ASSISTANT_API_KEY_FILE", &path);
+            assert!(
+                error.contains("HD_ASSISTANT_API_KEY_FILE") && error.contains(&path),
+                "{error}"
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The error of an `ollama` configuration, which needs no key, with `variable` set to `value`.
+    fn error_with_file(variable: &str, value: &str) -> String {
+        let mut vars: Vec<(&str, &str)> = with(&[
+            ("HD_ASSISTANT_MODEL_PROVIDER", "ollama"),
+            ("HD_ASSISTANT_MODEL", "m"),
+        ]);
+        vars.push((variable, value));
+        error(&vars)
+    }
+
+    #[test]
+    fn every_secret_can_be_read_from_a_file_and_giving_both_is_refused() {
+        // The variables that are not secrets. One read but listed neither here nor in SECRETS
+        // fails the test, so that a new secret cannot be read without its file.
+        const SETTINGS: [&str; 9] = [
+            "HD_ASSISTANT_LISTEN",
+            "HD_ASSISTANT_CORE_URL",
+            "HD_ASSISTANT_MODEL_PROVIDER",
+            "HD_ASSISTANT_MODEL",
+            "HD_ASSISTANT_MODEL_URL",
+            "HD_ASSISTANT_MODEL_EFFORT",
+            "HD_ASSISTANT_AZURE_API_VERSION",
+            "HD_ASSISTANT_THINKING",
+            "HD_ASSISTANT_MODEL_CONCURRENCY",
+        ];
+        let read = std::cell::RefCell::new(std::collections::BTreeSet::new());
+        for provider in Provider::ALL {
+            let mut vars = HashMap::from([
+                ("HD_ASSISTANT_LISTEN", "127.0.0.1:8090"),
+                ("HD_ASSISTANT_CORE_URL", "http://127.0.0.1:8080"),
+                ("HD_ASSISTANT_TOKEN", "t"),
+                ("HD_ASSISTANT_EVENT_SECRET", "s"),
+                ("HD_ASSISTANT_MODEL_PROVIDER", provider.name()),
+                ("HD_ASSISTANT_MODEL", "m"),
+                ("HD_ASSISTANT_MODEL_URL", "http://127.0.0.1:8000/v1"),
+                ("HD_ASSISTANT_API_KEY", "k"),
+                ("HD_ASSISTANT_MODEL_EFFORT", "low"),
+                ("HD_ASSISTANT_AZURE_API_VERSION", "2024-10-21"),
+                ("HD_ASSISTANT_MODEL_CONCURRENCY", "2"),
+            ]);
+            if provider == Provider::OpenAiCompatible {
+                vars.insert("HD_ASSISTANT_THINKING", "off");
+            }
+            let configured = Config::from_vars(|name| {
+                read.borrow_mut().insert(name.to_owned());
+                vars.get(name).map(|value| value.to_string())
+            });
+            // A configuration refused early would leave the later variables unread.
+            if let Err(error) = configured {
+                panic!("{provider}: {error:#}");
+            }
+        }
+        let read = read.into_inner();
+        for name in &read {
+            let secret = name.strip_suffix("_FILE").unwrap_or(name);
+            assert!(
+                SETTINGS.contains(&name.as_str()) || SECRETS.contains(&secret),
+                "{name} is read but is neither in SECRETS nor a setting: a secret goes in \
+                 SECRETS and is read through read_secret, a setting goes in this test's list"
+            );
+        }
+
+        let dir = dir();
+        let file = dir.join("secret");
+        std::fs::write(&file, "invented-secret-from-file").unwrap();
+        let file = file.display().to_string();
+        for secret in SECRETS {
+            let secret_file = format!("{secret}_FILE");
+            assert!(
+                read.contains(secret) && read.contains(&secret_file),
+                "{secret} is in SECRETS, but {secret} and {secret_file} are not both read"
+            );
+            // ollama needs no key: giving both is refused all the same.
+            let mut vars: Vec<(&str, &str)> = with(&[
+                ("HD_ASSISTANT_MODEL_PROVIDER", "ollama"),
+                ("HD_ASSISTANT_MODEL", "m"),
+                ("HD_ASSISTANT_API_KEY", "k"),
+            ]);
+            vars.push((&secret_file, &file));
+            let error = error(&vars);
+            assert!(
+                error.contains(&format!("{secret} ")) && error.contains(&secret_file),
+                "{error}"
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
