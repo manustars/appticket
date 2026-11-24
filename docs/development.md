@@ -49,7 +49,8 @@ for the core to serve itself, as the container image does; in development Vite s
 `HD_TRUSTED_PROXIES` (none by default) set the limits on failed sign-ins and the reverse proxies
 whose `X-Forwarded-For` is believed; Vite's development proxy is not one of them, so in
 development every sign-in counts under `127.0.0.1`.
-Production deployment: [`deploy.md`](deploy.md).
+Production deployment: [`deploy.md`](deploy.md); on a PostgreSQL database of your own:
+[`external-database.md`](external-database.md).
 
 Instead of `HD_DATABASE_URL`, the database can be given as separate parameters: `HD_DATABASE_HOST`,
 `HD_DATABASE_PORT` (default 5432), `HD_DATABASE_NAME`, `HD_DATABASE_USER` and
@@ -58,7 +59,7 @@ Not both: the URL beside any of them, or the separate parameters in part, stops 
 
 The database on `127.0.0.1` is reached as before, with TLS only if the server offers it; one on
 another host is reached with verified TLS unless `HD_DATABASE_SSLMODE` says otherwise
-([`deploy.md`](deploy.md#tls-to-the-database)).
+([`external-database.md`](external-database.md#tls)).
 
 Real mail servers need TLS:
 

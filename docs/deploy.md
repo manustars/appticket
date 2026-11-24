@@ -17,9 +17,9 @@ stop cleanly on SIGTERM.
 
 - Kubernetes 1.27 or later, Helm 3.
 - The CloudNativePG operator, unless you bring your own PostgreSQL (`postgresql.enabled=false`).
-- For your own PostgreSQL, version 16 or later. At startup, before applying its migrations, the
-  core logs the server's version and stops on an older one with a message naming the version it
-  found.
+- For your own PostgreSQL, a database prepared as
+  [Running on a PostgreSQL database of your own](external-database.md#what-the-dba-creates) says:
+  PostgreSQL 16 or later, a database dedicated to the help desk and owned by the core's user.
 - An ingress controller and TLS for the agents' UI: the sign-in cookie is marked `Secure`, so the
   UI works only over HTTPS (or through a port-forward to `localhost`). A certificate of your own, or
   the ingress controller's default certificate (see [HTTPS](#https)).
@@ -59,21 +59,11 @@ creates the Secret `<name>-db-app` (`hd-db-app` for a release named `hd`) and th
 `uri`, and verifies the cluster's certificate against the cluster's own authority (see
 [TLS to the database](#tls-to-the-database)).
 
-Outside the chart, the core's database can also be given as separate parameters instead of
-`HD_DATABASE_URL`: `HD_DATABASE_HOST`, `HD_DATABASE_PORT` (default 5432), `HD_DATABASE_NAME`,
-`HD_DATABASE_USER` and `HD_DATABASE_PASSWORD`, the password as the DBA gives it, with no
-percent-encoding. Surrounding whitespace is removed from it, as from every secret, so a password
-that starts or ends with a space cannot be given. Every command of `hd` reads the same ones.
-Giving `HD_DATABASE_URL` (or its file) together with any separate parameter, the port included, or
-the separate parameters in part, stops the core with a message naming them.
-
-Outside the chart, every secret of the core can be read from a file instead of a variable, such
-as a mounted secret: `HD_DATABASE_URL_FILE`, `HD_DATABASE_PASSWORD_FILE`, `HD_IMAP_URL_FILE`,
-`HD_SMTP_URL_FILE`, `HD_OIDC_CLIENT_SECRET_FILE` and `HD_AGENT_PASSWORD_FILE`. The file's content
-is used with the surrounding whitespace (such as a final newline) removed. Setting a variable and
-its `_FILE` together, or naming a missing or empty file, stops the core with a message saying
-which. The Assistant's secrets can be read from files in the same way: `HD_ASSISTANT_TOKEN_FILE`,
-`HD_ASSISTANT_EVENT_SECRET_FILE` and `HD_ASSISTANT_API_KEY_FILE`.
+The external database's `uri` is a connection string as
+[Connecting](external-database.md#connecting) describes. Outside the chart the database can also
+be given as separate parameters, and every secret of the core and of the Assistant can be read
+from a file instead of a variable: see [Connecting](external-database.md#connecting) and
+[Secrets from files](external-database.md#secrets-from-files).
 
 ## Install
 
@@ -128,27 +118,15 @@ To send plain HTTP to HTTPS with ingress-nginx, add the annotation
 
 ### TLS to the database
 
-The core reaches a database on another host over TLS and verifies its certificate, unless told
-otherwise: `verify-full`, a certificate from a trusted authority for the host the core dials
-([ADR 0009](adr/0009-two-ways-to-install-three-ways-to-get-the-database.md)). A database on the
-core's own host (`localhost`, a loopback address or a Unix socket) is reached as before: with TLS
-only if the server offers it, and its certificate not verified.
+The core reaches a database on another host over TLS and verifies its certificate
+(`verify-full`) unless told otherwise. [TLS](external-database.md#tls) in the guide to running on
+your own database gives the modes, the defaults, the warning a weaker mode logs and what stops the
+core. For an external database (`core.database.existingSecret`), the chart sets the two variables
+from its values:
 
-- `HD_DATABASE_SSLMODE` (`core.database.sslMode`): `verify-full`, `verify-ca` (the authority but
-  not the host name), `require` (TLS, any certificate), `prefer` (TLS if the server offers it, any
-  certificate) or `disable`. It applies to the separate parameters and to an `HD_DATABASE_URL`
-  without its own `sslmode`. A URL that carries `sslmode` (or `ssl-mode`) keeps it, and setting
-  `HD_DATABASE_SSLMODE` beside it stops the core.
-- `HD_DATABASE_CA_FILE` (`core.database.ca.existingSecret` and `secretKey`): a PEM file of the
-  authorities that issued the database's certificate, trusted besides the public web PKI's. Only
-  with `verify-full` or `verify-ca`, which use it, and not beside a URL's own `sslrootcert`.
-
-A mode weaker than `verify-full` for a database on another host, from the variable or from the
-URL, is logged as a warning at startup naming the mode. With `verify-full`, give the database by
-a name (or address) its certificate lists. A certificate the core cannot verify stops it with the
-reason, such as `invalid peer certificate: UnknownIssuer` for an authority it does not trust.
-The PostgreSQL client's own variables (`PGSSLMODE`) do not change the mode for a database on
-another host.
+- `core.database.sslMode`: `HD_DATABASE_SSLMODE`, for a URL without its own `sslmode`;
+- `core.database.ca.existingSecret` and `secretKey`: a Secret holding the PEM file of a private
+  authority, mounted as `HD_DATABASE_CA_FILE`.
 
 With the CloudNativePG cluster the chart does it: `verify-full`, with the authority's certificate
 mounted from the Secret `<name>-db-ca` that CloudNativePG creates for the cluster (only `ca.crt`:
@@ -716,7 +694,7 @@ authority, and does not start.
   logs why: the database is not touched, and setting one of the above and upgrading again brings
   the core back.
 - **Outside the chart**, the same holds for `HD_DATABASE_URL` and the separate parameters, with
-  `HD_DATABASE_SSLMODE` and `HD_DATABASE_CA_FILE`.
+  `HD_DATABASE_SSLMODE` and `HD_DATABASE_CA_FILE` ([TLS](external-database.md#tls)).
 
 The database dumps (`dumps.*`) run `pg_dump`, which keeps the PostgreSQL client's default and is
 not affected.
