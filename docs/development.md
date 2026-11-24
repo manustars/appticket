@@ -158,9 +158,10 @@ cargo test                    # needs the database: each test gets a fresh one f
 cargo test -- --ignored       # tests that also need the test mail server and Keycloak
 ```
 
-The tests of the separate database parameters (`core/tests/database_parameters.rs`) create a role
-and a database of their own on the `DATABASE_URL` server and drop them afterwards, so its user
-needs to be allowed to create both, as the superuser `hd` of the test server is.
+The tests of the separate database parameters (`core/tests/database_parameters.rs`) create a
+PostgreSQL user and a database of their own on the `DATABASE_URL` server and drop them afterwards,
+so the user of `DATABASE_URL` needs to be allowed to create both, as the superuser `hd` of the
+test server is.
 
 ## API specification
 
