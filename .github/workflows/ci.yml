@@ -9,11 +9,17 @@ permissions:
   contents: read
 
 jobs:
+  # The tests run on the oldest PostgreSQL the help desk supports and on the newest (ADR 0009);
+  # the checks that do not depend on the database run on the newest only.
   core:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["16", "18"]
     services:
       db:
-        image: docker.io/library/postgres:18
+        image: docker.io/library/postgres:${{ matrix.postgres }}
         env:
           POSTGRES_USER: hd
           POSTGRES_PASSWORD: hd
@@ -45,9 +51,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      # A cache per leg, so that the leg without clippy does not save the one the other restores.
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets --locked -- -D warnings
+        with:
+          key: postgres-${{ matrix.postgres }}
+      - if: matrix.postgres == '18'
+        run: cargo fmt --check
+      - if: matrix.postgres == '18'
+        run: cargo clippy --all-targets --locked -- -D warnings
       - name: Wait for Keycloak
         run: |
           for _ in $(seq 90); do
@@ -61,6 +72,7 @@ jobs:
       # Includes the tests that need the test mail server and Keycloak.
       - run: cargo test --locked -- --include-ignored
       - name: The UI's copy of the API specification is current
+        if: matrix.postgres == '18'
         run: cargo run -q --locked -p hd-core -- openapi | diff -u web/openapi.json -
 
   web:
