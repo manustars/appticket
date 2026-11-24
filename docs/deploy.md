@@ -54,6 +54,12 @@ With `postgresql.enabled=true` (the default) nothing is needed for the database:
 creates the Secret `<name>-db-app` (`hd-db-app` for a release named `hd`) and the core reads its
 `uri`.
 
+Outside the chart, every secret of the core can be read from a file instead of a variable, such
+as a mounted secret: `HD_DATABASE_URL_FILE`, `HD_IMAP_URL_FILE`, `HD_SMTP_URL_FILE`,
+`HD_OIDC_CLIENT_SECRET_FILE` and `HD_AGENT_PASSWORD_FILE`. The file's content is used with the
+surrounding whitespace (such as a final newline) removed. Setting a variable and its `_FILE`
+together, or naming a missing or empty file, stops the core with a message saying which.
+
 ## Install
 
 ```sh
@@ -153,7 +159,7 @@ kubectl -n helpdesk exec deploy/hd-core -- hd agent add agent@example.com --name
 
 To choose the password yourself instead, pass it through the environment of the command:
 `kubectl -n helpdesk exec deploy/hd-core -- env HD_AGENT_PASSWORD='…' hd agent add …` (at least 12
-characters). Customers,
+characters), or name a file holding it with `HD_AGENT_PASSWORD_FILE` or `--password-file`. Customers,
 their domains, assets and services can then be managed in the UI, and so can agents and roles,
 under Administration.
 
@@ -171,7 +177,7 @@ hd role add "Front desk" --permission inbox.triage --permission tickets.work
 hd role default "Front desk"             # the role new agents get
 hd agent add bo@example.com --name "Bo" --role "Front desk"
 hd agent set-role bo@example.com Administrator
-hd agent set-password bo@example.com     # generated and printed, or from HD_AGENT_PASSWORD
+hd agent set-password bo@example.com     # generated and printed, or from HD_AGENT_PASSWORD(_FILE)
 hd agent deactivate bo@example.com       # cannot sign in; their open tickets are unassigned
 hd agent reactivate bo@example.com
 ```

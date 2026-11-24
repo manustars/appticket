@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,8 +44,7 @@ pub mod keycloak {
         super::Settings {
             issuer: Some(issuer.to_owned()),
             client_id: Some(client_id.to_owned()),
-            client_secret: Some(secret.to_owned()),
-            client_secret_file: None,
+            client_secret: crate::secret::OidcClientSecret::given(secret),
             label: None,
             session_hours: 12,
             authorized_group: None,
@@ -70,16 +68,8 @@ pub struct Settings {
     /// The client id the provider knows the help desk by.
     #[arg(long = "oidc-client-id", env = "HD_OIDC_CLIENT_ID")]
     pub client_id: Option<String>,
-    /// The client's secret. HD_OIDC_CLIENT_SECRET_FILE reads it from a file instead.
-    #[arg(
-        long = "oidc-client-secret",
-        env = "HD_OIDC_CLIENT_SECRET",
-        hide_env_values = true
-    )]
-    pub client_secret: Option<String>,
-    /// A file holding the client's secret, such as a mounted Secret.
-    #[arg(long = "oidc-client-secret-file", env = "HD_OIDC_CLIENT_SECRET_FILE")]
-    pub client_secret_file: Option<PathBuf>,
+    #[command(flatten)]
+    pub client_secret: crate::secret::OidcClientSecret,
     /// What the sign-in button names: "Sign in with <label>".
     #[arg(long = "oidc-label", env = "HD_OIDC_LABEL")]
     pub label: Option<String>,
@@ -157,14 +147,9 @@ impl Config {
             |value: Option<String>| value.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty());
         let issuer = given(settings.issuer);
         let client_id = given(settings.client_id);
-        let secret = given(settings.client_secret);
-        let secret_file = settings.client_secret_file;
+        let secret = settings.client_secret.read()?;
         let authorized_group = given(settings.authorized_group);
-        if issuer.is_none()
-            && client_id.is_none()
-            && secret.is_none()
-            && secret_file.is_none()
-            && authorized_group.is_none()
+        if issuer.is_none() && client_id.is_none() && secret.is_none() && authorized_group.is_none()
         {
             return Ok(None);
         }
@@ -175,7 +160,7 @@ impl Config {
         if client_id.is_none() {
             missing.push("HD_OIDC_CLIENT_ID");
         }
-        if secret.is_none() && secret_file.is_none() {
+        if secret.is_none() {
             missing.push("HD_OIDC_CLIENT_SECRET (or HD_OIDC_CLIENT_SECRET_FILE)");
         }
         let public_url = given(public_url.map(str::to_owned));
@@ -188,20 +173,7 @@ impl Config {
                 missing.join(", ")
             );
         }
-        let client_secret = match (secret, secret_file) {
-            (Some(_), Some(_)) => {
-                bail!("set HD_OIDC_CLIENT_SECRET or HD_OIDC_CLIENT_SECRET_FILE, not both")
-            }
-            (Some(secret), None) => secret,
-            (None, Some(file)) => std::fs::read_to_string(&file)
-                .with_context(|| format!("reading HD_OIDC_CLIENT_SECRET_FILE {}", file.display()))?
-                .trim()
-                .to_owned(),
-            (None, None) => unreachable!("checked above"),
-        };
-        if client_secret.is_empty() {
-            bail!("the OpenID Connect client secret is empty");
-        }
+        let client_secret = secret.unwrap_or_default();
         let issuer = issuer.unwrap_or_default();
         secure_unless_local(&issuer, "HD_OIDC_ISSUER")?;
         let public_url = public_url.unwrap_or_default();
@@ -560,8 +532,7 @@ mod tests {
         Settings {
             issuer: Some("https://login.example.com/realms/staff".to_owned()),
             client_id: Some("helpdesk".to_owned()),
-            client_secret: Some("invented-secret".to_owned()),
-            client_secret_file: None,
+            client_secret: crate::secret::OidcClientSecret::given("invented-secret"),
             label: None,
             session_hours: 12,
             authorized_group: None,
@@ -626,7 +597,7 @@ mod tests {
         let alone = Settings {
             issuer: None,
             client_id: None,
-            client_secret: None,
+            client_secret: Default::default(),
             authorized_group: Some("helpdesk-agents".to_owned()),
             ..settings()
         };
@@ -674,7 +645,7 @@ mod tests {
         let none = Settings {
             issuer: None,
             client_id: None,
-            client_secret: None,
+            client_secret: Default::default(),
             ..settings()
         };
         assert!(Config::from_settings(none, PUBLIC_URL).unwrap().is_none());
@@ -744,19 +715,13 @@ mod tests {
         let file = dir.join("client-secret");
         std::fs::write(&file, "secret-from-a-file\n").unwrap();
         let from_file = Settings {
-            client_secret: None,
-            client_secret_file: Some(file.clone()),
+            client_secret: crate::secret::OidcClientSecret::from_file(file.clone()),
             ..settings()
         };
         let config = Config::from_settings(from_file, PUBLIC_URL)
             .unwrap()
             .unwrap();
         assert_eq!(config.client_secret.secret(), "secret-from-a-file");
-        let both = Settings {
-            client_secret_file: Some(file),
-            ..settings()
-        };
-        assert!(Config::from_settings(both, PUBLIC_URL).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

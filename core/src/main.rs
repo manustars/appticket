@@ -33,6 +33,7 @@ mod parents;
 mod proposals;
 mod requesters;
 mod roles;
+mod secret;
 mod sign_in_limits;
 mod sites;
 #[cfg(test)]
@@ -43,9 +44,8 @@ mod triage;
 #[derive(Parser)]
 #[command(about = "Help desk core")]
 struct Cli {
-    /// PostgreSQL connection string.
-    #[arg(long, env = "HD_DATABASE_URL", global = true)]
-    database_url: Option<String>,
+    #[command(flatten)]
+    database_url: secret::DatabaseUrl,
 
     #[command(subcommand)]
     command: Command,
@@ -58,15 +58,10 @@ enum Command {
         /// Address the HTTP API listens on.
         #[arg(long, env = "HD_LISTEN", default_value = "127.0.0.1:8080")]
         listen: SocketAddr,
-        /// Mailbox to read, as imaps://user:password@host[:port]/MAILBOX (imap:// only for a
-        /// server on this machine). Without it no mail is read.
-        #[arg(long, env = "HD_IMAP_URL")]
-        imap_url: Option<String>,
-        /// Server that sends replies: smtps://user:password@host[:port] or
-        /// smtp://user:password@host[:port]?tls=required (plain smtp:// only for a server on this
-        /// machine). Without it replies wait in the outbox.
-        #[arg(long, env = "HD_SMTP_URL")]
-        smtp_url: Option<String>,
+        #[command(flatten)]
+        imap_url: secret::ImapUrl,
+        #[command(flatten)]
+        smtp_url: secret::SmtpUrl,
         /// PEM file of extra certificate authorities to trust for the mail servers.
         #[arg(long, env = "HD_MAIL_CA_FILE")]
         mail_ca_file: Option<std::path::PathBuf>,
@@ -162,7 +157,8 @@ async fn main() -> anyhow::Result<()> {
     };
     let database_url = cli
         .database_url
-        .context("set HD_DATABASE_URL or pass --database-url")?;
+        .read()?
+        .context("set HD_DATABASE_URL (or HD_DATABASE_URL_FILE), or pass --database-url")?;
     let db = PgPoolOptions::new()
         .max_connections(10)
         .connect(&database_url)
@@ -176,7 +172,7 @@ async fn main() -> anyhow::Result<()> {
     match command {
         Command::Migrate | Command::Openapi => Ok(()),
         Command::Customer(command) => cli::customer(&db, command).await,
-        Command::Agent(command) => cli::agent(&db, command, cli::password_from_env()).await,
+        Command::Agent(command) => cli::agent(&db, command).await,
         Command::Role(command) => cli::role(&db, command).await,
         Command::Addon(command) => cli::addon(&db, command).await,
         Command::SignIn(command) => cli::sign_in(&db, command, &mut std::io::stdout()).await,
@@ -228,7 +224,7 @@ async fn main() -> anyhow::Result<()> {
                 tracing::warn!("HD_MAIL_FROM is not set: agents cannot reply");
             }
             let mut mail = mail_status::MailStatus::default();
-            match imap_url {
+            match imap_url.read()? {
                 Some(url) => {
                     let mut config = imap::MailboxConfig::from_url(&url, mail_ca_file.clone())?;
                     config.import_existing = imap_import_existing;
@@ -247,7 +243,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 None => tracing::warn!("HD_IMAP_URL is not set: no mail will be read"),
             }
-            match smtp_url {
+            match smtp_url.read()? {
                 Some(url) => {
                     let transport = outbound::transport(&url, mail_ca_file.as_ref())?;
                     let tracker = outbound::tracker(&url)?;
@@ -282,6 +278,59 @@ async fn main() -> anyhow::Result<()> {
                 identity_provider_activity,
             };
             http::serve(state, listen, web_dir).await
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::Cli;
+
+    /// The secrets of every command, by variable, each checked to have its `_FILE` variant.
+    fn secrets(command: &clap::Command, path: &str, found: &mut Vec<String>) {
+        let variables: Vec<String> = command
+            .get_arguments()
+            .filter_map(|arg| arg.get_env())
+            .map(|env| env.to_string_lossy().into_owned())
+            .collect();
+        for arg in command.get_arguments() {
+            let Some(env) = arg.get_env().filter(|_| arg.is_hide_env_values_set()) else {
+                continue;
+            };
+            let variable = env.to_string_lossy().into_owned();
+            assert!(
+                variables.contains(&format!("{variable}_FILE")),
+                "`{path}` reads the secret {variable} but not {variable}_FILE"
+            );
+            found.push(variable);
+        }
+        for subcommand in command.get_subcommands() {
+            secrets(
+                subcommand,
+                &format!("{path} {}", subcommand.get_name()),
+                found,
+            );
+        }
+    }
+
+    #[test]
+    fn every_secret_can_be_read_from_a_file() {
+        let mut found = Vec::new();
+        secrets(&Cli::command(), "hd", &mut found);
+        // A secret missing here is one the walk above no longer sees: its value is not hidden.
+        for secret in [
+            "HD_DATABASE_URL",
+            "HD_IMAP_URL",
+            "HD_SMTP_URL",
+            "HD_AGENT_PASSWORD",
+            "HD_OIDC_CLIENT_SECRET",
+        ] {
+            assert!(
+                found.iter().any(|f| f == secret),
+                "{secret} is not a secret: {found:?}"
+            );
         }
     }
 }

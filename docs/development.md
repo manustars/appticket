@@ -57,7 +57,8 @@ Real mail servers need TLS:
 - `HD_SMTP_URL=smtps://user:password@host` (port 465) or `smtp://user:password@host?tls=required`
   (STARTTLS, port 587).
 
-Percent-encode `@`, `/` and `:` inside the user or password. Certificates are checked against the
+Percent-encode `@`, `/` and `:` inside the user or password. Either URL can be read from a file
+instead, with `HD_IMAP_URL_FILE` and `HD_SMTP_URL_FILE`, as every secret of the core. Certificates are checked against the
 public web PKI; for servers with a private certificate authority, point `HD_MAIL_CA_FILE` at a PEM
 file of that authority. Plain `imap://` and `smtp://` are accepted only for a server on this
 machine, such as the test one.
