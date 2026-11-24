@@ -286,12 +286,13 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use clap::{CommandFactory, FromArgMatches};
 
-    use super::Cli;
+    use super::{Cli, Command};
+    use crate::cli::{AddonCommand, AgentCommand, CustomerCommand, RoleCommand};
     use crate::database::Database;
 
-    /// The database `args` give on the command line, with the environment of the tests (such as
-    /// CI's HD_DATABASE_URL) left out.
-    fn database(args: &[&str]) -> anyhow::Result<Database> {
+    /// The command line `args` give, with the environment of the tests (such as CI's
+    /// HD_DATABASE_URL) left out.
+    fn parse(args: &[&str]) -> anyhow::Result<Cli> {
         let mut command = Cli::command();
         let ids: Vec<_> = command
             .get_arguments()
@@ -302,7 +303,144 @@ mod tests {
             command = command.mut_arg(id, |arg| arg.env(None::<&'static str>));
         }
         let matches = command.try_get_matches_from(args)?;
-        Cli::from_arg_matches(&matches)?.database.read()
+        Ok(Cli::from_arg_matches(&matches)?)
+    }
+
+    /// The database `args` give on the command line, with the environment of the tests left out.
+    fn database(args: &[&str]) -> anyhow::Result<Database> {
+        parse(args)?.database.read()
+    }
+
+    const DATABASE_URL: &str = "postgres://helpdesk:secret@db.example.com/helpdesk";
+
+    #[test]
+    fn a_customer_keeps_its_name_beside_a_database_url() {
+        let cli = parse(&[
+            "hd",
+            "--database-url",
+            DATABASE_URL,
+            "customer",
+            "add",
+            "Northgate Studio",
+        ])
+        .unwrap();
+        let Command::Customer(CustomerCommand::Add { name, .. }) = cli.command else {
+            panic!("not `customer add`");
+        };
+        assert_eq!(name, "Northgate Studio");
+        assert_eq!(
+            cli.database.read().unwrap(),
+            Database::Url(DATABASE_URL.to_owned())
+        );
+    }
+
+    #[test]
+    fn an_agent_keeps_its_name_beside_a_database_url() {
+        let cli = parse(&[
+            "hd",
+            "--database-url",
+            DATABASE_URL,
+            "agent",
+            "add",
+            "ada@example.com",
+            "--name",
+            "Ada Agent",
+        ])
+        .unwrap();
+        let Command::Agent(AgentCommand::Add { email, name, .. }) = cli.command else {
+            panic!("not `agent add`");
+        };
+        assert_eq!(
+            (email.as_str(), name.as_str()),
+            ("ada@example.com", "Ada Agent")
+        );
+        assert_eq!(
+            cli.database.read().unwrap(),
+            Database::Url(DATABASE_URL.to_owned())
+        );
+    }
+
+    #[test]
+    fn a_role_keeps_its_name_beside_a_database_url() {
+        let cli = parse(&[
+            "hd",
+            "role",
+            "rename",
+            "Front Desk",
+            "First Line",
+            "--database-url",
+            DATABASE_URL,
+        ])
+        .unwrap();
+        let Command::Role(RoleCommand::Rename { name, new_name }) = cli.command else {
+            panic!("not `role rename`");
+        };
+        assert_eq!(
+            (name.as_str(), new_name.as_str()),
+            ("Front Desk", "First Line")
+        );
+        assert_eq!(
+            cli.database.read().unwrap(),
+            Database::Url(DATABASE_URL.to_owned())
+        );
+    }
+
+    #[test]
+    fn an_addon_keeps_its_name_beside_a_database_url() {
+        let cli = parse(&[
+            "hd",
+            "--database-url",
+            DATABASE_URL,
+            "addon",
+            "enable",
+            "probe-monitor",
+        ])
+        .unwrap();
+        let Command::Addon(AddonCommand::Enable { name }) = cli.command else {
+            panic!("not `addon enable`");
+        };
+        assert_eq!(name, "probe-monitor");
+        assert_eq!(
+            cli.database.read().unwrap(),
+            Database::Url(DATABASE_URL.to_owned())
+        );
+    }
+
+    /// Checks that the help of `command` and of every command under it lists each of `options`.
+    fn help_lists(command: &mut clap::Command, path: &str, options: &[String]) {
+        let help = command.render_help().to_string();
+        for option in options {
+            assert!(
+                help.contains(option),
+                "`{path} --help` lacks {option}:\n{help}"
+            );
+        }
+        // Clap's own `help` command prints the others' help and takes no options.
+        for subcommand in command
+            .get_subcommands_mut()
+            .filter(|subcommand| subcommand.get_name() != "help")
+        {
+            let path = format!("{path} {}", subcommand.get_name());
+            help_lists(subcommand, &path, options);
+        }
+    }
+
+    #[test]
+    fn every_command_lists_the_database_options_in_its_help() {
+        let mut command = Cli::command();
+        command.build();
+        let options: Vec<String> = command
+            .get_arguments()
+            .filter(|arg| arg.is_global_set())
+            .filter_map(|arg| arg.get_long())
+            // Each takes a value: `--database-url <` is not found in `--database-url-file <`.
+            .map(|long| format!("--{long} <"))
+            .collect();
+        assert!(
+            options.iter().any(|o| o == "--database-name <"),
+            "{options:?}"
+        );
+        help_lists(&mut command, "hd", &options);
     }
 
     #[test]
