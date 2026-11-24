@@ -1,7 +1,10 @@
-//! Where the core's database is: a connection string, or separate parameters (ADR 0009).
+//! Where the core's database is, a connection string or separate parameters, and how the
+//! connection to it is protected: verified TLS for a database on another host (ADR 0009).
+
+use std::net::IpAddr;
 
 use anyhow::Context;
-use sqlx::postgres::PgConnectOptions;
+use sqlx::postgres::{PgConnectOptions, PgSslMode};
 
 use crate::secret;
 
@@ -46,6 +49,29 @@ pub struct Settings {
     user: Option<String>,
     #[command(flatten)]
     password: secret::DatabasePassword,
+    /// TLS to the database: verify-full, verify-ca, require, prefer or disable. Applies to the
+    /// separate parameters and to an HD_DATABASE_URL without its own sslmode; giving it beside a
+    /// URL with sslmode is refused. Without it: verify-full for a database on another host, and
+    /// prefer (TLS when the server offers it, unverified) for one on this machine (localhost, a
+    /// loopback address or a Unix socket). Anything but verify-full for another host is logged
+    /// as a warning at startup.
+    #[arg(
+        long = "database-sslmode",
+        env = "HD_DATABASE_SSLMODE",
+        value_name = "MODE",
+        global = true
+    )]
+    sslmode: Option<String>,
+    /// PEM file of certificate authorities to trust for the database's certificate, besides the
+    /// public web PKI's: for a server with a private authority. Only with verify-full or
+    /// verify-ca.
+    #[arg(
+        long = "database-ca-file",
+        env = "HD_DATABASE_CA_FILE",
+        value_name = "FILE",
+        global = true
+    )]
+    ca_file: Option<String>,
 }
 
 /// The database to connect to.
@@ -86,8 +112,8 @@ impl std::fmt::Debug for Database {
 }
 
 impl Database {
-    /// How to connect to the database.
-    pub fn connect_options(&self) -> anyhow::Result<PgConnectOptions> {
+    /// How to connect to the database, before its TLS is chosen.
+    fn options(&self) -> anyhow::Result<PgConnectOptions> {
         match self {
             Self::Url(url) => url
                 .parse()
@@ -109,6 +135,60 @@ impl Database {
 }
 
 impl Settings {
+    /// How to connect to the database the settings give, TLS included. Logs a warning when a
+    /// database on another host is reached without verify-full.
+    pub fn connect_options(self) -> anyhow::Result<PgConnectOptions> {
+        let (options, warning) = self.tls_options()?;
+        if let Some(warning) = warning {
+            tracing::warn!("{warning}");
+        }
+        Ok(options)
+    }
+
+    /// How to connect to the database, and the warning to log about its TLS.
+    fn tls_options(self) -> anyhow::Result<(PgConnectOptions, Option<String>)> {
+        let mode = given(self.sslmode.clone())
+            .map(|mode| {
+                SslMode::from_variable(&mode).with_context(|| {
+                    format!(
+                        "HD_DATABASE_SSLMODE is {mode}, which is not one of verify-full, \
+                         verify-ca, require, prefer and disable"
+                    )
+                })
+            })
+            .transpose()?;
+        let ca_file = given(self.ca_file.clone());
+        let database = self.read()?;
+        let mut options = database.options()?;
+        let url = match &database {
+            Database::Url(url) => Some(UrlTls::of(url)?),
+            Database::Parameters { .. } => None,
+        };
+        // sqlx dials PGHOSTADDR, when set, unless the connection string gives a hostaddr.
+        let hostaddr = url.as_ref().and_then(|url| url.hostaddr).or_else(|| {
+            std::env::var("PGHOSTADDR")
+                .ok()
+                .and_then(|hostaddr| hostaddr.parse().ok())
+        });
+        let tls = choose_tls(TlsSettings {
+            place: Place::of(&options, hostaddr),
+            mode,
+            url_mode: url
+                .as_ref()
+                .filter(|url| url.mode)
+                .map(|_| SslMode::from(options.get_ssl_mode())),
+            ca_file: ca_file.is_some(),
+            url_root_cert: url.is_some_and(|url| url.root_cert),
+        })?;
+        if let Some(mode) = tls.mode {
+            options = options.ssl_mode(mode.into());
+        }
+        if let Some(ca_file) = ca_file {
+            options = options.ssl_root_cert(ca_file);
+        }
+        Ok((options, tls.warning))
+    }
+
     /// The database the settings give: a connection string, or every separate parameter but the
     /// port, which defaults to 5432. Giving both ways, or the separate parameters in part, is an
     /// error naming the variables.
@@ -188,6 +268,91 @@ const PASSWORD_VARIABLES: &str = "HD_DATABASE_PASSWORD (or HD_DATABASE_PASSWORD_
 /// The port of the PostgreSQL server when HD_DATABASE_PORT is not given.
 const DEFAULT_PORT: u16 = 5432;
 
+/// How the connection to the database is protected, named as in libpq's `sslmode`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SslMode {
+    /// TLS, with a certificate from a trusted authority for the host dialled.
+    VerifyFull,
+    /// TLS, with a certificate from a trusted authority, for whatever host.
+    VerifyCa,
+    /// TLS, with any certificate.
+    Require,
+    /// TLS if the server offers it, with any certificate.
+    Prefer,
+    /// No TLS: sqlx does not try TLS for `allow`, which only a connection string can carry.
+    Allow,
+    /// No TLS.
+    Disable,
+}
+
+impl SslMode {
+    /// A mode HD_DATABASE_SSLMODE can give, as libpq names it in any case; not `allow`, which
+    /// sqlx treats as `disable`.
+    fn from_variable(mode: &str) -> Option<Self> {
+        [
+            Self::VerifyFull,
+            Self::VerifyCa,
+            Self::Require,
+            Self::Prefer,
+            Self::Disable,
+        ]
+        .into_iter()
+        .find(|known| known.name().eq_ignore_ascii_case(mode))
+    }
+
+    /// The mode as `sslmode` names it.
+    fn name(self) -> &'static str {
+        match self {
+            Self::VerifyFull => "verify-full",
+            Self::VerifyCa => "verify-ca",
+            Self::Require => "require",
+            Self::Prefer => "prefer",
+            Self::Allow => "allow",
+            Self::Disable => "disable",
+        }
+    }
+
+    /// What the mode leaves unchecked, compared with `verify-full`.
+    fn weakness(self) -> &'static str {
+        match self {
+            Self::VerifyFull => "nothing",
+            Self::VerifyCa => "the server's certificate is not checked against its host name",
+            Self::Require => "the server's certificate is not verified",
+            Self::Prefer => {
+                "the connection is encrypted only if the server offers TLS, and the server's \
+                 certificate is not verified"
+            }
+            Self::Allow | Self::Disable => "the connection is not encrypted",
+        }
+    }
+}
+
+impl From<PgSslMode> for SslMode {
+    fn from(mode: PgSslMode) -> Self {
+        match mode {
+            PgSslMode::VerifyFull => Self::VerifyFull,
+            PgSslMode::VerifyCa => Self::VerifyCa,
+            PgSslMode::Require => Self::Require,
+            PgSslMode::Prefer => Self::Prefer,
+            PgSslMode::Allow => Self::Allow,
+            PgSslMode::Disable => Self::Disable,
+        }
+    }
+}
+
+impl From<SslMode> for PgSslMode {
+    fn from(mode: SslMode) -> Self {
+        match mode {
+            SslMode::VerifyFull => Self::VerifyFull,
+            SslMode::VerifyCa => Self::VerifyCa,
+            SslMode::Require => Self::Require,
+            SslMode::Prefer => Self::Prefer,
+            SslMode::Allow => Self::Allow,
+            SslMode::Disable => Self::Disable,
+        }
+    }
+}
+
 /// A parameter trimmed of surrounding whitespace; a blank one counts as not given, as an unset
 /// variable does.
 fn given(value: Option<String>) -> Option<String> {
@@ -196,9 +361,476 @@ fn given(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Where the database is, which decides the TLS mode when none is given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Place {
+    /// On the core's own host: a loopback address, `localhost` or a Unix socket.
+    OwnHost,
+    /// On another host.
+    Elsewhere,
+}
+
+impl Place {
+    /// Where sqlx connects with `options`: a Unix socket, or the host's address, which
+    /// `hostaddr` overrides. A host on this machine dialled at another address is elsewhere,
+    /// and so is another host dialled through a tunnel on this machine, whose certificate
+    /// verify-full checks against the host's name.
+    fn of(options: &PgConnectOptions, hostaddr: Option<IpAddr>) -> Self {
+        let host = options.get_host();
+        // sqlx takes a host starting with a slash as a socket's directory.
+        if options.get_socket().is_some() || host.starts_with('/') {
+            return Self::OwnHost;
+        }
+        if crate::imap::is_local(host) && hostaddr.is_none_or(|address| address.is_loopback()) {
+            Self::OwnHost
+        } else {
+            Self::Elsewhere
+        }
+    }
+}
+
+/// What a connection string carries about TLS, with the spellings sqlx accepts.
+struct UrlTls {
+    /// An `sslmode` (or `ssl-mode`).
+    mode: bool,
+    /// Authorities to trust: `sslrootcert`, `ssl-root-cert` or `ssl-ca`.
+    root_cert: bool,
+    /// The address to dial instead of the host's, the last one given as sqlx takes it.
+    hostaddr: Option<IpAddr>,
+}
+
+impl UrlTls {
+    fn of(url: &str) -> anyhow::Result<Self> {
+        let url = url::Url::parse(url).context("HD_DATABASE_URL is not a connection string")?;
+        let mut tls = Self {
+            mode: false,
+            root_cert: false,
+            hostaddr: None,
+        };
+        for (key, value) in url.query_pairs() {
+            match &*key {
+                "sslmode" | "ssl-mode" => tls.mode = true,
+                "sslrootcert" | "ssl-root-cert" | "ssl-ca" => tls.root_cert = true,
+                "hostaddr" => tls.hostaddr = value.parse().ok(),
+                _ => {}
+            }
+        }
+        Ok(tls)
+    }
+}
+
+/// What decides the TLS of the connection to the database.
+#[derive(Clone, Copy, Debug)]
+struct TlsSettings {
+    place: Place,
+    /// HD_DATABASE_SSLMODE.
+    mode: Option<SslMode>,
+    /// The `sslmode` the connection string carries.
+    url_mode: Option<SslMode>,
+    /// Whether HD_DATABASE_CA_FILE is given.
+    ca_file: bool,
+    /// Whether the connection string carries its own authorities (`sslrootcert`).
+    url_root_cert: bool,
+}
+
+/// The TLS of the connection to the database.
+#[derive(Debug, PartialEq, Eq)]
+struct Tls {
+    /// The mode to connect with; none leaves sqlx's default (`prefer`), as for a database on the
+    /// core's own host before TLS had a default.
+    mode: Option<SslMode>,
+    /// What to log as a warning at startup.
+    warning: Option<String>,
+}
+
+/// The TLS mode the settings give, and the warning to log for a database on another host reached
+/// without `verify-full`. Giving the mode in both the connection string and HD_DATABASE_SSLMODE
+/// is an error, as is a CA file that the mode would not use.
+fn choose_tls(settings: TlsSettings) -> anyhow::Result<Tls> {
+    let (mode, set_by) = match (settings.mode, settings.url_mode) {
+        (Some(mode), Some(url_mode)) => anyhow::bail!(
+            "HD_DATABASE_URL carries sslmode={} and HD_DATABASE_SSLMODE is {}: give the mode in \
+             one of them, not both",
+            url_mode.name(),
+            mode.name()
+        ),
+        (Some(mode), None) => (Some(mode), "set by HD_DATABASE_SSLMODE"),
+        (None, Some(url_mode)) => (Some(url_mode), "set by HD_DATABASE_URL"),
+        (None, None) => match settings.place {
+            Place::OwnHost => (None, "the default"),
+            Place::Elsewhere => (Some(SslMode::VerifyFull), "the default"),
+        },
+    };
+    if settings.ca_file {
+        if settings.url_root_cert {
+            anyhow::bail!(
+                "HD_DATABASE_URL carries sslrootcert and HD_DATABASE_CA_FILE is set: give the \
+                 authorities to trust in one of them, not both"
+            );
+        }
+        if !matches!(mode, Some(SslMode::VerifyFull | SslMode::VerifyCa)) {
+            anyhow::bail!(
+                "HD_DATABASE_CA_FILE is used only to verify the server's certificate, which \
+                 sslmode {} ({set_by}) does not do: use verify-full",
+                mode.unwrap_or(SslMode::Prefer).name()
+            );
+        }
+    }
+    let warning = match (settings.place, mode) {
+        (Place::Elsewhere, Some(mode)) if mode != SslMode::VerifyFull => Some(format!(
+            "the database is not on this machine and is reached with sslmode {} ({set_by}): {}; \
+             verify-full is the default",
+            mode.name(),
+            mode.weakness(),
+        )),
+        _ => None,
+    };
+    Ok(Tls { mode, warning })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The TLS settings when nothing is given, for a database at `place`.
+    fn nothing_given(place: Place) -> TlsSettings {
+        TlsSettings {
+            place,
+            mode: None,
+            url_mode: None,
+            ca_file: false,
+            url_root_cert: false,
+        }
+    }
+
+    #[test]
+    fn a_database_on_another_host_is_verified_by_default() {
+        assert_eq!(
+            choose_tls(nothing_given(Place::Elsewhere)).unwrap(),
+            Tls {
+                mode: Some(SslMode::VerifyFull),
+                warning: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_database_on_the_cores_own_host_keeps_sqlxs_default() {
+        assert_eq!(
+            choose_tls(nothing_given(Place::OwnHost)).unwrap(),
+            Tls {
+                mode: None,
+                warning: None,
+            }
+        );
+    }
+
+    #[test]
+    fn the_mode_of_the_variable_is_used_and_a_weaker_one_elsewhere_is_warned_of_by_name() {
+        let modes = [
+            (SslMode::VerifyFull, "verify-full"),
+            (SslMode::VerifyCa, "verify-ca"),
+            (SslMode::Require, "require"),
+            (SslMode::Prefer, "prefer"),
+            (SslMode::Disable, "disable"),
+        ];
+        for (mode, name) in modes {
+            for place in [Place::OwnHost, Place::Elsewhere] {
+                let tls = choose_tls(TlsSettings {
+                    mode: Some(mode),
+                    ..nothing_given(place)
+                })
+                .unwrap();
+                assert_eq!(tls.mode, Some(mode));
+                match &tls.warning {
+                    Some(warning) => {
+                        assert_eq!(place, Place::Elsewhere, "{name}: {warning}");
+                        assert_ne!(mode, SslMode::VerifyFull, "{warning}");
+                        assert!(
+                            warning.contains(&format!("sslmode {name} "))
+                                && warning.contains("HD_DATABASE_SSLMODE"),
+                            "{warning}"
+                        );
+                    }
+                    None => assert!(
+                        place == Place::OwnHost || mode == SslMode::VerifyFull,
+                        "{name} elsewhere is not warned of"
+                    ),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_mode_the_connection_string_carries_is_kept_and_a_weaker_one_elsewhere_is_warned_of() {
+        let carried = |place, url_mode| {
+            choose_tls(TlsSettings {
+                url_mode: Some(url_mode),
+                ..nothing_given(place)
+            })
+            .unwrap()
+        };
+
+        let required = carried(Place::Elsewhere, SslMode::Require);
+        assert_eq!(required.mode, Some(SslMode::Require));
+        let warning = required.warning.unwrap();
+        assert!(
+            warning.contains("sslmode require ") && warning.contains("HD_DATABASE_URL"),
+            "{warning}"
+        );
+        let allowed = carried(Place::Elsewhere, SslMode::Allow).warning.unwrap();
+        assert!(allowed.contains("sslmode allow "), "{allowed}");
+        assert_eq!(
+            carried(Place::Elsewhere, SslMode::VerifyFull),
+            Tls {
+                mode: Some(SslMode::VerifyFull),
+                warning: None,
+            }
+        );
+        assert_eq!(
+            carried(Place::OwnHost, SslMode::Disable),
+            Tls {
+                mode: Some(SslMode::Disable),
+                warning: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_mode_in_both_the_connection_string_and_the_variable_is_refused() {
+        for place in [Place::OwnHost, Place::Elsewhere] {
+            let error = choose_tls(TlsSettings {
+                mode: Some(SslMode::VerifyFull),
+                url_mode: Some(SslMode::VerifyFull),
+                ..nothing_given(place)
+            })
+            .unwrap_err()
+            .to_string();
+            assert!(
+                error.contains("HD_DATABASE_URL") && error.contains("HD_DATABASE_SSLMODE"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_ca_file_goes_with_a_mode_that_verifies_the_certificate() {
+        let with_ca_file = |settings| {
+            choose_tls(TlsSettings {
+                ca_file: true,
+                ..settings
+            })
+        };
+        for verifying in [SslMode::VerifyFull, SslMode::VerifyCa] {
+            with_ca_file(TlsSettings {
+                mode: Some(verifying),
+                ..nothing_given(Place::OwnHost)
+            })
+            .unwrap();
+            with_ca_file(TlsSettings {
+                url_mode: Some(verifying),
+                ..nothing_given(Place::OwnHost)
+            })
+            .unwrap();
+        }
+        assert_eq!(
+            with_ca_file(nothing_given(Place::Elsewhere)).unwrap().mode,
+            Some(SslMode::VerifyFull)
+        );
+
+        // Another mode would not use it, and the default on the core's own host is one of them.
+        let not_verifying = [
+            TlsSettings {
+                mode: Some(SslMode::Require),
+                ..nothing_given(Place::Elsewhere)
+            },
+            TlsSettings {
+                url_mode: Some(SslMode::Prefer),
+                ..nothing_given(Place::Elsewhere)
+            },
+            nothing_given(Place::OwnHost),
+        ];
+        for settings in not_verifying {
+            let error = with_ca_file(settings).unwrap_err().to_string();
+            assert!(
+                error.contains("HD_DATABASE_CA_FILE") && error.contains("verify-full"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_ca_file_beside_the_authorities_the_connection_string_carries_is_refused() {
+        let error = choose_tls(TlsSettings {
+            url_mode: Some(SslMode::VerifyFull),
+            url_root_cert: true,
+            ca_file: true,
+            ..nothing_given(Place::Elsewhere)
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("HD_DATABASE_CA_FILE") && error.contains("sslrootcert"),
+            "{error}"
+        );
+    }
+
+    /// The settings of a connection string.
+    fn url(url: &str) -> Settings {
+        Settings {
+            url: secret::DatabaseUrl::given(url),
+            ..Settings::default()
+        }
+    }
+
+    /// The mode a connection is made with, and whether a warning is logged for it.
+    fn connected_with(settings: Settings) -> (&'static str, bool) {
+        let (options, warning) = settings.tls_options().unwrap();
+        let mode = match options.get_ssl_mode() {
+            PgSslMode::VerifyFull => "verify-full",
+            PgSslMode::VerifyCa => "verify-ca",
+            PgSslMode::Require => "require",
+            PgSslMode::Prefer => "prefer",
+            PgSslMode::Allow => "allow",
+            PgSslMode::Disable => "disable",
+        };
+        (mode, warning.is_some())
+    }
+
+    #[test]
+    fn the_cores_own_host_is_where_sqlx_connects() {
+        // sqlx's default, prefer, unless PGSSLMODE says otherwise, as the tests do not.
+        for own_host in [
+            "postgres://hd:hd@localhost/hd",
+            "postgres://hd:hd@LOCALHOST:55432/hd",
+            "postgres://hd:hd@127.0.0.1/hd",
+            "postgres://hd:hd@127.0.0.53/hd",
+            "postgres://hd:hd@[::1]/hd",
+            "postgres://hd@%2Fvar%2Frun%2Fpostgresql/hd",
+            "postgres:///hd?host=/var/run/postgresql",
+            "postgres://hd:hd@db.example.com/hd?host=/var/run/postgresql",
+            "postgres://hd:hd@db.example.com/hd?host=localhost",
+            "postgres://hd:hd@localhost/hd?hostaddr=127.0.0.1",
+        ] {
+            assert_eq!(
+                connected_with(url(own_host)),
+                ("prefer", false),
+                "{own_host}"
+            );
+        }
+        for elsewhere in [
+            "postgres://hd:hd@db.example.com/hd",
+            "postgres://hd:hd@192.0.2.10/hd",
+            "postgres://hd:hd@[2001:db8::10]/hd",
+            "postgres://hd-db-rw.helpdesk:5432/hd",
+            "postgres://hd:hd@localhost.example.com/hd",
+            "postgres://hd:hd@localhost/hd?host=db.example.com",
+            // Dialled at another address than the host's...
+            "postgres://hd:hd@localhost/hd?hostaddr=192.0.2.10",
+            // ...or through a tunnel on this machine to a host verified by its name.
+            "postgres://hd:hd@db.example.com/hd?hostaddr=127.0.0.1",
+        ] {
+            assert_eq!(
+                connected_with(url(elsewhere)),
+                ("verify-full", false),
+                "{elsewhere}"
+            );
+        }
+        assert_eq!(connected_with(parameters()), ("verify-full", false));
+        for own_host in ["localhost", "127.0.0.1", "::1", "/var/run/postgresql"] {
+            assert_eq!(
+                connected_with(Settings {
+                    host: Some(own_host.to_owned()),
+                    ..parameters()
+                }),
+                ("prefer", false),
+                "{own_host}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_sslmode_variable_applies_to_both_ways_of_giving_the_database() {
+        let require = |settings| Settings {
+            sslmode: Some("require".to_owned()),
+            ..settings
+        };
+        assert_eq!(
+            connected_with(require(url("postgres://hd:hd@db.example.com/hd"))),
+            ("require", true)
+        );
+        assert_eq!(connected_with(require(parameters())), ("require", true));
+        assert_eq!(
+            connected_with(require(url("postgres://hd:hd@127.0.0.1/hd"))),
+            ("require", false)
+        );
+        // Blank, as an unset variable.
+        assert_eq!(
+            connected_with(Settings {
+                sslmode: Some(" ".to_owned()),
+                ..parameters()
+            }),
+            ("verify-full", false)
+        );
+        let error = Settings {
+            sslmode: Some("verify_full".to_owned()),
+            ..parameters()
+        }
+        .tls_options()
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("HD_DATABASE_SSLMODE") && error.contains("verify_full"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_sslmode_of_the_connection_string_is_read_in_both_spellings_sqlx_knows() {
+        for carried in [
+            "postgres://hd:hd@db.example.com/hd?sslmode=require",
+            "postgres://hd:hd@db.example.com/hd?ssl-mode=require",
+            "postgres://hd:hd@db.example.com/hd?sslmode=disable&ssl-mode=require",
+        ] {
+            assert_eq!(connected_with(url(carried)), ("require", true), "{carried}");
+            let error = Settings {
+                sslmode: Some("verify-full".to_owned()),
+                ..url(carried)
+            }
+            .tls_options()
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("not both"), "{error}");
+        }
+        assert_eq!(
+            connected_with(url("postgres://hd:hd@db.example.com/hd?sslmode=verify-ca")),
+            ("verify-ca", true)
+        );
+    }
+
+    #[test]
+    fn the_ca_file_is_refused_beside_any_spelling_of_the_connection_strings_own() {
+        for spelling in ["sslrootcert", "ssl-root-cert", "ssl-ca"] {
+            let error = Settings {
+                ca_file: Some("/etc/hd/database-ca/ca.crt".to_owned()),
+                ..url(&format!(
+                    "postgres://hd:hd@db.example.com/hd?{spelling}=/etc/ssl/db-ca.crt"
+                ))
+            }
+            .tls_options()
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("HD_DATABASE_CA_FILE"), "{spelling}: {error}");
+        }
+        let (options, warning) = Settings {
+            ca_file: Some("/etc/hd/database-ca/ca.crt".to_owned()),
+            ..parameters()
+        }
+        .tls_options()
+        .unwrap();
+        assert!(matches!(options.get_ssl_mode(), PgSslMode::VerifyFull));
+        assert!(warning.is_none());
+    }
 
     #[test]
     fn a_connection_string_alone_gives_the_database() {
