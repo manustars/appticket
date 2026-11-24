@@ -158,6 +158,17 @@ cargo test                    # needs the database: each test gets a fresh one f
 cargo test -- --ignored       # tests that also need the test mail server and Keycloak
 ```
 
+The help desk supports PostgreSQL 16 and later: CI runs the core's tests on 16 and on 18, the
+version of `compose.yaml`. To run them on 16 locally, start a server of that version on a port of
+its own and point `DATABASE_URL` at it:
+
+```sh
+podman run -d --name hd-pg16 -p 127.0.0.1:55416:5432 \
+  -e POSTGRES_USER=hd -e POSTGRES_PASSWORD=hd -e POSTGRES_DB=hd docker.io/library/postgres:16
+DATABASE_URL=postgres://hd:hd@127.0.0.1:55416/hd cargo test
+podman rm -f -v hd-pg16
+```
+
 The tests of the separate database parameters (`core/tests/database_parameters.rs`) create a
 PostgreSQL user and a database of their own on the `DATABASE_URL` server and drop them afterwards,
 so the user of `DATABASE_URL` needs to be allowed to create both: `hd`, the test server's user, is a
