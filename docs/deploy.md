@@ -6,12 +6,14 @@ The help desk ships as two container images and a Helm chart:
 |---|---|
 | `ghcr.io/manustars/hd-core` | The core: API, the agents' UI (served by the core itself), mail reading and sending, add-on events. Runs `hd serve`; any other `hd` command runs the same way. |
 | `ghcr.io/manustars/hd-assistant` | The Assistant add-on (optional). |
-| `deploy/chart` | The Helm chart `hd`: both components, an optional PostgreSQL cluster through CloudNativePG, optional backups, an optional test mail server for staging. |
+| `oci://ghcr.io/manustars/charts/hd` | The Helm chart `hd` (its source is `deploy/chart`): both components, an optional PostgreSQL cluster through CloudNativePG, optional backups, an optional test mail server for staging. |
 
 The images are published by `.github/workflows/release.yml` when a version tag (`v1.2.3`) is
 pushed: tagged with the version and, for a final version, `latest`. Both are built from
 `deploy/Dockerfile` (`--target core` / `--target assistant`), run as the non-root user 10001 and
-stop cleanly on SIGTERM.
+stop cleanly on SIGTERM. The same workflow then publishes the chart with the tag's version
+(`1.2.3`, or `1.2.3-rc.1` for a pre-release), and publishes nothing when the tag disagrees with
+the version in `deploy/chart/Chart.yaml`.
 
 ## Prerequisites
 
@@ -68,21 +70,31 @@ also be read from a file instead of a variable
 ## Install
 
 ```sh
-helm install hd deploy/chart -n helpdesk --create-namespace -f my-values.yaml
+helm install hd oci://ghcr.io/manustars/charts/hd --version <version> \
+  -n helpdesk --create-namespace -f my-values.yaml
 ```
 
-The chart runs the images of its `appVersion` unless `core.image.tag` and
-`assistant.image.tag` say otherwise: a release must have been published (a `v…` tag pushed) for
-that tag to exist. A package published to GitHub's container registry starts out private: make
-it public in the package settings once (it cannot be made private again), or create a registry
-Secret and list it in `imagePullSecrets`.
+`<version>` is a release of the help desk, without the `v` of its tag. Helm 3.8 or later reads
+the chart from the registry, so that no clone of the repository is needed. The chart is published
+from the first release after 0.3.1 on: for 0.3.1 and earlier, or to try a change to the chart,
+install from a clone of the repository instead, with `deploy/chart` in place of the `oci://…`
+address and without `--version`.
+
+The chart runs the images of its `appVersion`, which for a published chart is its version, unless
+`core.image.tag` and `assistant.image.tag` say otherwise; from a clone, a release must have been
+published (a `v…` tag pushed) for that tag to exist. A package published to GitHub's container
+registry, an image or the chart, starts out private: make it public in the package settings once
+(it cannot be made private again), or sign in with `helm registry login ghcr.io` for the chart,
+and for the images create a registry Secret and list it in `imagePullSecrets`.
 
 The examples on this page use the release name `hd` and the namespace `helpdesk`: the chart
 names its objects after the release (`hd-core`, `hd-assistant`, `hd-db`), and a release whose name
 does not contain `hd` gets `<release>-hd-…` instead.
 
-`deploy/chart/values.yaml` documents every value; `deploy/chart/values-staging.example.yaml` is a
-small staging install with the test mail server. The most common settings:
+`deploy/chart/values.yaml` documents every value (`helm show values
+oci://ghcr.io/manustars/charts/hd --version <version>` prints it);
+`deploy/chart/values-staging.example.yaml` is a small staging install with the test mail server.
+The most common settings:
 
 | Value | Meaning |
 |---|---|
@@ -662,11 +674,11 @@ leaves the kept cluster in place.
 ## Upgrades
 
 ```sh
-helm upgrade hd deploy/chart -n helpdesk -f my-values.yaml --set core.image.tag=0.3.1
+helm upgrade hd oci://ghcr.io/manustars/charts/hd --version <version> -n helpdesk -f my-values.yaml
 ```
 
-The core is stopped, then started with the new version, which applies its migrations before
-serving: expect a short pause for agents and mail (mail waits in the mailbox and is read on
+The chart of a version runs the core and the Assistant of that version. The core is stopped, then
+started with the new version, which applies its migrations before serving: expect a short pause for agents and mail (mail waits in the mailbox and is read on
 start). Take a backup before upgrading across versions with migrations. The Assistant can be
 upgraded on its own; events wait in the core while it restarts.
 
