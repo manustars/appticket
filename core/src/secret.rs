@@ -76,9 +76,9 @@ secret!(DatabaseUrl {
     env: "HD_DATABASE_URL",
     value_name: "URL",
     help: "PostgreSQL connection string, as postgres://user:password@host[:port]/database \
-     (percent-encode @, / and : inside the user name or password). Or give the database as separate \
-     parameters: HD_DATABASE_HOST, HD_DATABASE_PORT, HD_DATABASE_NAME, HD_DATABASE_USER and \
-     HD_DATABASE_PASSWORD.",
+     (percent-encode @, / and : inside the user name or password). Or give the database as \
+     separate parameters: HD_DATABASE_HOST, HD_DATABASE_PORT, HD_DATABASE_NAME, HD_DATABASE_USER \
+     and HD_DATABASE_PASSWORD.",
     global: true,
 });
 secret!(DatabasePassword {
