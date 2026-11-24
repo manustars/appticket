@@ -20,21 +20,23 @@ core:
   # rather than rolling it, so that two cores never run at once.
   replicas: 1
 
-  # Where HD_DATABASE_URL comes from. With postgresql.enabled the chart uses the app Secret the
-  # CloudNativePG cluster creates; otherwise name an existing Secret holding a postgres:// URL.
+  # The core's connection to an external database (postgresql.mode=external, below); the chart
+  # refuses these values in the other modes. With the CloudNativePG cluster the chart uses the
+  # app Secret the cluster creates, and the core verifies the cluster's certificate (verify-full)
+  # against the cluster's own authority, from its Secret <cluster>-ca.
   #
-  # TLS: with the CloudNativePG cluster the core verifies the cluster's certificate (verify-full)
-  # against the cluster's own authority, from its Secret <cluster>-ca. For an existing Secret, a
-  # database on another host is reached with verify-full unless its URL carries an sslmode or
-  # sslMode says otherwise (docs/deploy.md, "TLS to the database").
+  # TLS: an external database on another host is reached with verify-full unless its URL carries
+  # an sslmode or sslMode says otherwise (docs/deploy.md, "TLS to the database").
   database:
+    # A Secret holding the database as a postgres:// URL (HD_DATABASE_URL), instead of the
+    # separate values of postgresql.external.
     existingSecret: ""
     secretKey: uri
-    # HD_DATABASE_SSLMODE, with existingSecret only: verify-full, verify-ca, require, prefer or
-    # disable. Empty: verify-full for another host. Not with a URL that carries its own sslmode.
+    # HD_DATABASE_SSLMODE: verify-full, verify-ca, require, prefer or disable. Empty: verify-full
+    # for another host. Not with a URL that carries its own sslmode.
     sslMode: ""
     # A Secret with a PEM file of the authorities that issued the database's certificate
-    # (HD_DATABASE_CA_FILE), with existingSecret only, for a private authority.
+    # (HD_DATABASE_CA_FILE), for a private authority.
     ca:
       existingSecret: ""
       secretKey: ca.crt
@@ -197,11 +199,35 @@ assistant:
   affinity: {}
 
 # ---------------------------------------------------------------------------------------------
-# PostgreSQL through CloudNativePG (the operator must be installed in the cluster). When
-# disabled, point core.database.existingSecret at a Secret with the database URL.
+# The database. postgresql.mode says where it comes from:
+# - cloudnativepg: a PostgreSQL cluster managed by the CloudNativePG operator, which must be
+#   installed in the cluster; the values below, other than `external`, describe it;
+# - external: a PostgreSQL 16 or later database of your own, dedicated to the help desk
+#   (docs/external-database.md), given in one of two forms: a Secret holding its URL
+#   (core.database.existingSecret), or the separate values under `external`;
+# - standalone: not available yet.
+# The chart refuses values that belong to another mode, and postgresql.enabled, which
+# postgresql.mode replaces: true was cloudnativepg, false was external.
 # ---------------------------------------------------------------------------------------------
 postgresql:
-  enabled: true
+  mode: cloudnativepg
+
+  # An external database as separate values (HD_DATABASE_HOST, _PORT, _NAME, _USER and
+  # _PASSWORD): set host, name, user and the password's Secret, all four. core.database.sslMode
+  # and core.database.ca apply to it as they do to a URL.
+  external:
+    # The server's host name or address; with verify-full, a name its certificate lists.
+    host: ""
+    port: 5432
+    # The database, dedicated to the help desk.
+    name: ""
+    # The user the core connects as, which owns the database and applies the migrations.
+    user: ""
+    # A Secret holding that user's password as it is, with no percent-encoding.
+    password:
+      existingSecret: ""
+      secretKey: password
+
   # Leave the database cluster, and so its data, in place on `helm uninstall`. Delete it by hand
   # (kubectl delete cluster <release>-db) when you really mean to.
   keepOnUninstall: true
@@ -244,6 +270,9 @@ postgresql:
 # Database dumps (optional): a CronJob runs pg_dump on a schedule and keeps the latest dumps on a
 # volume. Works with the CloudNativePG cluster above or an external database, and needs no object
 # storage. The dumps are PostgreSQL's custom format, compressed; restore with pg_restore.
+# pg_dump gets the database's URL or separate values, but not core.database.sslMode nor
+# core.database.ca: it encrypts the connection when the server offers TLS, and verifies the
+# server's certificate only when the URL asks for it.
 # ---------------------------------------------------------------------------------------------
 dumps:
   enabled: false

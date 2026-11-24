@@ -1,5 +1,7 @@
 {{- if .Values.dumps.enabled }}
 {{- $d := .Values.dumps }}
+{{- /* An external database given as separate values: pg_dump gets them as its own variables. */}}
+{{- $separateValues := eq (include "hd.databaseSource" .) "external-values" }}
 {{- $name := printf "%s-dumps" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }}
 {{- $claim := $d.storage.existingClaim | default $name }}
 {{- if lt (int $d.keep) 1 }}
@@ -60,11 +62,29 @@ spec:
               image: {{ printf "%s:%s" $d.image.repository $d.image.tag }}
               imagePullPolicy: {{ $d.image.pullPolicy }}
               env:
+                {{- if $separateValues }}
+                {{- $external := .Values.postgresql.external }}
+                # The connection parameters pg_dump reads by itself.
+                - name: PGHOST
+                  value: {{ $external.host | quote }}
+                - name: PGPORT
+                  value: {{ $external.port | default 5432 | quote }}
+                - name: PGDATABASE
+                  value: {{ $external.name | quote }}
+                - name: PGUSER
+                  value: {{ $external.user | quote }}
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $external.password.existingSecret }}
+                      key: {{ $external.password.secretKey | default "password" }}
+                {{- else }}
                 - name: DATABASE_URL
                   valueFrom:
                     secretKeyRef:
                       name: {{ include "hd.databaseSecret" . }}
                       key: {{ .Values.core.database.secretKey }}
+                {{- end }}
                 - name: KEEP
                   value: {{ $d.keep | quote }}
               command: ["/bin/sh", "-c"]
@@ -73,7 +93,7 @@ spec:
                   set -eu
                   name="hd-$(date -u +%Y%m%dT%H%M%SZ).dump"
                   # Written under a temporary name: an interrupted dump never counts as one.
-                  pg_dump --dbname="$DATABASE_URL" --format=custom --no-owner \
+                  pg_dump {{ if not $separateValues }}--dbname="$DATABASE_URL" {{ end }}--format=custom --no-owner \
                     --file="/dumps/$name.partial"
                   mv "/dumps/$name.partial" "/dumps/$name"
                   ls -1t /dumps/hd-*.dump | tail -n +$((KEEP + 1)) | while read -r old; do

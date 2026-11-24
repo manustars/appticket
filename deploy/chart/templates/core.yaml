@@ -3,10 +3,8 @@
 {{- $name := include "hd.coreName" . }}
 {{- $db := $core.database }}
 {{- /* The CloudNativePG cluster's own Secret is in use: TLS verified against its authority. */}}
-{{- $cnpg := and .Values.postgresql.enabled (not $db.existingSecret) }}
-{{- if and $cnpg (or $db.sslMode $db.ca.existingSecret) }}
-{{- fail "core.database.sslMode and core.database.ca are for an external database (core.database.existingSecret); the CloudNativePG cluster is verified against its own authority" }}
-{{- end }}
+{{- $databaseSource := include "hd.databaseSource" . }}
+{{- $cnpg := eq $databaseSource "cloudnativepg" }}
 {{- $databaseCaSecret := ternary (printf "%s-ca" (include "hd.dbName" .)) $db.ca.existingSecret $cnpg }}
 {{- $databaseCaKey := ternary "ca.crt" $db.ca.secretKey $cnpg }}
 {{- $databaseSslMode := ternary "verify-full" $db.sslMode $cnpg }}
@@ -52,11 +50,28 @@ spec:
           env:
             - name: HD_LISTEN
               value: "0.0.0.0:8080"
+            {{- if eq $databaseSource "external-values" }}
+            {{- $external := .Values.postgresql.external }}
+            - name: HD_DATABASE_HOST
+              value: {{ $external.host | quote }}
+            - name: HD_DATABASE_PORT
+              value: {{ $external.port | default 5432 | quote }}
+            - name: HD_DATABASE_NAME
+              value: {{ $external.name | quote }}
+            - name: HD_DATABASE_USER
+              value: {{ $external.user | quote }}
+            - name: HD_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $external.password.existingSecret }}
+                  key: {{ $external.password.secretKey | default "password" }}
+            {{- else }}
             - name: HD_DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ include "hd.databaseSecret" . }}
                   key: {{ $core.database.secretKey }}
+            {{- end }}
             {{- with $databaseSslMode }}
             - name: HD_DATABASE_SSLMODE
               value: {{ . | quote }}

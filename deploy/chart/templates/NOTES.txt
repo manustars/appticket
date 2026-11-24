@@ -17,10 +17,16 @@ First steps, with the `hd` command inside the core's pod (docs/deploy.md has the
   kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ include "hd.coreName" . }} -- hd agent add <agent e-mail> --name "<name>"
 
 The first agent gets the Administrator role and can add the others under Administration.
-{{- if .Values.core.database.existingSecret }}
+{{- $databaseSource := include "hd.databaseSource" . }}
+{{- if eq $databaseSource "cloudnativepg" }}
 
+The database is the CloudNativePG cluster {{ include "hd.dbName" . }} (postgresql.mode=cloudnativepg); the core
+verifies its certificate against the cluster's own authority.
+{{- else }}
+
+The database is an external one (postgresql.mode=external), given as {{ ternary "a Secret holding its URL" "separate values" (eq $databaseSource "external-url") }}.
 The core verifies the certificate of a database on another host (verify-full) unless
-core.database.sslMode or the URL's sslmode says otherwise; a core that cannot verify it does not
+core.database.sslMode{{ if eq $databaseSource "external-url" }} or the URL's sslmode{{ end }} says otherwise; a core that cannot verify it does not
 start and logs why (docs/deploy.md, "TLS to the database").
 {{- end }}
 {{- if not .Values.assistant.enabled }}

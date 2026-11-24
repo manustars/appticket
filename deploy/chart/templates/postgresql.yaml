@@ -1,4 +1,4 @@
-{{- if .Values.postgresql.enabled }}
+{{- if eq (include "hd.databaseSource" .) "cloudnativepg" }}
 {{- $pg := .Values.postgresql }}
 {{- $b := $pg.backup }}
 {{- $cluster := include "hd.dbName" . }}
