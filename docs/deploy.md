@@ -57,9 +57,10 @@ creates the Secret `<name>-db-app` (`hd-db-app` for a release named `hd`) and th
 Outside the chart, the core's database can also be given as separate parameters instead of
 `HD_DATABASE_URL`: `HD_DATABASE_HOST`, `HD_DATABASE_PORT` (default 5432), `HD_DATABASE_NAME`,
 `HD_DATABASE_USER` and `HD_DATABASE_PASSWORD`, the password as the DBA gives it, with no
-percent-encoding. Every command of `hd` reads the same ones. Giving `HD_DATABASE_URL` (or its file)
-together with any separate parameter, the port included, or the separate parameters in part, stops
-the core with a message naming them.
+percent-encoding. Surrounding whitespace is removed from it, as from every secret, so a password
+that starts or ends with a space cannot be given. Every command of `hd` reads the same ones.
+Giving `HD_DATABASE_URL` (or its file) together with any separate parameter, the port included, or
+the separate parameters in part, stops the core with a message naming them.
 
 Outside the chart, every secret of the core can be read from a file instead of a variable, such
 as a mounted secret: `HD_DATABASE_URL_FILE`, `HD_DATABASE_PASSWORD_FILE`, `HD_IMAP_URL_FILE`,

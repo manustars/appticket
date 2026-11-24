@@ -160,8 +160,8 @@ cargo test -- --ignored       # tests that also need the test mail server and Ke
 
 The tests of the separate database parameters (`core/tests/database_parameters.rs`) create a
 PostgreSQL user and a database of their own on the `DATABASE_URL` server and drop them afterwards,
-so the user of `DATABASE_URL` needs to be allowed to create both, as the superuser `hd` of the
-test server is.
+so the user of `DATABASE_URL` needs to be allowed to create both: `hd`, the test server's user, is a
+PostgreSQL superuser.
 
 ## API specification
 

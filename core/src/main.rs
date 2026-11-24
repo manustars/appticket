@@ -282,9 +282,118 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use clap::CommandFactory;
+    use clap::{CommandFactory, FromArgMatches};
 
     use super::Cli;
+    use crate::database::Database;
+
+    /// The database `args` give on the command line, with the environment of the tests (such as
+    /// CI's HD_DATABASE_URL) left out.
+    fn database(args: &[&str]) -> anyhow::Result<Database> {
+        let mut command = Cli::command();
+        let ids: Vec<_> = command
+            .get_arguments()
+            .filter(|arg| arg.get_env().is_some())
+            .map(|arg| arg.get_id().clone())
+            .collect();
+        for id in ids {
+            command = command.mut_arg(id, |arg| arg.env(None::<&'static str>));
+        }
+        let matches = command.try_get_matches_from(args)?;
+        Cli::from_arg_matches(&matches)?.database.read()
+    }
+
+    #[test]
+    fn the_separate_database_parameters_are_options_of_every_command() {
+        assert_eq!(
+            database(&[
+                "hd",
+                "role",
+                "list",
+                "--database-host",
+                "db.example.com",
+                "--database-port",
+                "6543",
+                "--database-name",
+                "helpdesk",
+                "--database-user",
+                "helpdesk_core",
+                "--database-password",
+                "p@ss/w:rd",
+            ])
+            .unwrap(),
+            Database::Parameters {
+                host: "db.example.com".to_owned(),
+                port: 6543,
+                name: "helpdesk".to_owned(),
+                user: "helpdesk_core".to_owned(),
+                password: "p@ss/w:rd".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_database_url_option_with_a_separate_parameter_is_refused_naming_both() {
+        let error = database(&[
+            "hd",
+            "--database-url",
+            "postgres://helpdesk:secret@db.example.com/helpdesk",
+            "migrate",
+            "--database-port",
+            "5432",
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("HD_DATABASE_URL") && error.contains("HD_DATABASE_PORT"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn database_options_given_in_part_are_refused_naming_what_is_missing() {
+        let error = database(&[
+            "hd",
+            "--database-host",
+            "db.example.com",
+            "migrate",
+            "--database-user",
+            "helpdesk_core",
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("HD_DATABASE_NAME") && error.contains("HD_DATABASE_PASSWORD"),
+            "{error}"
+        );
+        for given in ["HD_DATABASE_HOST", "HD_DATABASE_USER", "HD_DATABASE_PORT"] {
+            assert!(!error.contains(given), "{given}: {error}");
+        }
+    }
+
+    #[test]
+    fn the_database_password_option_and_its_file_together_are_refused() {
+        let error = database(&[
+            "hd",
+            "migrate",
+            "--database-host",
+            "db.example.com",
+            "--database-name",
+            "helpdesk",
+            "--database-user",
+            "helpdesk_core",
+            "--database-password",
+            "p@ss/w:rd",
+            "--database-password-file",
+            "database-password",
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("HD_DATABASE_PASSWORD ") && error.contains("HD_DATABASE_PASSWORD_FILE"),
+            "{error}"
+        );
+    }
 
     /// The secrets of every command, by variable, each checked to have its `_FILE` variant.
     fn secrets(command: &clap::Command, path: &str, found: &mut Vec<String>) {
