@@ -2,7 +2,12 @@ name: Release
 
 # A version tag (v1.2.3) builds both images and publishes them to the GitHub Container Registry
 # as ghcr.io/manustars/hd-core and ghcr.io/manustars/hd-assistant, tagged with the version and,
-# for a final (not pre-release) version, `latest`.
+# for a final (not pre-release) version, `latest`; then it publishes the Helm chart with the same
+# version as oci://ghcr.io/manustars/charts/hd.
+#
+# Nothing is published unless the tag agrees with the chart's version in deploy/chart/Chart.yaml:
+# v1.2.3 needs 1.2.3 there, and a pre-release such as v1.2.3-rc.1 needs 1.2.3-rc.1 or 1.2.3
+# (scripts/publish-chart.sh, which CI runs against a throwaway registry on every pull request).
 on:
   push:
     tags: ["v*"]
@@ -12,7 +17,17 @@ permissions:
   packages: write
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - name: The tag agrees with the chart's version
+        run: bash scripts/publish-chart.sh --check "${GITHUB_REF_NAME#v}"
+
   images:
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -63,3 +78,17 @@ jobs:
           labels: ${{ steps.assistant.outputs.labels }}
           cache-from: type=gha,scope=hd
           cache-to: type=gha,scope=hd,mode=max
+
+  # After the images, which the chart runs by default: a chart is never published without them.
+  chart:
+    needs: images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v5
+      - name: Sign in to the registry
+        run: helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<< "$GITHUB_TOKEN"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the chart
+        run: bash scripts/publish-chart.sh "${GITHUB_REF_NAME#v}" oci://ghcr.io/manustars/charts
