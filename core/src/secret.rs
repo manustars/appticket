@@ -78,14 +78,15 @@ secret!(DatabaseUrl {
     help: "PostgreSQL connection string, as postgres://user:password@host[:port]/database \
      (percent-encode @, / and : inside the user name or password). Or give the database as \
      separate parameters: HD_DATABASE_HOST, HD_DATABASE_PORT, HD_DATABASE_NAME, HD_DATABASE_USER \
-     and HD_DATABASE_PASSWORD.",
+     and HD_DATABASE_PASSWORD or HD_DATABASE_PASSWORD_FILE.",
     global: true,
 });
 secret!(DatabasePassword {
     long: "database-password",
     env: "HD_DATABASE_PASSWORD",
     value_name: "PASSWORD",
-    help: "Password of HD_DATABASE_USER, as it is: no percent-encoding",
+    help: "Password of HD_DATABASE_USER, with no percent-encoding. Surrounding whitespace is \
+     removed, as from every secret, so a password cannot start or end with a space.",
     global: true,
 });
 secret!(ImapUrl {

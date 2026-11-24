@@ -125,26 +125,26 @@ impl Settings {
             ("HD_DATABASE_PORT", port.is_some()),
             ("HD_DATABASE_NAME", name.is_some()),
             ("HD_DATABASE_USER", user.is_some()),
-            (PASSWORD, password.is_some()),
+            (PASSWORD_VARIABLES, password.is_some()),
         ];
-        let set: Vec<_> = parameters
+        let given_parameters: Vec<_> = parameters
             .iter()
             .filter(|(_, given)| *given)
             .map(|(variable, _)| *variable)
             .collect();
         if let Some(url) = url {
-            if !set.is_empty() {
+            if !given_parameters.is_empty() {
                 anyhow::bail!(
                     "give the database as HD_DATABASE_URL (or HD_DATABASE_URL_FILE) or as separate \
                      parameters, not both: {} also set",
-                    set.join(", ")
+                    given_parameters.join(", ")
                 );
             }
             return Ok(Database::Url(url));
         }
         let (Some(host), Some(name), Some(user), Some(password)) = (host, name, user, password)
         else {
-            if set.is_empty() {
+            if given_parameters.is_empty() {
                 anyhow::bail!(
                     "set HD_DATABASE_URL or HD_DATABASE_URL_FILE, or the separate parameters \
                      HD_DATABASE_HOST, HD_DATABASE_NAME, HD_DATABASE_USER and HD_DATABASE_PASSWORD \
@@ -182,8 +182,8 @@ impl Settings {
     }
 }
 
-/// The password parameter, which can also be read from a file.
-const PASSWORD: &str = "HD_DATABASE_PASSWORD (or HD_DATABASE_PASSWORD_FILE)";
+/// How messages name the password parameter, which can also be read from a file.
+const PASSWORD_VARIABLES: &str = "HD_DATABASE_PASSWORD (or HD_DATABASE_PASSWORD_FILE)";
 
 /// The port of the PostgreSQL server when HD_DATABASE_PORT is not given.
 const DEFAULT_PORT: u16 = 5432;
