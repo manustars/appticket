@@ -157,7 +157,7 @@ async fn main() -> anyhow::Result<()> {
         }
         command => command,
     };
-    let database = cli.database.read()?.connect_options()?;
+    let database = cli.database.connect_options()?;
     let db = PgPoolOptions::new()
         .max_connections(10)
         .connect_with(database)
