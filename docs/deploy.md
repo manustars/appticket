@@ -65,11 +65,23 @@ core reads its `uri`, and verifies the cluster's certificate against the cluster
 With `postgresql.mode=external` the chart takes the database in one of two forms, not both, as
 [Connecting](external-database.md#connecting) describes them: the `uri` of the database Secret,
 a connection string, or the separate parameters, from `postgresql.external.host`, `port`
-(default 5432), `name` and `user`, with the password as it is in its Secret. Values that belong to
-another mode stop the chart with a message, and so does `postgresql.enabled`, which
-`postgresql.mode` replaces (`true` was `cloudnativepg`, `false` was `external`). Outside the
-chart, every secret of the core and of the Assistant can also be read from a file instead of a
-variable ([Secrets from files](external-database.md#secrets-from-files)).
+(default 5432), `name` and `user`, with the password as it is in its Secret. Outside the chart,
+every secret of the core and of the Assistant can also be read from a file instead of a variable
+([Secrets from files](external-database.md#secrets-from-files)).
+
+The chart stops with a message for:
+
+- `postgresql.enabled`, which `postgresql.mode` replaces: `false` was `external`, and so was `true`
+  beside `core.database.existingSecret`; `true` alone was `cloudnativepg`;
+- with `cloudnativepg`, what names an external database: `core.database.existingSecret`,
+  `sslMode` and `ca.existingSecret`, and `postgresql.external.host`, `name`, `user` and
+  `password.existingSecret`;
+- with `external`, both forms together, the separate values in part, and neither form.
+
+It ignores, without a message: with `external`, the cluster's values (`postgresql.instances`,
+`storage`, `backup` and the others); beside a URL Secret and with `cloudnativepg`,
+`postgresql.external.port` and `password.secretKey`; with the separate values,
+`core.database.secretKey`.
 
 ## Install
 
@@ -626,10 +638,22 @@ cluster's time zone; default every day at 02:30). It writes a compressed dump in
 format to a volume, and keeps the latest `dumps.keep` (default 7). It needs no object storage and
 works with the CloudNativePG cluster or an external database; the volume (`dumps.storage.size`,
 `storageClass`, or `existingClaim`) is kept on `helm uninstall`. Keep the job's image
-(`dumps.image.tag`) at the database's major version or newer. `pg_dump` gets the database's URL
-or separate values, but not `core.database.sslMode` nor `core.database.ca`: it encrypts the
-connection when the server offers TLS, and verifies the server's certificate only when the URL
-asks for it.
+(`dumps.image.tag`) at the database's major version or newer.
+
+`pg_dump` reaches an external database, in either form, over TLS, but the job's image holds no
+public certificate authorities: it verifies the server's certificate only against
+`core.database.ca`.
+
+- With `core.database.ca`, it uses `core.database.sslMode`, `verify-full` when empty, against
+  that authority, mounted as for the core.
+- Without it, TLS is required but the certificate is not verified (`sslmode=require`) where the
+  core verifies it (`sslMode` empty, `verify-full` or `verify-ca`); a weaker `sslMode` is used as
+  it is. To have `pg_dump` verify a certificate from a public authority, give that authority in
+  `core.database.ca`: the core trusts it besides the public ones.
+- A URL that carries its own `sslmode` keeps it, and with `verify-full` or `verify-ca` there
+  `pg_dump` fails without `core.database.ca`.
+
+The dumps of the CloudNativePG cluster use the cluster's URL as it is.
 
 To take one now and to list the dumps:
 
