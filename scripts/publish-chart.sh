@@ -48,12 +48,16 @@ fi
 
 chart=${CHART:-$(cd "$(dirname "$0")/.." && pwd)/deploy/chart}
 
-# A field of Chart.yaml, without its quotes.
+# A field of Chart.yaml, without its quotes or a comment after it.
 field() {
-  sed -n "s/^$1: *//p" "$chart/Chart.yaml" | tr -d "\"'\r"
+  sed -n "s/^$1: *//p" "$chart/Chart.yaml" | sed 's/[[:space:]]*#.*$//' | tr -d "\"'\r"
 }
 
-[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+# Semantic Versioning 2 without build metadata, which a registry's tag cannot carry: numbers
+# without leading zeros and, for a pre-release, identifiers that are not empty.
+number='(0|[1-9][0-9]*)'
+identifier="($number|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+[[ $version =~ ^$number\.$number\.$number(-$identifier(\.$identifier)*)?$ ]] \
   || refuse "$version is not a version (1.2.3, or 1.2.3-rc.1 for a pre-release)"
 
 chart_version=$(field version)

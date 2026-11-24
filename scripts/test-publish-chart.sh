@@ -10,12 +10,15 @@
 # default). Start one with
 #   podman run -d --name hd-registry -p 127.0.0.1:55466:5000 docker.io/library/registry:3.0.0
 # and remove it afterwards with `podman rm -f -v hd-registry`.
+#
+# Environment: CHART (the chart's directory, deploy/chart), as for the script it tests.
 set -euo pipefail
 
 registry=${1:-127.0.0.1:55466}
 root=$(cd "$(dirname "$0")/.." && pwd)
 publish="$root/scripts/publish-chart.sh"
-chart="$root/deploy/chart"
+chart=${CHART:-$root/deploy/chart}
+export CHART="$chart"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -25,14 +28,32 @@ fail() {
   exit 1
 }
 
-# A field of a chart's Chart.yaml, read from standard input, without its quotes.
+# A field of a chart's Chart.yaml, read from standard input, without its quotes or a comment.
 field() {
-  sed -n "s/^$1: *//p" | tr -d "\"'\r"
+  sed -n "s/^$1: *//p" | sed 's/[[:space:]]*#.*$//' | tr -d "\"'\r"
+}
+
+# A copy of the chart, in the directory $1, whose version and appVersion are $2; $3 is what
+# follows each of them on its line.
+chart_at() {
+  cp -r "$chart" "$1"
+  sed -i -e "s/^version:.*/version: $2${3:-}/" -e "s/^appVersion:.*/appVersion: \"$2\"${3:-}/" \
+    "$1/Chart.yaml"
 }
 
 # The versions the registry holds for the chart.
 published() {
   curl -sS "http://$registry/v2/charts/hd/tags/list"
+}
+
+# The registry lists the versions pushed in cases 1 and 2, and not the version $1.
+not_published() {
+  local tags pushed
+  tags=$(published)
+  for pushed in "$chart_version" "$prerelease"; do
+    grep -Fq "\"$pushed\"" <<< "$tags" || fail "the registry does not list $pushed: $tags"
+  done
+  ! grep -Fq "\"$1\"" <<< "$tags" || fail "version $1 was published: $tags"
 }
 
 # Pulls the chart's version $1 back from the registry and checks that it is that version, with
@@ -51,13 +72,13 @@ pulled_back_is() {
     || fail "the pulled chart does not render the core's image $version: $(grep 'image:' "$dir/core.yaml")"
 }
 
-# Runs the script with the arguments given and checks that it refuses with a message containing
-# $1, which it leaves in $output.
+# Runs the script with the arguments given and checks that it refuses them (status 1; 2 is a
+# mistake in the arguments) with a message containing $1, which it leaves in $output.
 refused_with() {
   local message=$1 status=0
   shift
   output=$("$@" 2>&1) || status=$?
-  [ "$status" -ne 0 ] || fail "accepted: $* said: $output"
+  [ "$status" -eq 1 ] || fail "not refused (status $status): $* said: $output"
   grep -Fq -- "$message" <<< "$output" || fail "refused without saying \"$message\": $* said: $output"
 }
 
@@ -73,6 +94,8 @@ curl -sf "http://$registry/v2/" > /dev/null || fail "no registry answers at $reg
 
 chart_version=$(field version < "$chart/Chart.yaml")
 [ -n "$chart_version" ] || fail "no version in $chart/Chart.yaml"
+# The final version that the chart's version is or leads to: the chart may hold a pre-release.
+final=${chart_version%%-*}
 
 # 1. The chart's own version.
 bash "$publish" --check "$chart_version"
@@ -80,27 +103,31 @@ bash "$publish" --plain-http "$chart_version" "oci://$registry/charts"
 pulled_back_is "$chart_version"
 echo "ok 1 - version $chart_version, which agrees with the chart, is published, pulled back and rendered"
 
-# 2. A pre-release of the chart's version.
-prerelease="$chart_version-rc.1"
-bash "$publish" --plain-http "$prerelease" "oci://$registry/charts"
+# 2. A pre-release of the version of a chart that holds a final version: the chart itself, or a
+# copy at the final version when the chart holds a pre-release.
+prerelease="$final-rc.1"
+final_chart=$chart
+if [ "$chart_version" != "$final" ]; then
+  final_chart="$work/final"
+  chart_at "$final_chart" "$final"
+fi
+CHART="$final_chart" bash "$publish" --plain-http "$prerelease" "oci://$registry/charts"
 pulled_back_is "$prerelease"
-echo "ok 2 - pre-release $prerelease of the chart's version is published, pulled back and rendered as $prerelease"
+echo "ok 2 - pre-release $prerelease of a chart at $final is published, pulled back and rendered as $prerelease"
 
 # 3. A version that disagrees with the chart's: the next major one, which no bump of the chart
 # makes agree.
-other="$((${chart_version%%.*} + 1)).${chart_version#*.}"
+other="$((${final%%.*} + 1)).${final#*.}"
 message="version $other disagrees with the chart's version $chart_version"
 refused_with "$message" bash "$publish" --check "$other"
 refused_with "$message" bash "$publish" --plain-http "$other" "oci://$registry/charts"
-tags=$(published)
-grep -Fq "\"$chart_version\"" <<< "$tags" || fail "the registry does not list its versions: $tags"
-! grep -Fq "\"$other\"" <<< "$tags" || fail "version $other was published: $tags"
+not_published "$other"
 echo "ok 3 - version $other, which disagrees with the chart, is refused and not published: $output"
 
 # 4. A pre-release of another version.
 refused_with "version $other-rc.1 disagrees with the chart's version $chart_version" \
   bash "$publish" --plain-http "$other-rc.1" "oci://$registry/charts"
-! grep -Fq "\"$other-rc.1\"" <<< "$(published)" || fail "version $other-rc.1 was published"
+not_published "$other-rc.1"
 echo "ok 4 - pre-release $other-rc.1 of another version is refused and not published: $output"
 
 # 5. A chart whose appVersion is not its version.
@@ -110,8 +137,29 @@ CHART="$work/chart" refused_with "the chart's appVersion $other differs from its
   bash "$publish" --check "$chart_version"
 echo "ok 5 - a chart whose appVersion differs from its version is refused: $output"
 
-# 6. A tag that is not a version (the release workflow runs on every v* tag).
-refused_with "is not a version" bash "$publish" --check "${chart_version}_final"
-echo "ok 6 - ${chart_version}_final, which is not a version, is refused: $output"
+# 6. A tag that is not a version (the release workflow runs on every v* tag), or that Helm would
+# refuse or rewrite when it packages the chart, which is after the images are published.
+refused=
+for not_a_version in "${final}_final" "$final-" "$final-.." "$final-rc..1" "$final-01" "0$final" \
+  "$final+build"; do
+  refused_with "$not_a_version is not a version" bash "$publish" --check "$not_a_version"
+  refused="$refused $not_a_version"
+done
+echo "ok 6 - what is not a version is refused:$refused"
+
+# 7. A chart that holds a pre-release agrees with that pre-release only.
+chart_at "$work/prerelease" "$final-rc.2"
+CHART="$work/prerelease" bash "$publish" --check "$final-rc.2"
+for disagreeing in "$final" "$final-rc.1"; do
+  CHART="$work/prerelease" refused_with \
+    "version $disagreeing disagrees with the chart's version $final-rc.2" \
+    bash "$publish" --check "$disagreeing"
+done
+echo "ok 7 - a chart at $final-rc.2 agrees with $final-rc.2 and refuses $final and $final-rc.1"
+
+# 8. A comment after the version in Chart.yaml is not part of the version.
+chart_at "$work/commented" "$final" " # a comment"
+CHART="$work/commented" bash "$publish" --check "$final"
+echo "ok 8 - a chart whose version is followed by a comment agrees with $final"
 
 echo "all cases passed"
