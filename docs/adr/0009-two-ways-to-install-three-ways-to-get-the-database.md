@@ -11,8 +11,9 @@ or Podman). Either way the database comes in one of three modes:
   desks that already run it and want high availability or point-in-time recovery.
 - **external**: a PostgreSQL 16 or later database of the help desk's own, given as a URL or as
   separate parameters, dedicated to the help desk and owned by the core's user, which applies the
-  migrations. TLS with a verified certificate is the default; anything weaker is set explicitly
-  and logged at startup.
+  migrations. For a database on another host, TLS with a verified certificate is the default;
+  anything weaker is set explicitly and logged at startup. One on the core's own host (loopback,
+  `localhost`, a Unix socket) keeps the connection's usual default, unverified TLS when offered.
 
 Every secret can be read from a file, so that Compose keeps them out of its environment file and
 Kubernetes can mount them. The chart refuses an upgrade whose database mode does not match the
