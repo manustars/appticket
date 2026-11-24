@@ -55,7 +55,7 @@ spec:
             - name: HD_DATABASE_HOST
               value: {{ $external.host | quote }}
             - name: HD_DATABASE_PORT
-              value: {{ $external.port | default 5432 | quote }}
+              value: {{ $external.port | quote }}
             - name: HD_DATABASE_NAME
               value: {{ $external.name | quote }}
             - name: HD_DATABASE_USER
@@ -64,7 +64,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ $external.password.existingSecret }}
-                  key: {{ $external.password.secretKey | default "password" }}
+                  key: {{ $external.password.secretKey }}
             {{- else }}
             - name: HD_DATABASE_URL
               valueFrom:

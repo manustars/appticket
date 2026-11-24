@@ -118,10 +118,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: azure/setup-helm@v5
-      - run: helm lint deploy/chart
-      - run: helm lint deploy/chart -f deploy/chart/values-staging.example.yaml
-      - run: helm template hd deploy/chart -f deploy/chart/values-staging.example.yaml > /dev/null
-      # What the chart renders, lints and refuses in each database mode (postgresql.mode).
+      # What the chart renders, lints and refuses in each database mode (postgresql.mode), the
+      # default values and the staging example included.
       - name: The chart's database modes
         run: bash scripts/chart-database-modes.sh
       - uses: docker/setup-buildx-action@v4

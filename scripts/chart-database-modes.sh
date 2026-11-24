@@ -56,17 +56,41 @@ template() {
   ' "$work/all.yaml"
 }
 
-# One environment variable of a rendered template, on one line: `value: "5432"`, or
-# `valueFrom: secretKeyRef: name: hd-db-app key: uri`. Empty when the variable is not set.
-env_of() {
+# The list entries of a rendered template that have a name (environment variables, volumes,
+# volume mounts), each with all it holds on one line: `value: "5432"`, or
+# `valueFrom: secretKeyRef: name: hd-db-app key: uri`.
+entries_of() {
   template "$1" | awk -v name="$2" '
     function indent(line) { match(line, /^ */); return RLENGTH }
-    # The whole input is read, so that the pipe is never closed on the writer.
-    found && (indent($0) < depth || (indent($0) == depth && $0 ~ /^ *- /)) { past = 1 }
-    found && !past { sub(/^ +/, ""); entry = entry (entry == "" ? "" : " ") $0 }
-    !found && $0 ~ ("^ *- name: " name "$") { found = 1; depth = indent($0) }
-    END { print entry }
+    /^ *#/ { next }
+    found && (indent($0) < depth || (indent($0) == depth && $0 ~ /^ *- /)) { print entry; found = 0 }
+    found { sub(/^ +/, ""); entry = entry (entry == "" ? "" : " ") $0; next }
+    $0 ~ ("^ *- name: " name "$") { found = 1; depth = indent($0); entry = "" }
+    END { if (found) print entry }
   '
+}
+
+# One environment variable of a rendered template. Empty when the variable is not set.
+env_of() {
+  entries_of "$1" "$2" | sed -n 1p
+}
+
+# expect_entry TEMPLATE NAME ENTRY: an entry of that name holds exactly this, and nothing more.
+expect_entry() {
+  local entries
+  entries=$(entries_of "$1" "$2")
+  if ! grep -qFx -- "$3" <<< "$entries"; then
+    problem "$1: no $2 with exactly '$3', but: $(tr '\n' '|' <<< "$entries")"
+  fi
+}
+
+# expect_line TEMPLATE LINE: a whole line of what a template rendered, indentation included.
+expect_line() {
+  local rendered
+  rendered=$(template "$1")
+  if ! grep -qFx -- "$2" <<< "$rendered"; then
+    problem "$1: no line '$2'"
+  fi
 }
 
 # expect_env TEMPLATE NAME ENTRY: the variable is set exactly so.
@@ -119,18 +143,68 @@ expect_cluster_database() {
   expect_env core.yaml HD_DATABASE_URL 'valueFrom: secretKeyRef: name: hd-db-app key: uri'
   expect_env core.yaml HD_DATABASE_SSLMODE 'value: "verify-full"'
   expect_env core.yaml HD_DATABASE_CA_FILE 'value: "/etc/hd/database-ca/ca.crt"'
-  expect_text core.yaml 'mountPath: /etc/hd/database-ca'
-  expect_text core.yaml 'secretName: hd-db-ca'
-  local volume variable
-  volume=$(template core.yaml | grep -A3 'secretName: hd-db-ca' || true)
-  if ! grep -qF 'key: ca.crt' <<< "$volume"; then
-    problem "core.yaml: the volume of hd-db-ca does not take the key ca.crt alone"
-  fi
+  expect_entry core.yaml database-ca 'mountPath: /etc/hd/database-ca readOnly: true'
+  # The Secret also holds the authority's key: the volume takes the certificate and nothing else.
+  expect_entry core.yaml database-ca \
+    'secret: secretName: hd-db-ca items: - key: ca.crt path: ca.crt'
+  local variable
   for variable in HOST PORT NAME USER PASSWORD; do
     expect_no_env core.yaml "HD_DATABASE_$variable"
   done
   expect_kind Cluster 1
-  expect_text postgresql.yaml 'name: hd-db'
+  expect_line postgresql.yaml '  name: hd-db'
+}
+
+# The dumps of the CloudNativePG cluster get its URL and nothing else about the connection.
+expect_cluster_dumps() {
+  expect_kind CronJob 1
+  expect_env dumps.yaml DATABASE_URL 'valueFrom: secretKeyRef: name: hd-db-app key: uri'
+  expect_text dumps.yaml 'pg_dump --dbname="$DATABASE_URL" --format=custom'
+  local variable
+  for variable in PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSSLMODE PGSSLROOTCERT; do
+    expect_no_env dumps.yaml "$variable"
+  done
+  expect_no_text dumps.yaml 'database-ca'
+}
+
+# dumps_tls FORM HELM_ARGUMENTS…: pg_dump reaches an external database, given in that form, over
+# TLS as the core does, as far as the dumps image can: it holds no public authorities, so it
+# verifies the server's certificate only against the authority of core.database.ca.
+dumps_tls() {
+  local form=$1
+  shift
+
+  render "$@" --set dumps.enabled=true
+  expect_env dumps.yaml PGSSLMODE 'value: "require"'
+  expect_no_env dumps.yaml PGSSLROOTCERT
+  expect_no_text dumps.yaml 'database-ca'
+  finish "dumps with $form, no authority: TLS required, the certificate not verified"
+
+  render "$@" --set dumps.enabled=true --set core.database.sslMode=verify-ca
+  expect_env dumps.yaml PGSSLMODE 'value: "require"'
+  expect_no_env dumps.yaml PGSSLROOTCERT
+  finish "dumps with $form, sslMode=verify-ca and no authority: TLS required"
+
+  render "$@" --set dumps.enabled=true --set core.database.sslMode=prefer
+  expect_env dumps.yaml PGSSLMODE 'value: "prefer"'
+  expect_no_env dumps.yaml PGSSLROOTCERT
+  finish "dumps with $form, sslMode=prefer: the weaker mode, as set"
+
+  render "$@" --set dumps.enabled=true --set core.database.ca.existingSecret=hd-database-ca
+  expect_env dumps.yaml PGSSLMODE 'value: "verify-full"'
+  expect_env dumps.yaml PGSSLROOTCERT 'value: "/etc/hd/database-ca/ca.crt"'
+  expect_entry dumps.yaml database-ca 'mountPath: /etc/hd/database-ca readOnly: true'
+  expect_entry dumps.yaml database-ca \
+    'secret: secretName: hd-database-ca items: - key: ca.crt path: ca.crt'
+  finish "dumps with $form and an authority: verify-full against it, mounted alone"
+
+  render "$@" --set dumps.enabled=true --set core.database.sslMode=verify-ca \
+    --set core.database.ca.existingSecret=hd-database-ca --set core.database.ca.secretKey=root.pem
+  expect_env dumps.yaml PGSSLMODE 'value: "verify-ca"'
+  expect_env dumps.yaml PGSSLROOTCERT 'value: "/etc/hd/database-ca/ca.crt"'
+  expect_entry dumps.yaml database-ca \
+    'secret: secretName: hd-database-ca items: - key: root.pem path: ca.crt'
+  finish "dumps with $form, sslMode=verify-ca and an authority: verify-ca against its key"
 }
 
 # refused NAME MESSAGE HELM_ARGUMENTS…: the chart does not render, and says why.
@@ -215,9 +289,9 @@ render "${url_form[@]}" --set core.database.secretKey=url \
 expect_env core.yaml HD_DATABASE_URL 'valueFrom: secretKeyRef: name: hd-database key: url'
 expect_env core.yaml HD_DATABASE_SSLMODE 'value: "verify-ca"'
 expect_env core.yaml HD_DATABASE_CA_FILE 'value: "/etc/hd/database-ca/ca.crt"'
-expect_text core.yaml 'mountPath: /etc/hd/database-ca'
-expect_text core.yaml 'secretName: hd-database-ca'
-expect_text core.yaml 'key: root.pem'
+expect_entry core.yaml database-ca 'mountPath: /etc/hd/database-ca readOnly: true'
+expect_entry core.yaml database-ca \
+  'secret: secretName: hd-database-ca items: - key: root.pem path: ca.crt'
 expect_no_cluster
 finish "external with a URL Secret: its key, sslMode and the authority's Secret applied"
 
@@ -257,9 +331,9 @@ expect_env core.yaml HD_DATABASE_PASSWORD \
 expect_no_env core.yaml HD_DATABASE_URL
 expect_env core.yaml HD_DATABASE_SSLMODE 'value: "verify-ca"'
 expect_env core.yaml HD_DATABASE_CA_FILE 'value: "/etc/hd/database-ca/ca.crt"'
-expect_text core.yaml 'mountPath: /etc/hd/database-ca'
-expect_text core.yaml 'secretName: hd-database-ca'
-expect_text core.yaml 'key: root.pem'
+expect_entry core.yaml database-ca 'mountPath: /etc/hd/database-ca readOnly: true'
+expect_entry core.yaml database-ca \
+  'secret: secretName: hd-database-ca items: - key: root.pem path: ca.crt'
 expect_no_cluster
 finish "external with separate values: the port, the password's key, sslMode and the authority's Secret applied"
 
@@ -286,13 +360,8 @@ refused "external with the password's Secret alone: refused, naming the missing 
 # ---------------------------------------------------------------------------------------------
 
 render "${cluster[@]}" --set dumps.enabled=true
-expect_kind CronJob 1
-expect_env dumps.yaml DATABASE_URL 'valueFrom: secretKeyRef: name: hd-db-app key: uri'
-expect_text dumps.yaml 'pg_dump --dbname="$DATABASE_URL" --format=custom'
-for variable in PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD; do
-  expect_no_env dumps.yaml "$variable"
-done
-finish "dumps with cloudnativepg: the URL from the cluster's Secret"
+expect_cluster_dumps
+finish "dumps with cloudnativepg: the URL from the cluster's Secret, and nothing else"
 
 render "${url_form[@]}" --set core.database.secretKey=url --set dumps.enabled=true
 expect_kind CronJob 1
@@ -315,14 +384,16 @@ expect_text dumps.yaml 'pg_dump --format=custom'
 expect_no_text dumps.yaml 'DATABASE_URL'
 finish "dumps with external and separate values: pg_dump's own variables, the password from its Secret"
 
+dumps_tls "external and a URL Secret" "${url_form[@]}"
+dumps_tls "external and separate values" "${separate_values[@]}"
+
 # ---------------------------------------------------------------------------------------------
 # The staging example, and helm lint in each mode
 # ---------------------------------------------------------------------------------------------
 
 render -f "$chart/values-staging.example.yaml"
 expect_cluster_database
-expect_kind CronJob 1
-expect_env dumps.yaml DATABASE_URL 'valueFrom: secretKeyRef: name: hd-db-app key: uri'
+expect_cluster_dumps
 finish "the staging example: the CloudNativePG cluster and its dumps"
 
 render "${cluster[@]}" --set postgresql.backup.enabled=true \
@@ -360,6 +431,11 @@ refused "an empty postgresql.mode: refused, naming the three modes" \
 refused "postgresql.enabled=true: refused, naming postgresql.mode=cloudnativepg" \
   'postgresql.enabled is no longer a value: set postgresql.mode=cloudnativepg and remove postgresql.enabled' \
   --set postgresql.enabled=true
+
+# Before, the core then used the Secret's database, not the cluster the chart still created.
+refused "postgresql.enabled=true with core.database.existingSecret: refused, naming postgresql.mode=external" \
+  'postgresql.enabled is no longer a value: set postgresql.mode=external and remove postgresql.enabled (with core.database.existingSecret the core uses that database; the CloudNativePG cluster then leaves the release, and stays in place only with postgresql.keepOnUninstall)' \
+  --set postgresql.enabled=true --set core.database.existingSecret=hd-database
 
 refused "postgresql.enabled=false: refused, naming postgresql.mode=external" \
   'postgresql.enabled is no longer a value: set postgresql.mode=external and remove postgresql.enabled' \
