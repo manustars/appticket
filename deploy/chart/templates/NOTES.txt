@@ -51,4 +51,11 @@ It keeps mail in memory: a restart of the core's pod empties the test mailbox.
 Database dumps run on "{{ .Values.dumps.schedule }}", keeping {{ .Values.dumps.keep }}. To take one now:
 
   kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ printf "%s-dumps" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }} {{ printf "%s-dump-now" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }}
+{{- $db := .Values.core.database }}
+{{- if and (ne $databaseSource "cloudnativepg") (not $db.ca.existingSecret) (has $db.sslMode (list "" "verify-full" "verify-ca")) }}
+
+The dumps require TLS to the database but do not verify its certificate, which the core does: the
+dumps' image holds no public certificate authorities. Give the database's authority in
+core.database.ca to have the dumps verify it too (docs/deploy.md, "Database dumps").
+{{- end }}
 {{- end }}

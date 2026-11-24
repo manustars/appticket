@@ -58,7 +58,14 @@ values the chart refuses stop it with the same message whichever template render
 {{- define "hd.databaseSource" -}}
 {{- $pg := .Values.postgresql }}
 {{- if hasKey $pg "enabled" }}
-{{- fail (printf "postgresql.enabled is no longer a value: set postgresql.mode=%s and remove postgresql.enabled" (ternary "cloudnativepg" "external" (eq (toString $pg.enabled) "true"))) }}
+{{- /* What the chart did before: the Secret's database won over the cluster it still created. */}}
+{{- if ne (toString $pg.enabled) "true" }}
+{{- fail "postgresql.enabled is no longer a value: set postgresql.mode=external and remove postgresql.enabled" }}
+{{- else if .Values.core.database.existingSecret }}
+{{- fail "postgresql.enabled is no longer a value: set postgresql.mode=external and remove postgresql.enabled (with core.database.existingSecret the core uses that database; the CloudNativePG cluster then leaves the release, and stays in place only with postgresql.keepOnUninstall)" }}
+{{- else }}
+{{- fail "postgresql.enabled is no longer a value: set postgresql.mode=cloudnativepg and remove postgresql.enabled" }}
+{{- end }}
 {{- end }}
 {{- $mode := $pg.mode | default "" | toString }}
 {{- if not (has $mode (list "standalone" "cloudnativepg" "external")) }}

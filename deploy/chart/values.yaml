@@ -20,10 +20,10 @@ core:
   # rather than rolling it, so that two cores never run at once.
   replicas: 1
 
-  # The core's connection to an external database (postgresql.mode=external, below); the chart
-  # refuses these values in the other modes. With the CloudNativePG cluster the chart uses the
-  # app Secret the cluster creates, and the core verifies the cluster's certificate (verify-full)
-  # against the cluster's own authority, from its Secret <cluster>-ca.
+  # The core's connection to an external database (postgresql.mode=external, below). With
+  # postgresql.mode=cloudnativepg the chart refuses existingSecret, sslMode and ca.existingSecret:
+  # it uses the app Secret the cluster creates, and the core verifies the cluster's certificate
+  # (verify-full) against the cluster's own authority, from its Secret <cluster>-ca.
   #
   # TLS: an external database on another host is reached with verify-full unless its URL carries
   # an sslmode or sslMode says otherwise (docs/deploy.md, "TLS to the database").
@@ -206,8 +206,16 @@ assistant:
 #   (docs/external-database.md), given in one of two forms: a Secret holding its URL
 #   (core.database.existingSecret), or the separate values under `external`;
 # - standalone: not available yet.
-# The chart refuses values that belong to another mode, and postgresql.enabled, which
-# postgresql.mode replaces: true was cloudnativepg, false was external.
+# The chart refuses:
+# - postgresql.enabled, which postgresql.mode replaces: false was external, and so was true
+#   beside core.database.existingSecret; true alone was cloudnativepg;
+# - in cloudnativepg mode, what names an external database: core.database.existingSecret, sslMode
+#   and ca.existingSecret, and postgresql.external.host, name, user and password.existingSecret;
+# - in external mode, both forms together, the separate values in part, and neither form.
+# It ignores, without a message: in external mode the cluster's values (instances, storage,
+# backup and the others); beside a URL Secret and in cloudnativepg mode,
+# postgresql.external.port and password.secretKey; with the separate values,
+# core.database.secretKey.
 # ---------------------------------------------------------------------------------------------
 postgresql:
   mode: cloudnativepg
@@ -270,9 +278,17 @@ postgresql:
 # Database dumps (optional): a CronJob runs pg_dump on a schedule and keeps the latest dumps on a
 # volume. Works with the CloudNativePG cluster above or an external database, and needs no object
 # storage. The dumps are PostgreSQL's custom format, compressed; restore with pg_restore.
-# pg_dump gets the database's URL or separate values, but not core.database.sslMode nor
-# core.database.ca: it encrypts the connection when the server offers TLS, and verifies the
-# server's certificate only when the URL asks for it.
+#
+# TLS to an external database, in either form: the job's image holds no public certificate
+# authorities, so pg_dump verifies the server's certificate only against core.database.ca.
+# - With core.database.ca: core.database.sslMode, verify-full when empty, against that authority.
+# - Without it: TLS is required but the certificate is not verified (sslmode=require) where the
+#   core verifies it (sslMode empty, verify-full or verify-ca); a weaker sslMode is used as it is.
+#   To have pg_dump verify a certificate from a public authority, give that authority in
+#   core.database.ca: the core trusts it besides the public ones.
+# - A URL that carries its own sslmode keeps it, and with verify-full or verify-ca there pg_dump
+#   fails without core.database.ca.
+# The dumps of the CloudNativePG cluster use its URL as it is.
 # ---------------------------------------------------------------------------------------------
 dumps:
   enabled: false

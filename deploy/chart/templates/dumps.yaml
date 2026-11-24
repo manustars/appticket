@@ -1,7 +1,20 @@
 {{- if .Values.dumps.enabled }}
 {{- $d := .Values.dumps }}
+{{- $databaseSource := include "hd.databaseSource" . }}
 {{- /* An external database given as separate values: pg_dump gets them as its own variables. */}}
-{{- $separateValues := eq (include "hd.databaseSource" .) "external-values" }}
+{{- $separateValues := eq $databaseSource "external-values" }}
+{{- /*
+An external database is reached over TLS as the core reaches it, as far as the image allows: it
+holds no public authorities, so pg_dump verifies the server's certificate against the authority
+of core.database.ca, and without one requires TLS where the core verifies.
+*/}}
+{{- $externalDatabase := ne $databaseSource "cloudnativepg" }}
+{{- $db := .Values.core.database }}
+{{- $caSecret := ternary $db.ca.existingSecret "" $externalDatabase }}
+{{- $sslMode := $db.sslMode | default "verify-full" }}
+{{- if and (not $caSecret) (has $sslMode (list "verify-full" "verify-ca")) }}
+{{- $sslMode = "require" }}
+{{- end }}
 {{- $name := printf "%s-dumps" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }}
 {{- $claim := $d.storage.existingClaim | default $name }}
 {{- if lt (int $d.keep) 1 }}
@@ -68,7 +81,7 @@ spec:
                 - name: PGHOST
                   value: {{ $external.host | quote }}
                 - name: PGPORT
-                  value: {{ $external.port | default 5432 | quote }}
+                  value: {{ $external.port | quote }}
                 - name: PGDATABASE
                   value: {{ $external.name | quote }}
                 - name: PGUSER
@@ -77,13 +90,22 @@ spec:
                   valueFrom:
                     secretKeyRef:
                       name: {{ $external.password.existingSecret }}
-                      key: {{ $external.password.secretKey | default "password" }}
+                      key: {{ $external.password.secretKey }}
                 {{- else }}
                 - name: DATABASE_URL
                   valueFrom:
                     secretKeyRef:
                       name: {{ include "hd.databaseSecret" . }}
-                      key: {{ .Values.core.database.secretKey }}
+                      key: {{ $db.secretKey }}
+                {{- end }}
+                {{- if $externalDatabase }}
+                {{- /* A URL that carries its own sslmode keeps it: pg_dump prefers it to this. */}}
+                - name: PGSSLMODE
+                  value: {{ $sslMode | quote }}
+                {{- end }}
+                {{- if $caSecret }}
+                - name: PGSSLROOTCERT
+                  value: "/etc/hd/database-ca/ca.crt"
                 {{- end }}
                 - name: KEEP
                   value: {{ $d.keep | quote }}
@@ -109,8 +131,22 @@ spec:
               volumeMounts:
                 - name: dumps
                   mountPath: /dumps
+                {{- if $caSecret }}
+                - name: database-ca
+                  mountPath: /etc/hd/database-ca
+                  readOnly: true
+                {{- end }}
           volumes:
             - name: dumps
               persistentVolumeClaim:
                 claimName: {{ $claim }}
+            {{- if $caSecret }}
+            # Only the certificate, as for the core.
+            - name: database-ca
+              secret:
+                secretName: {{ $caSecret }}
+                items:
+                  - key: {{ $db.ca.secretKey }}
+                    path: ca.crt
+            {{- end }}
 {{- end }}
