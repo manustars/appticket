@@ -61,8 +61,9 @@ template() {
 env_of() {
   template "$1" | awk -v name="$2" '
     function indent(line) { match(line, /^ */); return RLENGTH }
-    found && (indent($0) < depth || (indent($0) == depth && $0 ~ /^ *- /)) { exit }
-    found { sub(/^ +/, ""); entry = entry (entry == "" ? "" : " ") $0 }
+    # The whole input is read, so that the pipe is never closed on the writer.
+    found && (indent($0) < depth || (indent($0) == depth && $0 ~ /^ *- /)) { past = 1 }
+    found && !past { sub(/^ +/, ""); entry = entry (entry == "" ? "" : " ") $0 }
     !found && $0 ~ ("^ *- name: " name "$") { found = 1; depth = indent($0) }
     END { print entry }
   '
@@ -88,13 +89,17 @@ expect_no_env() {
 # expect_text TEMPLATE TEXT / expect_no_text TEMPLATE TEXT: a fixed string in what a template
 # rendered.
 expect_text() {
-  if ! template "$1" | grep -qF -- "$2"; then
+  local rendered
+  rendered=$(template "$1")
+  if ! grep -qF -- "$2" <<< "$rendered"; then
     problem "$1: no '$2'"
   fi
 }
 
 expect_no_text() {
-  if template "$1" | grep -qF -- "$2"; then
+  local rendered
+  rendered=$(template "$1")
+  if grep -qF -- "$2" <<< "$rendered"; then
     problem "$1: unexpected '$2'"
   fi
 }
@@ -116,10 +121,11 @@ expect_cluster_database() {
   expect_env core.yaml HD_DATABASE_CA_FILE 'value: "/etc/hd/database-ca/ca.crt"'
   expect_text core.yaml 'mountPath: /etc/hd/database-ca'
   expect_text core.yaml 'secretName: hd-db-ca'
-  if ! template core.yaml | grep -A3 'secretName: hd-db-ca' | grep -qF 'key: ca.crt'; then
+  local volume variable
+  volume=$(template core.yaml | grep -A3 'secretName: hd-db-ca' || true)
+  if ! grep -qF 'key: ca.crt' <<< "$volume"; then
     problem "core.yaml: the volume of hd-db-ca does not take the key ca.crt alone"
   fi
-  local variable
   for variable in HOST PORT NAME USER PASSWORD; do
     expect_no_env core.yaml "HD_DATABASE_$variable"
   done
@@ -159,25 +165,27 @@ expect_kind ScheduledBackup 0
 expect_kind CronJob 0
 finish "default values: the CloudNativePG cluster, verified against its own authority"
 
-render --set postgresql.mode=cloudnativepg
+cluster=(--set postgresql.mode=cloudnativepg)
+
+render "${cluster[@]}"
 expect_cluster_database
 finish "postgresql.mode=cloudnativepg: the same as the default"
 
 refused "cloudnativepg with core.database.existingSecret: refused, it belongs to external" \
   'core.database.existingSecret is for postgresql.mode=external: with postgresql.mode=cloudnativepg the core uses the Secret of the CloudNativePG cluster' \
-  --set core.database.existingSecret=hd-database
+  "${cluster[@]}" --set core.database.existingSecret=hd-database
 
 refused "cloudnativepg with core.database.sslMode: refused, it belongs to external" \
   'core.database.sslMode and core.database.ca are for postgresql.mode=external: the CloudNativePG cluster is verified against its own authority' \
-  --set core.database.sslMode=require
+  "${cluster[@]}" --set core.database.sslMode=require
 
 refused "cloudnativepg with core.database.ca: refused, it belongs to external" \
   'core.database.sslMode and core.database.ca are for postgresql.mode=external: the CloudNativePG cluster is verified against its own authority' \
-  --set core.database.ca.existingSecret=hd-database-ca
+  "${cluster[@]}" --set core.database.ca.existingSecret=hd-database-ca
 
 refused "cloudnativepg with postgresql.external: refused, it belongs to external" \
   'postgresql.external is for postgresql.mode=external, and postgresql.mode is cloudnativepg' \
-  --set postgresql.external.host=db.example.com
+  "${cluster[@]}" --set postgresql.external.host=db.example.com
 
 # ---------------------------------------------------------------------------------------------
 # external, as a Secret holding the URL
@@ -277,7 +285,7 @@ refused "external with the password's Secret alone: refused, naming the missing 
 # Dumps: pg_dump reaches the same database as the core
 # ---------------------------------------------------------------------------------------------
 
-render --set dumps.enabled=true
+render "${cluster[@]}" --set dumps.enabled=true
 expect_kind CronJob 1
 expect_env dumps.yaml DATABASE_URL 'valueFrom: secretKeyRef: name: hd-db-app key: uri'
 expect_text dumps.yaml 'pg_dump --dbname="$DATABASE_URL" --format=custom'
@@ -317,7 +325,8 @@ expect_kind CronJob 1
 expect_env dumps.yaml DATABASE_URL 'valueFrom: secretKeyRef: name: hd-db-app key: uri'
 finish "the staging example: the CloudNativePG cluster and its dumps"
 
-render --set postgresql.backup.enabled=true --set postgresql.backup.volumeSnapshot.className=snapshots
+render "${cluster[@]}" --set postgresql.backup.enabled=true \
+  --set postgresql.backup.volumeSnapshot.className=snapshots
 expect_cluster_database
 expect_kind ScheduledBackup 1
 expect_text postgresql.yaml 'className: snapshots'
@@ -339,6 +348,10 @@ refused "postgresql.mode=standalone: refused, not available yet" \
 refused "an unknown postgresql.mode: refused, naming the three modes" \
   'postgresql.mode is "operator": it must be standalone, cloudnativepg or external' \
   --set postgresql.mode=operator
+
+refused "an empty postgresql.mode: refused, naming the three modes" \
+  'postgresql.mode is "": it must be standalone, cloudnativepg or external' \
+  --set postgresql.mode=
 
 # ---------------------------------------------------------------------------------------------
 # postgresql.enabled, which postgresql.mode replaces
