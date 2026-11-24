@@ -677,10 +677,12 @@ leaves the kept cluster in place.
 helm upgrade hd oci://ghcr.io/manustars/charts/hd --version <version> -n helpdesk -f my-values.yaml
 ```
 
-The chart of a version runs the core and the Assistant of that version. The core is stopped, then
-started with the new version, which applies its migrations before serving: expect a short pause for agents and mail (mail waits in the mailbox and is read on
-start). Take a backup before upgrading across versions with migrations. The Assistant can be
-upgraded on its own; events wait in the core while it restarts.
+The chart of a version runs the core and the Assistant of that version; `core.image.tag` and
+`assistant.image.tag` set the version of either one on its own. The core is stopped, then started
+with the new version, which applies its migrations before serving: expect a short pause for agents
+and mail (mail waits in the mailbox and is read on start). Take a backup before upgrading across
+versions with migrations. The Assistant can be upgraded on its own (`assistant.image.tag`); events
+wait in the core while it restarts.
 
 ### Upgrading from 0.3: verified TLS to the database
 
