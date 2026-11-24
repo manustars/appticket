@@ -3,7 +3,7 @@
 The help desk can run on a PostgreSQL database that you provide, instead of one its installation
 brings (the external database of
 [ADR 0009](adr/0009-two-ways-to-install-three-ways-to-get-the-database.md)). This page holds
-whatever the installation: what the DBA creates, how the core connects, how the connection is
+what applies to every installation: what the DBA creates, how the core connects, how the connection is
 protected, and how secrets are read from files. The installation guides say where each setting
 goes: [Deploying to Kubernetes](deploy.md) for the Helm chart.
 
@@ -34,7 +34,7 @@ REVOKE helpdesk FROM CURRENT_USER;
 |---|---|
 | `CREATE ROLE … LOGIN` | The core's user: not a superuser, and it cannot create databases or roles. |
 | `GRANT helpdesk TO CURRENT_USER` | A role that is not a superuser may give a database only to a role it can act as; without this, `CREATE DATABASE` fails with `must be able to SET ROLE "helpdesk"`. The last line takes it back. |
-| `ENCODING 'UTF8' TEMPLATE template0` | Mail arrives in every language. `template0` makes the encoding work whatever the server's `template1` uses. |
+| `ENCODING 'UTF8' TEMPLATE template0` | Messages arrive in every language. `template0` lets the encoding differ from `template1`'s. A server whose default locale is neither UTF-8 nor `C` also needs a UTF-8 `LOCALE` here. |
 | `REVOKE ALL … FROM PUBLIC` | PostgreSQL lets every role of the server connect to a new database; afterwards only its owner and the superusers can. |
 
 The `public` schema of a new database belongs to the database's owner (PostgreSQL 15 and later),
@@ -93,11 +93,11 @@ Without `HD_DATABASE_SSLMODE`, the mode depends on where the database is:
 | Database | Default |
 |---|---|
 | On another host | `verify-full`: TLS, with a certificate from a trusted authority for the host the core dials. |
-| On the core's own host: `localhost`, a loopback address or a Unix socket | `prefer`: TLS if the server offers it, its certificate not verified. |
+| On the core's own host: `localhost`, a loopback address or a Unix socket | None set by the core: the PostgreSQL client's default, `prefer` (TLS if the server offers it, its certificate not verified), which `PGSSLMODE` can change. |
 
 A `localhost` dialled at an address that is not a loopback one (`hostaddr` in the connection
-string, or `PGHOSTADDR`) counts as another host. The PostgreSQL client's own variables
-(`PGSSLMODE`) do not change the mode for a database on another host.
+string, or `PGHOSTADDR`) counts as another host. `PGSSLMODE` does not change the mode for a
+database on another host.
 
 `HD_DATABASE_SSLMODE` sets the mode for the separate parameters and for a connection string
 without its own `sslmode`:
@@ -136,8 +136,8 @@ reads the file at startup and stops, naming it, when it cannot. It also stops wh
 given:
 
 - with a mode that does not verify the certificate (`require`, `prefer`, `disable`, `allow`).
-  That includes a database on the core's own host without `HD_DATABASE_SSLMODE`, whose default is
-  `prefer`: set `HD_DATABASE_SSLMODE=verify-full` there;
+  That includes a database on the core's own host without `HD_DATABASE_SSLMODE`, even with
+  `PGSSLMODE` set: set `HD_DATABASE_SSLMODE=verify-full` there;
 - beside a connection string that carries its own authorities (`sslrootcert`, `ssl-root-cert` or
   `ssl-ca`).
 
