@@ -22,9 +22,22 @@ core:
 
   # Where HD_DATABASE_URL comes from. With postgresql.enabled the chart uses the app Secret the
   # CloudNativePG cluster creates; otherwise name an existing Secret holding a postgres:// URL.
+  #
+  # TLS: with the CloudNativePG cluster the core verifies the cluster's certificate (verify-full)
+  # against the cluster's own authority, from its Secret <cluster>-ca. For an existing Secret, a
+  # database on another host is reached with verify-full unless its URL carries an sslmode or
+  # sslMode says otherwise (docs/deploy.md, "TLS to the database").
   database:
     existingSecret: ""
     secretKey: uri
+    # HD_DATABASE_SSLMODE, with existingSecret only: verify-full, verify-ca, require, prefer or
+    # disable. Empty: verify-full for another host. Not with a URL that carries its own sslmode.
+    sslMode: ""
+    # A Secret with a PEM file of the authorities that issued the database's certificate
+    # (HD_DATABASE_CA_FILE), with existingSecret only, for a private authority.
+    ca:
+      existingSecret: ""
+      secretKey: ca.crt
 
   mail:
     # HD_MAIL_FROM: the help desk's own address, which replies come from. Without it agents
