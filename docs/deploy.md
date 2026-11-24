@@ -698,7 +698,9 @@ upgraded on its own; events wait in the core while it restarts.
 
 From this version the core verifies the certificate of a database on another host
 ([TLS to the database](#tls-to-the-database)); 0.3 used TLS if the server offered it, without
-verifying it.
+verifying it. Upgrade the chart together with the core: the new core under the 0.3 chart (only
+`core.image.tag` changed) reaches the CloudNativePG cluster with `verify-full` but without its
+authority, and does not start.
 
 - **The CloudNativePG cluster** (`postgresql.enabled=true`, no `core.database.existingSecret`):
   nothing to do. The chart sets `verify-full` and mounts the cluster's authority from
@@ -706,11 +708,13 @@ verifying it.
 - **An external database** (`core.database.existingSecret`) on another host: from now on its
   certificate must be from a trusted authority, for the host in the URL. Before upgrading, for a
   private authority put its certificate in a Secret and set `core.database.ca.existingSecret`; a
-  certificate from a public authority needs nothing. A database that does not serve TLS, or one
-  to keep as before for now, needs `core.database.sslMode` (`prefer` is 0.3's behaviour), or
-  `sslmode` in its URL; the core then logs a warning at every start. A core that cannot verify
-  the certificate does not start and logs why: the database is not touched, and setting one of
-  the above and upgrading again brings the core back.
+  certificate from a public authority needs nothing; a CloudNativePG cluster named in
+  `existingSecret`, such as a restored one, needs `core.database.ca.existingSecret:
+  <cluster>-ca`. A database that does not serve TLS, or one to keep as before for now, needs
+  `core.database.sslMode` (`prefer` is 0.3's behaviour), or `sslmode` in its URL; the core then
+  logs a warning at every start. A core that cannot verify the certificate does not start and
+  logs why: the database is not touched, and setting one of the above and upgrading again brings
+  the core back.
 - **Outside the chart**, the same holds for `HD_DATABASE_URL` and the separate parameters, with
   `HD_DATABASE_SSLMODE` and `HD_DATABASE_CA_FILE`.
 
