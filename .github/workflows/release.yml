@@ -17,7 +17,7 @@ permissions:
   packages: write
 
 jobs:
-  version:
+  tag-agrees-with-chart:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -27,7 +27,7 @@ jobs:
         run: bash scripts/publish-chart.sh --check "${GITHUB_REF_NAME#v}"
 
   images:
-    needs: version
+    needs: tag-agrees-with-chart
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
