@@ -49,14 +49,66 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s:%s" .image.repository (default .root.Chart.AppVersion .image.tag) }}
 {{- end }}
 
-{{/* The Secret and key holding the database URL; fails when there is none. */}}
+{{/*
+Where the database comes from (postgresql.mode): "cloudnativepg", or for a database of the help
+desk's own "external-url" (a Secret holding the URL) or "external-values" (separate values, the
+password from a Secret). Every template that depends on
+the database includes this, so that values the chart refuses stop it with the same message
+whichever template renders first.
+*/}}
+{{- define "hd.databaseSource" -}}
+{{- $pg := .Values.postgresql }}
+{{- if hasKey $pg "enabled" }}
+{{- fail (printf "postgresql.enabled is no longer a value: set postgresql.mode=%s and remove postgresql.enabled" (ternary "cloudnativepg" "external" (eq (toString $pg.enabled) "true"))) }}
+{{- end }}
+{{- $mode := toString $pg.mode }}
+{{- if not (has $mode (list "standalone" "cloudnativepg" "external")) }}
+{{- fail (printf "postgresql.mode is %q: it must be standalone, cloudnativepg or external" $mode) }}
+{{- end }}
+{{- if eq $mode "standalone" }}
+{{- fail "postgresql.mode=standalone is not available yet: set postgresql.mode to cloudnativepg or external" }}
+{{- end }}
+{{- $db := .Values.core.database }}
+{{- $external := $pg.external | default dict }}
+{{- $password := ($external.password | default dict).existingSecret }}
+{{- if eq $mode "cloudnativepg" }}
+{{- if $db.existingSecret }}
+{{- fail "core.database.existingSecret is for postgresql.mode=external: with postgresql.mode=cloudnativepg the core uses the Secret of the CloudNativePG cluster" }}
+{{- end }}
+{{- if or $db.sslMode $db.ca.existingSecret }}
+{{- fail "core.database.sslMode and core.database.ca are for postgresql.mode=external: the CloudNativePG cluster is verified against its own authority" }}
+{{- end }}
+{{- if or $external.host $external.name $external.user $password }}
+{{- fail "postgresql.external is for postgresql.mode=external, and postgresql.mode is cloudnativepg" }}
+{{- end }}
+{{- $mode }}
+{{- else }}
+{{- $missing := list }}
+{{- if not $external.host }}{{ $missing = append $missing "postgresql.external.host" }}{{ end }}
+{{- if not $external.name }}{{ $missing = append $missing "postgresql.external.name" }}{{ end }}
+{{- if not $external.user }}{{ $missing = append $missing "postgresql.external.user" }}{{ end }}
+{{- if not $password }}{{ $missing = append $missing "postgresql.external.password.existingSecret" }}{{ end }}
+{{- $separate := lt (len $missing) 4 }}
+{{- if and $db.existingSecret $separate }}
+{{- fail "postgresql.mode=external takes the database as a Secret holding the URL (core.database.existingSecret) or as separate values (postgresql.external), not both" }}
+{{- else if $db.existingSecret }}
+{{- "external-url" }}
+{{- else if not $separate }}
+{{- fail "postgresql.mode=external needs the database: set core.database.existingSecret (a Secret holding the URL), or postgresql.external.host, name, user and password.existingSecret" }}
+{{- else if $missing }}
+{{- fail (printf "postgresql.external is given in part: set also %s" (join ", " $missing)) }}
+{{- else }}
+{{- "external-values" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/* The Secret holding the database URL: the CloudNativePG cluster's, or the one named. */}}
 {{- define "hd.databaseSecret" -}}
-{{- if .Values.core.database.existingSecret }}
-{{- .Values.core.database.existingSecret }}
-{{- else if .Values.postgresql.enabled }}
+{{- if eq (include "hd.databaseSource" .) "cloudnativepg" }}
 {{- printf "%s-app" (include "hd.dbName" .) }}
 {{- else }}
-{{- fail "set core.database.existingSecret (a Secret with the database URL) or postgresql.enabled=true" }}
+{{- .Values.core.database.existingSecret }}
 {{- end }}
 {{- end }}
 

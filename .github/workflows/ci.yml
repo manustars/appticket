@@ -121,16 +121,9 @@ jobs:
       - run: helm lint deploy/chart
       - run: helm lint deploy/chart -f deploy/chart/values-staging.example.yaml
       - run: helm template hd deploy/chart -f deploy/chart/values-staging.example.yaml > /dev/null
-      # With the CloudNativePG cluster (the default), the core verifies the cluster's certificate
-      # against the cluster's own authority, mounted without its key.
-      - name: The core verifies the CloudNativePG cluster's certificate
-        run: |
-          helm template hd deploy/chart -s templates/core.yaml > "$RUNNER_TEMP/core.yaml"
-          cd "$RUNNER_TEMP"
-          grep -A1 'name: HD_DATABASE_SSLMODE' core.yaml | grep -q 'value: "verify-full"'
-          grep -A1 'name: HD_DATABASE_CA_FILE' core.yaml | grep -q 'value: "/etc/hd/database-ca/ca.crt"'
-          grep -q 'mountPath: /etc/hd/database-ca' core.yaml
-          grep -A3 'secretName: hd-db-ca' core.yaml | grep -q 'key: ca.crt'
+      # What the chart renders, lints and refuses in each database mode (postgresql.mode).
+      - name: The chart's database modes
+        run: bash scripts/chart-database-modes.sh
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
