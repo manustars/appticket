@@ -52,10 +52,8 @@ development every sign-in counts under `127.0.0.1`.
 Production deployment: [`deploy.md`](deploy.md); on a PostgreSQL database of your own:
 [`external-database.md`](external-database.md).
 
-Instead of `HD_DATABASE_URL`, the database can be given as separate parameters: `HD_DATABASE_HOST`,
-`HD_DATABASE_PORT` (default 5432), `HD_DATABASE_NAME`, `HD_DATABASE_USER` and
-`HD_DATABASE_PASSWORD` (or `HD_DATABASE_PASSWORD_FILE`), the password with no percent-encoding.
-Not both: the URL beside any of them, or the separate parameters in part, stops the core.
+Instead of `HD_DATABASE_URL`, the database can be given as separate parameters
+([`external-database.md`](external-database.md#connecting)).
 
 The database on `127.0.0.1` is reached as before, with TLS only if the server offers it; one on
 another host is reached with verified TLS unless `HD_DATABASE_SSLMODE` says otherwise

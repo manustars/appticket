@@ -60,10 +60,10 @@ creates the Secret `<name>-db-app` (`hd-db-app` for a release named `hd`) and th
 [TLS to the database](#tls-to-the-database)).
 
 The external database's `uri` is a connection string as
-[Connecting](external-database.md#connecting) describes. Outside the chart the database can also
-be given as separate parameters, and every secret of the core and of the Assistant can be read
-from a file instead of a variable: see [Connecting](external-database.md#connecting) and
-[Secrets from files](external-database.md#secrets-from-files).
+[Connecting](external-database.md#connecting) describes, which also gives the separate parameters
+that can replace it outside the chart. There, every secret of the core and of the Assistant can
+also be read from a file instead of a variable
+([Secrets from files](external-database.md#secrets-from-files)).
 
 ## Install
 
@@ -121,8 +121,8 @@ To send plain HTTP to HTTPS with ingress-nginx, add the annotation
 The core reaches a database on another host over TLS and verifies its certificate
 (`verify-full`) unless told otherwise. [TLS](external-database.md#tls) in the guide to running on
 your own database gives the modes, the defaults, the warning a weaker mode logs and what stops the
-core. For an external database (`core.database.existingSecret`), the chart sets the two variables
-from its values:
+core. The chart sets its two variables from two values, which are for an external database
+(`core.database.existingSecret`) only and refused with the CloudNativePG cluster:
 
 - `core.database.sslMode`: `HD_DATABASE_SSLMODE`, for a URL without its own `sslmode`;
 - `core.database.ca.existingSecret` and `secretKey`: a Secret holding the PEM file of a private
@@ -132,8 +132,6 @@ With the CloudNativePG cluster the chart does it: `verify-full`, with the author
 mounted from the Secret `<name>-db-ca` that CloudNativePG creates for the cluster (only `ca.crt`:
 the Secret also holds the authority's key). The host in the cluster's `uri`,
 `<name>-db-rw.<namespace>`, is one of the names the cluster's certificate lists.
-`core.database.sslMode` and `core.database.ca` are for an external database
-(`core.database.existingSecret`); the chart refuses them with the CloudNativePG cluster.
 
 ### Failed sign-ins
 
