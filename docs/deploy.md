@@ -39,6 +39,7 @@ The chart never holds secrets; it refers to Secrets you create in the release's 
 | database | `uri`: `postgres://user:password@host:5432/db` | only with `postgresql.enabled=false`; set `core.database.existingSecret` (and `secretKey`) |
 | mail | `imap-url`, `smtp-url` | real mail: `core.mail.imap.existingSecret`, `core.mail.smtp.existingSecret` (may be the same Secret) |
 | mail CA | `ca.crt` | mail servers with a private certificate authority: `core.mail.ca.existingSecret` |
+| database CA | `ca.crt` | an external database whose certificate comes from a private authority: `core.database.ca.existingSecret` (see [TLS to the database](#tls-to-the-database)) |
 | identity provider | `client-secret` | signing in through OpenID Connect: `core.oidc.existingSecret` (see [Signing in through an identity provider](#signing-in-through-an-identity-provider)) |
 | Assistant | `token`, `event-secret`, and `api-key` for a hosted model | `assistant.secret.existingSecret`, after registering the add-on |
 | backup storage | `ACCESS_KEY_ID`, `ACCESS_SECRET_KEY` | object-store backups: `postgresql.backup.objectStore.credentialsSecret` |
@@ -55,7 +56,8 @@ Percent-encode `@`, `/` and `:` inside the user name or password.
 
 With `postgresql.enabled=true` (the default) nothing is needed for the database: CloudNativePG
 creates the Secret `<name>-db-app` (`hd-db-app` for a release named `hd`) and the core reads its
-`uri`.
+`uri`, and verifies the cluster's certificate against the cluster's own authority (see
+[TLS to the database](#tls-to-the-database)).
 
 Outside the chart, the core's database can also be given as separate parameters instead of
 `HD_DATABASE_URL`: `HD_DATABASE_HOST`, `HD_DATABASE_PORT` (default 5432), `HD_DATABASE_NAME`,
@@ -123,6 +125,37 @@ The Ingress always lists its host for TLS when `ingress.tls.enabled` is true (th
 
 To send plain HTTP to HTTPS with ingress-nginx, add the annotation
 `nginx.ingress.kubernetes.io/force-ssl-redirect: "true"`.
+
+### TLS to the database
+
+The core reaches a database on another host over TLS and verifies its certificate, unless told
+otherwise: `verify-full`, a certificate from a trusted authority for the host the core dials
+([ADR 0009](adr/0009-two-ways-to-install-three-ways-to-get-the-database.md)). A database on the
+core's own host (`localhost`, a loopback address or a Unix socket) is reached as before: with TLS
+only if the server offers it, and its certificate not verified.
+
+- `HD_DATABASE_SSLMODE` (`core.database.sslMode`): `verify-full`, `verify-ca` (the authority but
+  not the host name), `require` (TLS, any certificate), `prefer` (TLS if the server offers it, any
+  certificate) or `disable`. It applies to the separate parameters and to an `HD_DATABASE_URL`
+  without its own `sslmode`. A URL that carries `sslmode` (or `ssl-mode`) keeps it, and setting
+  `HD_DATABASE_SSLMODE` beside it stops the core.
+- `HD_DATABASE_CA_FILE` (`core.database.ca.existingSecret` and `secretKey`): a PEM file of the
+  authorities that issued the database's certificate, trusted besides the public web PKI's. Only
+  with `verify-full` or `verify-ca`, which use it, and not beside a URL's own `sslrootcert`.
+
+A mode weaker than `verify-full` for a database on another host, from the variable or from the
+URL, is logged as a warning at startup naming the mode. With `verify-full`, give the database by
+a name (or address) its certificate lists. A certificate the core cannot verify stops it with the
+reason, such as `invalid peer certificate: UnknownIssuer` for an authority it does not trust.
+The PostgreSQL client's own variables (`PGSSLMODE`) do not change the mode for a database on
+another host.
+
+With the CloudNativePG cluster the chart does it: `verify-full`, with the authority's certificate
+mounted from the Secret `<name>-db-ca` that CloudNativePG creates for the cluster (only `ca.crt`:
+the Secret also holds the authority's key). The host in the cluster's `uri`,
+`<name>-db-rw.<namespace>`, is one of the names the cluster's certificate lists.
+`core.database.sslMode` and `core.database.ca` are for an external database
+(`core.database.existingSecret`); the chart refuses them with the CloudNativePG cluster.
 
 ### Failed sign-ins
 
@@ -638,7 +671,9 @@ point-in-time recovery. Turn them on with `postgresql.backup.enabled=true` and o
 The schedule has six fields, seconds first: `"0 0 2 * * *"` is every day at 02:00. An on-demand
 backup can be taken with a CloudNativePG `Backup` resource for the cluster `<release>-db`.
 Restoring means creating a new cluster that bootstraps from the backup (CloudNativePG's
-`bootstrap.recovery`), then pointing the core at it with `core.database.existingSecret`.
+`bootstrap.recovery`), then pointing the core at it with `core.database.existingSecret` (its
+`<cluster>-app` Secret) and at its authority with `core.database.ca.existingSecret`
+(`<cluster>-ca`).
 
 ## Uninstalling
 
@@ -658,3 +693,26 @@ The core is stopped, then started with the new version, which applies its migrat
 serving: expect a short pause for agents and mail (mail waits in the mailbox and is read on
 start). Take a backup before upgrading across versions with migrations. The Assistant can be
 upgraded on its own; events wait in the core while it restarts.
+
+### Upgrading from 0.3: verified TLS to the database
+
+From this version the core verifies the certificate of a database on another host
+([TLS to the database](#tls-to-the-database)); 0.3 used TLS if the server offered it, without
+verifying it.
+
+- **The CloudNativePG cluster** (`postgresql.enabled=true`, no `core.database.existingSecret`):
+  nothing to do. The chart sets `verify-full` and mounts the cluster's authority from
+  `<name>-db-ca`, which CloudNativePG has created for every cluster the chart made.
+- **An external database** (`core.database.existingSecret`) on another host: from now on its
+  certificate must be from a trusted authority, for the host in the URL. Before upgrading, for a
+  private authority put its certificate in a Secret and set `core.database.ca.existingSecret`; a
+  certificate from a public authority needs nothing. A database that does not serve TLS, or one
+  to keep as before for now, needs `core.database.sslMode` (`prefer` is 0.3's behaviour), or
+  `sslmode` in its URL; the core then logs a warning at every start. A core that cannot verify
+  the certificate does not start and logs why: the database is not touched, and setting one of
+  the above and upgrading again brings the core back.
+- **Outside the chart**, the same holds for `HD_DATABASE_URL` and the separate parameters, with
+  `HD_DATABASE_SSLMODE` and `HD_DATABASE_CA_FILE`.
+
+The database dumps (`dumps.*`) run `pg_dump`, which keeps the PostgreSQL client's default and is
+not affected.
