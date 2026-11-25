@@ -4,10 +4,11 @@
 #
 #   1. the install: the database and the core become ready, /api/health answers that the
 #      database is up, the core's log names the connection without TLS, a database dump runs,
-#      and with the NetworkPolicy a pod that is neither the core nor the dumps gets no answer
-#      from the database;
+#      and with the NetworkPolicy a pod that is neither the core nor the dumps resolves the
+#      database's name and gets no answer from it, while one with the labels of the dumps does;
 #   2. an upgrade to a later version of the chart: the generated password is the same, the
 #      volume is the same, the new core reaches the database, and a row written before is there;
+#      an upgrade that moves the generated password to another key is refused;
 #   3. `helm uninstall`: the database's volume and the password's Secret are still there;
 #   4. installing again under the same name: the core reaches the same data.
 #
@@ -137,13 +138,13 @@ claim_uid() {
   k get persistentvolumeclaim data-hd-postgresql-0 -o jsonpath='{.metadata.uid}'
 }
 
-core_pod() {
+core_pod_uid() {
   k get pods -l app.kubernetes.io/component=core -o jsonpath='{.items[0].metadata.uid}'
 }
 
 note="written by the first install"
 
-expect_note() {
+expect_row() {
   local found
   found=$(sql "select note from standalone_install_check")
   [ "$found" = "$note" ] || fail "the row written before is not there, but: '$found'"
@@ -186,7 +187,7 @@ ok "the core's log names the choice: $warning"
 
 sql "create table standalone_install_check (note text)" > /dev/null
 sql "insert into standalone_install_check values ('$note')" > /dev/null
-expect_note
+expect_row
 
 step "1a. The database dumps are on by default: take one now"
 k get cronjob hd-dumps -o name
@@ -198,25 +199,46 @@ ok "pg_dump reached the database with the generated password and wrote a dump"
 
 step "1b. With the NetworkPolicy, a pod that is neither the core nor the dumps gets no answer"
 image=$(k get statefulset hd-postgresql -o jsonpath='{.spec.template.spec.containers[0].image}')
-k run outsider --image="$image" --restart=Never --command -- \
-  pg_isready -h hd-postgresql -p 5432 -t 10
-for attempt in $(seq 60); do
-  phase=$(k get pod outsider -o jsonpath='{.status.phase}')
-  if [ "$phase" = Succeeded ] || [ "$phase" = Failed ]; then
-    break
-  fi
-  sleep 2
-done
-answer=$(k logs outsider)
-code=$(k get pod outsider -o jsonpath='{.status.containerStatuses[0].state.terminated.exitCode}')
-k delete pod outsider --wait=false > /dev/null
-# pg_isready: 0 when the server accepts connections, 2 when nothing answers.
+
+# database_answer POD LABELS: runs a pod with these labels that asks the database's Service
+# whether it accepts connections. Leaves in $code how the pod ended (pg_isready's own status: 0
+# when the server accepts connections, 2 when nothing answers; 9 when the pod cannot even resolve
+# the Service's name) and in $answer what it printed: the address the name resolved to, then
+# pg_isready's line.
+database_answer() {
+  local pod=$1 labels=$2 phase attempt
+  k run "$pod" --image="$image" --restart=Never --labels="$labels" --command -- sh -c \
+    'getent hosts hd-postgresql || exit 9; pg_isready -h hd-postgresql -p 5432 -t 10' > /dev/null
+  for attempt in $(seq 60); do
+    phase=$(k get pod "$pod" -o jsonpath='{.status.phase}')
+    if [ "$phase" = Succeeded ] || [ "$phase" = Failed ]; then
+      break
+    fi
+    sleep 2
+  done
+  answer=$(k logs "$pod" | tr '\n' ' ')
+  code=$(k get pod "$pod" -o jsonpath='{.status.containerStatuses[0].state.terminated.exitCode}')
+  k delete pod "$pod" > /dev/null
+}
+
+service_address=$(k get service hd-postgresql -o jsonpath='{.spec.clusterIP}')
+
+database_answer outsider run=outsider
+# The name resolved, so that no answer is the policy's doing and not the name service's.
+grep -qF "$service_address " <<< "$answer" \
+  || fail "the outsider did not resolve hd-postgresql to $service_address (ended with '$code'): $answer"
 [ "$code" = 2 ] || fail "the outsider's pg_isready ended with '$code' ($answer), expected 2: no answer"
-ok "the outsider got no answer (pg_isready ended with 2: $answer)"
+ok "the outsider resolved the Service's name and got no answer (pg_isready ended with 2: $answer)"
+
+# What the guide tells whoever restores a dump by hand: a pod with the labels of the dumps.
+database_answer restorer \
+  app.kubernetes.io/name=hd,app.kubernetes.io/instance=hd,app.kubernetes.io/component=dumps
+[ "$code" = 0 ] || fail "a pod with the dumps' labels ended with '$code' ($answer), expected 0"
+ok "a pod with the labels of the dumps reaches the database (pg_isready ended with 0: $answer)"
 
 password_before=$(password_fingerprint)
 claim_before=$(claim_uid)
-core_before=$(core_pod)
+core_before=$(core_pod_uid)
 database_before=$(k get pod hd-postgresql-0 -o jsonpath='{.metadata.uid}')
 echo "    the password's fingerprint: $password_before; the volume claim: $claim_before"
 
@@ -232,7 +254,7 @@ h list
 [ "$(h list -o json | grep -c '"chart":"hd-99.0.0"')" = 1 ] || fail "the release is not at the later chart"
 ok "the release is at the later chart, and the database and the core are ready"
 
-[ "$(core_pod)" != "$core_before" ] || fail "the upgrade did not start a new core"
+[ "$(core_pod_uid)" != "$core_before" ] || fail "the upgrade did not start a new core"
 ok "the upgrade started a new core"
 [ "$(password_fingerprint)" = "$password_before" ] || fail "the upgrade changed the generated password"
 ok "the password is the same after the upgrade (fingerprint $(password_fingerprint))"
@@ -242,7 +264,22 @@ ok "the database's volume claim is the same"
   || fail "the upgrade restarted the database, though nothing of its own changed"
 ok "the database was not restarted: nothing of its own changed"
 health
-expect_note
+expect_row
+
+step "2a. An upgrade that moves the generated password to another key is refused"
+# It would generate another password under that key, which the database does not accept.
+if h upgrade hd "$work/later" "${values[@]}" --set postgresql.standalone.secretKey=other \
+  > "$work/refused.txt" 2>&1; then
+  fail "the upgrade with another postgresql.standalone.secretKey went through"
+fi
+refusal='the Secret hd-postgresql holds the generated password of the chart'"'"'s own PostgreSQL, but not under the key "other" (postgresql.standalone.secretKey)'
+grep -qF "$refusal" "$work/refused.txt" \
+  || fail "the upgrade was refused with another message: $(cat "$work/refused.txt")"
+ok "refused: $(grep -m 1 -oF "$refusal" "$work/refused.txt")"
+[ "$(password_fingerprint)" = "$password_before" ] || fail "the refused upgrade changed the password"
+[ "$(k get secret hd-postgresql -o jsonpath='{.data.other}')" = "" ] \
+  || fail "the refused upgrade added the other key to the Secret"
+ok "the Secret is unchanged after the refused upgrade"
 
 # ---------------------------------------------------------------------------------------------
 step "3. Uninstall the release"
@@ -273,7 +310,7 @@ ok "the password is the same after installing again"
 [ "$(claim_uid)" = "$claim_before" ] || fail "installing again made another volume claim"
 ok "the database runs on the volume that was kept"
 health
-expect_note
+expect_row
 
 echo
 echo "The standalone install passed: install, upgrade, uninstall and install again."

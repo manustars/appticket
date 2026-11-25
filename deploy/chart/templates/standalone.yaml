@@ -11,7 +11,11 @@ Letters and digits only, so that it is safe wherever it is used.
 */}}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
 {{- $password := randAlphaNum 32 | b64enc }}
-{{- if and $existing (hasKey ($existing.data | default dict) $s.secretKey) }}
+{{- if $existing }}
+{{- /* Another key would get another password, and the Secret would lose the one the database has. */}}
+{{- if not (hasKey ($existing.data | default dict) $s.secretKey) }}
+{{- fail (printf "the Secret %s holds the generated password of the chart's own PostgreSQL, but not under the key %q (postgresql.standalone.secretKey): set secretKey back to the key the Secret has, since the database accepts no other password; to use another key, put the password in a Secret of your own and name it in postgresql.standalone.existingSecret" $name $s.secretKey) }}
+{{- end }}
 {{- $password = index $existing.data $s.secretKey }}
 {{- end }}
 apiVersion: v1
