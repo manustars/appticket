@@ -742,5 +742,5 @@ authority, and does not start.
 - **Outside the chart**, the same holds for `HD_DATABASE_URL` and the separate parameters, with
   `HD_DATABASE_SSLMODE` and `HD_DATABASE_CA_FILE` ([TLS](external-database.md#tls)).
 
-The database dumps (`dumps.*`) run `pg_dump`, which keeps the PostgreSQL client's default and is
-not affected.
+The database dumps (`dumps.*`) of an external database follow the same values as far as their
+image can verify ([Database dumps](#database-dumps)).

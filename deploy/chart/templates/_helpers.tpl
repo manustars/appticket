@@ -57,7 +57,8 @@ values the chart refuses stop it with the same message whichever template render
 */}}
 {{- define "hd.databaseSource" -}}
 {{- $pg := .Values.postgresql }}
-{{- if hasKey $pg "enabled" }}
+{{- /* A null is how --set removes a value that the reused values of an upgrade still hold. */}}
+{{- if and (hasKey $pg "enabled") (not (kindIs "invalid" $pg.enabled)) }}
 {{- /* What the chart did before: the Secret's database won over the cluster it still created. */}}
 {{- if ne (toString $pg.enabled) "true" }}
 {{- fail "postgresql.enabled is no longer a value: set postgresql.mode=external and remove postgresql.enabled" }}
