@@ -79,7 +79,7 @@ diagnose() {
   kubectl --context "$context" get pods -A -o wide || true
   for namespace in helpdesk helpdesk-standalone; do
     echo "---- namespace $namespace ----"
-    h list --all || true
+    h list || true
     k get all,persistentvolumeclaims,secrets -o wide || true
     k get clusters.postgresql.cnpg.io -o wide || true
     k describe pods || true
@@ -149,7 +149,7 @@ health() {
 # that chart.
 release_is() {
   local listed field
-  listed=$(h list --all --filter '^hd$' -o json)
+  listed=$(h list --filter '^hd$' -o json)
   for field in "\"revision\":\"$1\"" "\"chart\":\"$2\"" '"status":"deployed"'; do
     grep -qF "$field" <<< "$listed" || fail "the release is not at $field: $listed"
   done
