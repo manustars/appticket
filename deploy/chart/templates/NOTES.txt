@@ -41,7 +41,7 @@ Argo CD, needs a Secret of your own instead: postgresql.standalone.existingSecre
 The database is an external one (postgresql.mode=external), given as {{ ternary "a Secret holding its URL" "separate values" (eq $databaseSource "external-url") }}.
 The core verifies the certificate of a database on another host (verify-full) unless
 core.database.sslMode{{ if eq $databaseSource "external-url" }} or the URL's sslmode{{ end }} says otherwise; a core that cannot verify it does not
-start and logs why (docs/deploy.md, "TLS to the database").
+start and logs why (docs/kubernetes.md, "TLS to the database").
 {{- end }}
 
 Upgrading from 0.3: the default postgresql.mode is standalone since 0.4.0. A release that runs
@@ -50,7 +50,7 @@ on. The chart refuses an install or an upgrade whose mode is not that of the dat
 in the cluster, so that the core never starts on another, empty database. A tool that renders
 the chart without reading the cluster, such as Argo CD, gets no such check:
 set postgresql.mode explicitly there
-(docs/deploy.md, "Upgrading from 0.3: standalone is the default database mode").
+(docs/kubernetes.md, "Upgrading from 0.3: standalone is the default database mode").
 {{- if not .Values.assistant.enabled }}
 
 To add the Assistant, register it first:
@@ -78,6 +78,6 @@ Database dumps run on "{{ .Values.dumps.schedule }}", keeping {{ .Values.dumps.k
 
 The dumps require TLS to the database but do not verify its certificate, which the core does: the
 dumps' image holds no public certificate authorities. Give the database's authority in
-core.database.ca to have the dumps verify it too (docs/deploy.md, "Database dumps").
+core.database.ca to have the dumps verify it too (docs/kubernetes.md, "Database dumps").
 {{- end }}
 {{- end }}

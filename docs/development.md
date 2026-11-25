@@ -49,7 +49,8 @@ for the core to serve itself, as the container image does; in development Vite s
 `HD_TRUSTED_PROXIES` (none by default) set the limits on failed sign-ins and the reverse proxies
 whose `X-Forwarded-For` is believed; Vite's development proxy is not one of them, so in
 development every sign-in counts under `127.0.0.1`.
-Production deployment: [`deploy.md`](deploy.md); on a PostgreSQL database of your own:
+Production deployment: [`deploy.md`](deploy.md), on Kubernetes [`kubernetes.md`](kubernetes.md);
+on a PostgreSQL database of your own:
 [`external-database.md`](external-database.md).
 
 Instead of `HD_DATABASE_URL`, the database can be given as separate parameters

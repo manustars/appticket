@@ -1,6 +1,7 @@
 # Values of the help desk chart. Secrets are never values here: the chart refers to Kubernetes
-# Secrets by name, which you create before installing (see docs/deploy.md). The one Secret the
-# chart makes itself is the generated password of its own PostgreSQL (postgresql.standalone).
+# Secrets by name, which you create before installing (docs/kubernetes.md, "Secrets to create").
+# The one Secret the chart makes itself is the generated password of its own PostgreSQL
+# (postgresql.standalone).
 
 nameOverride: ""
 fullnameOverride: ""
@@ -27,7 +28,7 @@ core:
   # (verify-full) against the cluster's own authority, from its Secret <cluster>-ca.
   #
   # TLS: an external database on another host is reached with verify-full unless its URL carries
-  # an sslmode or sslMode says otherwise (docs/deploy.md, "TLS to the database").
+  # an sslmode or sslMode says otherwise (docs/kubernetes.md, "TLS to the database").
   database:
     # A Secret holding the database as a postgres:// URL (HD_DATABASE_URL), instead of the
     # separate values of postgresql.external.
@@ -67,7 +68,7 @@ core:
     # Import the mail already in the mailbox on the very first read (normally left alone).
     importExisting: false
 
-  # Limits on failed sign-ins, per account and per address (docs/deploy.md, "Failed sign-ins"). After `failures` failures within `windowSeconds`, the next four attempts wait 1, 2,
+  # Limits on failed sign-ins, per account and per address (docs/kubernetes.md, "Failed sign-ins"). After `failures` failures within `windowSeconds`, the next four attempts wait 1, 2,
   # 4 and 8 seconds, and attempts after those are refused until `windowSeconds` have passed since
   # the last failure: at most failures + 4 passwords are checked per account within a window.
   signIn:
