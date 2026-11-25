@@ -72,7 +72,7 @@ It keeps mail in memory: a restart of the core's pod empties the test mailbox.
 
 Database dumps run on "{{ .Values.dumps.schedule }}", keeping {{ .Values.dumps.keep }}. To take one now:
 
-  kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ printf "%s-dumps" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }} {{ printf "%s-dump-now" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }}
+  kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ include "hd.dumpsName" . }} {{ printf "%s-dump-now" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }}
 {{- $db := .Values.core.database }}
 {{- if and (hasPrefix "external" $databaseSource) (not $db.ca.existingSecret) (has $db.sslMode (list "" "verify-full" "verify-ca")) }}
 

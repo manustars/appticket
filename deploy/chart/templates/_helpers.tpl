@@ -226,6 +226,24 @@ would lose its form, as YAML reads 18.10 as 18.1.
 {{- end }}
 {{- end }}
 
+{{/* The name of the dumps' CronJob, and of the claim the chart makes for them. */}}
+{{- define "hd.dumpsName" -}}
+{{- printf "%s-dumps" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+The dumps' claim when the chart's own PostgreSQL also mounts it: "true" or empty. A StorageClass
+that binds a volume only for its first pod (WaitForFirstConsumer) would leave the claim pending
+until the first dump, and helm install --wait running into its timeout; mounted by the database,
+it binds when the database starts. The claim is ReadWriteOnce, so the dumps then run on the
+database's node. A claim of dumps.storage.existingClaim is the user's, and left alone.
+*/}}
+{{- define "hd.dumpsBesideDatabase" -}}
+{{- if and (include "hd.dumpsEnabled" .) (not .Values.dumps.storage.existingClaim) (eq (include "hd.databaseSource" .) "standalone") }}
+{{- "true" }}
+{{- end }}
+{{- end }}
+
 {{/* Restricted pod and container security settings shared by the chart's own images. */}}
 {{- define "hd.podSecurityContext" -}}
 runAsNonRoot: true

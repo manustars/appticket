@@ -655,6 +655,30 @@ render "${standalone[@]}" --set postgresql.standalone.existingSecret=hd-own-pass
 expect_standalone_dumps hd-own-password db-password
 finish "dumps with standalone and existingSecret: the password from the named Secret"
 
+# A StorageClass that binds a volume only for its first pod (WaitForFirstConsumer) would leave the
+# dumps' claim pending until the first dump, and helm install --wait in its timeout: the database
+# uses the claim from its start, and the dumps, sharing a ReadWriteOnce volume, run on its node.
+render "${standalone[@]}"
+expect_entry standalone.yaml dumps 'persistentVolumeClaim: claimName: hd-dumps'
+expect_entry standalone.yaml dumps 'mountPath: /dumps readOnly: true'
+expect_line dumps.yaml '                - topologyKey: kubernetes.io/hostname'
+expect_line dumps.yaml '                      app.kubernetes.io/component: postgresql'
+finish "dumps with standalone: the database mounts their claim, and they run on its node"
+
+render "${standalone[@]}" --set dumps.storage.existingClaim=hd-own-dumps
+expect_entry dumps.yaml dumps 'persistentVolumeClaim: claimName: hd-own-dumps'
+expect_kind PersistentVolumeClaim 0
+expect_no_text standalone.yaml 'dumps'
+expect_no_text dumps.yaml 'podAffinity'
+render "${standalone[@]}" --set dumps.enabled=false
+expect_no_text standalone.yaml 'dumps'
+for form in cluster url_form separate_values; do
+  declare -n values=$form
+  render "${values[@]}" --set dumps.enabled=true
+  expect_no_text dumps.yaml 'podAffinity'
+done
+finish "dumps with a claim of their own, off, or in the other modes: no claim in the database, no node of its"
+
 render "${standalone[@]}" --set dumps.enabled=false
 expect_kind CronJob 0
 expect_kind PersistentVolumeClaim 0

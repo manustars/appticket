@@ -2,9 +2,11 @@
 # Installs the Helm chart with its own PostgreSQL (postgresql.mode=standalone, ADR 0009) in a
 # throwaway kind cluster and checks what only a cluster can show:
 #
-#   1. the install: the database and the core become ready, /api/health answers that the
-#      database is up, the core's log names the connection without TLS, a database dump runs,
-#      and with the NetworkPolicy a pod that is neither the core nor the dumps resolves the
+#   1. the install: helm install --wait ends with the dumps' claim bound, though kind's
+#      StorageClass binds a volume only for its first pod (WaitForFirstConsumer) and no dump has
+#      run; the database and the core become ready, /api/health answers that the database is
+#      up, the core's log names the connection without TLS, a database dump runs, and with the
+#      NetworkPolicy a pod that is neither the core nor the dumps resolves the
 #      database's name and gets no answer from it, while one with the labels of the dumps does;
 #   2. an upgrade to a later version of the chart: the generated password is the same, the
 #      volume is the same, the new core reaches the database, and a row written before is there;
@@ -162,8 +164,13 @@ kind create cluster --name "$cluster" --wait 180s
 kind load docker-image "$core_image" --name "$cluster"
 
 # ---------------------------------------------------------------------------------------------
-step "1. Install the chart with postgresql.mode=standalone"
-h install hd "$chart" --create-namespace "${values[@]}"
+step "1. Install the chart with postgresql.mode=standalone, waiting for it with --wait"
+binding=$(k get storageclass standard -o jsonpath='{.volumeBindingMode}')
+[ "$binding" = WaitForFirstConsumer ]   || fail "kind's StorageClass binds volumes $binding: the install would not show the dumps' claim waiting"
+h install hd "$chart" --create-namespace "${values[@]}" --wait --timeout 600s
+phase=$(k get pvc hd-dumps -o jsonpath='{.status.phase}')
+[ "$phase" = Bound ] || fail "the dumps' claim is $phase after the install"
+ok "helm install --wait ended, with the dumps' claim bound before any dump"
 ready
 ok "the database and the core are ready"
 
