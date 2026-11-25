@@ -1,0 +1,173 @@
+{{- if eq (include "hd.databaseSource" .) "standalone" }}
+{{- $s := .Values.postgresql.standalone }}
+{{- $name := include "hd.standaloneName" . }}
+{{- $secret := include "hd.standaloneSecret" . }}
+{{- if not $s.existingSecret }}
+{{- /*
+The password is generated once: an upgrade finds the Secret in the cluster and keeps what it
+holds. A render that cannot read the cluster (helm template, and the tools built on it) finds
+nothing and generates another one every time: postgresql.standalone.existingSecret is for those.
+Letters and digits only, so that it is safe wherever it is used.
+*/}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- $password := randAlphaNum 32 | b64enc }}
+{{- if and $existing (hasKey ($existing.data | default dict) $s.secretKey) }}
+{{- $password = index $existing.data $s.secretKey }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+  annotations:
+    # helm uninstall leaves the password beside the database's volume: the data directory there
+    # accepts no other, and installing again under the same release name takes both back.
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  {{ $s.secretKey }}: {{ $password | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "hd.selectorLabels" (dict "root" . "component" "postgresql") | nindent 4 }}
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+---
+# PostgreSQL from the official image, run by the chart with no operator: one instance, whose
+# volume outlives the release.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  # One instance: the official image has no replication of its own.
+  replicas: 1
+  serviceName: {{ $name }}
+  selector:
+    matchLabels:
+      {{- include "hd.selectorLabels" (dict "root" . "component" "postgresql") | nindent 6 }}
+  # helm uninstall deletes the StatefulSet, and the volume stays.
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  template:
+    metadata:
+      # Without the chart's version: an upgrade of the chart restarts the database only when
+      # something of its own changes.
+      labels:
+        {{- include "hd.selectorLabels" (dict "root" . "component" "postgresql") | nindent 8 }}
+      {{- with $s.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # The image's own user (postgres, uid 999), which the volume is handed to.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: postgresql
+          image: {{ printf "%s:%s" $s.image.repository $s.image.tag }}
+          imagePullPolicy: {{ $s.image.pullPolicy }}
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          env:
+            # Read when the data directory is first created, and not afterwards.
+            - name: POSTGRES_DB
+              value: "hd"
+            - name: POSTGRES_USER
+              value: "hd"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: {{ $s.secretKey }}
+          # Over TCP: while the data directory is created the server listens on its socket only.
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "hd", "-d", "hd"]
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "hd", "-d", "hd"]
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "hd", "-d", "hd"]
+            periodSeconds: 20
+            failureThreshold: 6
+          {{- with $s.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- include "hd.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            # Where the image of PostgreSQL 18 keeps its data, under 18/docker: the directory a
+            # later major version is upgraded from.
+            - name: data
+              mountPath: /var/lib/postgresql
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+      {{- with $s.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $s.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $s.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  # Kept apart from the release: the chart never deletes this volume. It cannot change in an
+  # upgrade either, the size included.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $s.storage.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $s.storage.size }}
+{{- end }}

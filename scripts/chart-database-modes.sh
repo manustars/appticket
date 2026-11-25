@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Checks what the Helm chart renders for each database mode (postgresql.mode, ADR 0009): the
-# core's database environment, the CloudNativePG resources, the dumps, and the values the chart
-# refuses, each with its exit status and its message. It also lints the chart in each mode.
+# core's database environment, the chart's own PostgreSQL and its NetworkPolicy, the CloudNativePG
+# resources, the dumps, the notes, and the values the chart refuses, each with its exit status and
+# its message. It also lints the chart in each mode.
 #
 # Usage:
 #   bash scripts/chart-database-modes.sh
@@ -219,6 +220,29 @@ refused() {
   finish "$name"
 }
 
+# notes HELM_ARGUMENTS…: what the chart tells whoever installs it, into $work/notes.txt. A dry
+# run on this side only: no cluster is contacted.
+notes() {
+  if ! helm install hd "$chart" --dry-run=client "$@" > "$work/raw.txt" 2> "$work/error.txt"; then
+    problem "helm install --dry-run=client failed: $(tr '\n' ' ' < "$work/error.txt")"
+    : > "$work/notes.txt"
+    return
+  fi
+  tr -d '\r' < "$work/raw.txt" | sed -n '/^NOTES:$/,$p' > "$work/notes.txt"
+}
+
+expect_note() {
+  if ! grep -qF -- "$1" "$work/notes.txt"; then
+    problem "the notes do not say '$1'"
+  fi
+}
+
+expect_no_note() {
+  if grep -qF -- "$1" "$work/notes.txt"; then
+    problem "the notes say '$1'"
+  fi
+}
+
 # lint NAME HELM_ARGUMENTS…
 lint() {
   local name=$1 output
@@ -356,6 +380,183 @@ refused "external with the password's Secret alone: refused, naming the missing 
   --set postgresql.external.password.existingSecret=hd-database-password
 
 # ---------------------------------------------------------------------------------------------
+# standalone: PostgreSQL run by the chart itself
+# ---------------------------------------------------------------------------------------------
+
+standalone=(--set postgresql.mode=standalone)
+
+# expect_standalone_database SECRET KEY: the core reaches the chart's own PostgreSQL by its
+# Service, inside the cluster, without TLS and saying so, with the password from that Secret.
+expect_standalone_database() {
+  expect_env core.yaml HD_DATABASE_HOST 'value: "hd-postgresql"'
+  expect_env core.yaml HD_DATABASE_PORT 'value: "5432"'
+  expect_env core.yaml HD_DATABASE_NAME 'value: "hd"'
+  expect_env core.yaml HD_DATABASE_USER 'value: "hd"'
+  expect_env core.yaml HD_DATABASE_PASSWORD "valueFrom: secretKeyRef: name: $1 key: $2"
+  expect_env core.yaml HD_DATABASE_SSLMODE 'value: "disable"'
+  expect_no_env core.yaml HD_DATABASE_URL
+  expect_no_env core.yaml HD_DATABASE_CA_FILE
+  expect_no_text core.yaml 'database-ca'
+  expect_no_cluster
+}
+
+render "${standalone[@]}"
+expect_standalone_database hd-postgresql password
+finish "standalone: the core reaches the chart's PostgreSQL without TLS, set explicitly"
+
+# expect_standalone_postgresql SECRET KEY: one instance of the official image at the chart's
+# major version, its data on a volume of its own, the password from that Secret.
+expect_standalone_postgresql() {
+  expect_kind StatefulSet 1
+  # The core's Service and the database's.
+  expect_kind Service 2
+  expect_line standalone.yaml '  name: hd-postgresql'
+  expect_line standalone.yaml '  replicas: 1'
+  expect_line standalone.yaml '          image: docker.io/library/postgres:18.7-trixie'
+  expect_env standalone.yaml POSTGRES_DB 'value: "hd"'
+  expect_env standalone.yaml POSTGRES_USER 'value: "hd"'
+  expect_env standalone.yaml POSTGRES_PASSWORD "valueFrom: secretKeyRef: name: $1 key: $2"
+  # Where the image of PostgreSQL 18 keeps its data: a mount anywhere else loses them.
+  expect_entry standalone.yaml data 'mountPath: /var/lib/postgresql'
+  expect_text standalone.yaml 'volumeClaimTemplates:'
+  expect_line standalone.yaml '    whenDeleted: Retain'
+}
+
+render "${standalone[@]}"
+expect_standalone_postgresql hd-postgresql password
+expect_kind Secret 1
+expect_text standalone.yaml 'kind: Secret'
+# Kept on uninstall, beside the volume whose data directory accepts no other password.
+expect_line standalone.yaml '    helm.sh/resource-policy: keep'
+# The password itself changes at every render: only its form is checked, safe wherever it is used.
+generated=$(template standalone.yaml | sed -n 's/^  password: "\(.*\)"$/\1/p' | base64 -d)
+if ! [[ $generated =~ ^[A-Za-z0-9]{32}$ ]]; then
+  problem "standalone.yaml: the generated password is not 32 letters and digits"
+fi
+finish "standalone: a StatefulSet of PostgreSQL 18 and a generated password in a Secret kept on uninstall"
+
+render "${standalone[@]}" --set postgresql.standalone.existingSecret=hd-own-password \
+  --set postgresql.standalone.secretKey=db-password
+expect_standalone_postgresql hd-own-password db-password
+expect_standalone_database hd-own-password db-password
+expect_kind Secret 0
+expect_no_text standalone.yaml 'resource-policy'
+finish "standalone with existingSecret: the password from the named Secret, none generated"
+
+render "${standalone[@]}" --set postgresql.standalone.storage.size=20Gi \
+  --set postgresql.standalone.storage.storageClass=fast \
+  --set postgresql.standalone.image.repository=registry.example.com/postgres \
+  --set postgresql.standalone.image.tag=18.8
+expect_line standalone.yaml '          image: registry.example.com/postgres:18.8'
+expect_line standalone.yaml '            storage: 20Gi'
+expect_line standalone.yaml '        storageClassName: fast'
+finish "standalone: the volume's size and class and a later minor version, as set"
+
+refused "standalone with another major version: refused, naming the chart's" \
+  'postgresql.standalone.image.tag is "17.5": the chart runs PostgreSQL 18, and a tag must be of that major version' \
+  "${standalone[@]}" --set postgresql.standalone.image.tag=17.5
+
+refused "standalone with core.database.existingSecret: refused, it belongs to external" \
+  'core.database.existingSecret is for postgresql.mode=external: with postgresql.mode=standalone the core uses the chart'"'"'s own PostgreSQL' \
+  "${standalone[@]}" --set core.database.existingSecret=hd-database
+
+refused "standalone with core.database.sslMode: refused, it belongs to external" \
+  'core.database.sslMode and core.database.ca are for postgresql.mode=external: the chart'"'"'s own PostgreSQL is reached inside the cluster without TLS' \
+  "${standalone[@]}" --set core.database.sslMode=require
+
+refused "standalone with core.database.ca: refused, it belongs to external" \
+  'core.database.sslMode and core.database.ca are for postgresql.mode=external: the chart'"'"'s own PostgreSQL is reached inside the cluster without TLS' \
+  "${standalone[@]}" --set core.database.ca.existingSecret=hd-database-ca
+
+refused "standalone with postgresql.external: refused, it belongs to external" \
+  'postgresql.external is for postgresql.mode=external, and postgresql.mode is standalone' \
+  "${standalone[@]}" --set postgresql.external.host=db.example.com
+
+# expect_database_peers COMPONENTS: the NetworkPolicy of the chart's PostgreSQL lets in, on the
+# database's port, the pods of exactly these components and nobody else.
+expect_database_peers() {
+  local policy peers
+  policy=$(template networkpolicy.yaml | awk '
+    /^---$/ { if (document ~ /\n  name: hd-postgresql\n/) printf "%s", document; document = ""; next }
+    { document = document $0 "\n" }
+    END { if (document ~ /\n  name: hd-postgresql\n/) printf "%s", document }
+  ')
+  if [ -z "$policy" ]; then
+    problem "networkpolicy.yaml: no NetworkPolicy named hd-postgresql"
+    return
+  fi
+  grep -qFx '      app.kubernetes.io/component: postgresql' <<< "$policy" \
+    || problem "networkpolicy.yaml: the database's policy does not select the database's pods"
+  grep -qFx '  policyTypes: ["Ingress"]' <<< "$policy" \
+    || problem "networkpolicy.yaml: the database's policy is not about ingress"
+  grep -qFx '        - port: postgresql' <<< "$policy" \
+    || problem "networkpolicy.yaml: the database's policy does not name the database's port"
+  # What follows `from:`: one pod selector per component, each with the release's own labels.
+  peers=$(sed -n '/^      from:$/,$p' <<< "$policy")
+  if [ "$(grep -c -- '- ' <<< "$peers")" != "$(wc -w <<< "$1" | tr -d ' ')" ] \
+    || [ "$(grep -c -- '- podSelector:$' <<< "$peers")" != "$(wc -w <<< "$1" | tr -d ' ')" ]; then
+    problem "networkpolicy.yaml: the database's peers are not one pod selector each for: $1"
+  fi
+  if [ "$(sed -n 's/^ *app.kubernetes.io\/component: //p' <<< "$peers" | tr '\n' ' ')" != "$1 " ]; then
+    problem "networkpolicy.yaml: the database's peers are not the components: $1"
+  fi
+}
+
+render "${standalone[@]}" --set networkPolicy.enabled=true
+# The core's policy and the database's.
+expect_kind NetworkPolicy 2
+expect_database_peers "core dumps"
+finish "standalone with networkPolicy: only the core and the dumps reach the database"
+
+render "${standalone[@]}" --set networkPolicy.enabled=true --set dumps.enabled=false
+expect_kind NetworkPolicy 2
+expect_database_peers "core"
+finish "standalone with networkPolicy and no dumps: only the core reaches the database"
+
+render "${standalone[@]}"
+expect_kind NetworkPolicy 0
+render "${cluster[@]}" --set networkPolicy.enabled=true
+expect_kind NetworkPolicy 1
+expect_no_text networkpolicy.yaml 'postgresql'
+finish "no NetworkPolicy for the database without networkPolicy.enabled, or in another mode"
+
+notes "${standalone[@]}"
+expect_note 'The database is the chart'"'"'s own PostgreSQL hd-postgresql (postgresql.mode=standalone)'
+expect_note 'without TLS'
+expect_note 'data-hd-postgresql-0'
+expect_note 'Its password was generated into the Secret hd-postgresql'
+expect_note 'postgresql.standalone.existingSecret'
+expect_note 'Database dumps run on "30 2 * * *", keeping 7.'
+expect_no_note 'external'
+expect_no_note 'CloudNativePG'
+expect_no_note 'do not verify its certificate'
+finish "the notes of standalone: its own PostgreSQL, no TLS, what uninstalling keeps, the dumps"
+
+notes "${standalone[@]}" --set postgresql.standalone.existingSecret=hd-own-password \
+  --set dumps.enabled=false
+expect_note 'Its password is in the Secret hd-own-password'
+expect_no_note 'generated'
+expect_no_note 'Database dumps run'
+finish "the notes of standalone with existingSecret and no dumps: the named Secret, no dumps"
+
+notes "${cluster[@]}"
+expect_note 'The database is the CloudNativePG cluster hd-db (postgresql.mode=cloudnativepg)'
+expect_no_note 'Database dumps run'
+notes "${url_form[@]}" --set dumps.enabled=true
+expect_note 'The database is an external one (postgresql.mode=external), given as a Secret holding its URL.'
+expect_note 'Database dumps run'
+expect_note 'do not verify its certificate'
+finish "the notes of cloudnativepg and external: as before"
+
+render "${cluster[@]}"
+expect_kind StatefulSet 0
+expect_kind Secret 0
+render "${url_form[@]}"
+expect_kind StatefulSet 0
+expect_kind Secret 0
+finish "cloudnativepg and external: no PostgreSQL of the chart's own, no Secret"
+
+# ---------------------------------------------------------------------------------------------
 # Dumps: pg_dump reaches the same database as the core
 # ---------------------------------------------------------------------------------------------
 
@@ -384,6 +585,56 @@ expect_text dumps.yaml 'pg_dump --format=custom'
 expect_no_text dumps.yaml 'DATABASE_URL'
 finish "dumps with external and separate values: pg_dump's own variables, the password from its Secret"
 
+# expect_standalone_dumps SECRET KEY: pg_dump reaches the chart's own PostgreSQL as the core does.
+expect_standalone_dumps() {
+  expect_kind CronJob 1
+  expect_env dumps.yaml PGHOST 'value: "hd-postgresql"'
+  expect_env dumps.yaml PGPORT 'value: "5432"'
+  expect_env dumps.yaml PGDATABASE 'value: "hd"'
+  expect_env dumps.yaml PGUSER 'value: "hd"'
+  expect_env dumps.yaml PGPASSWORD "valueFrom: secretKeyRef: name: $1 key: $2"
+  expect_env dumps.yaml PGSSLMODE 'value: "disable"'
+  expect_no_env dumps.yaml PGSSLROOTCERT
+  expect_text dumps.yaml 'pg_dump --format=custom'
+  expect_no_text dumps.yaml 'DATABASE_URL'
+  expect_no_text dumps.yaml 'database-ca'
+}
+
+render "${standalone[@]}"
+expect_standalone_dumps hd-postgresql password
+finish "dumps with standalone: on by default, reaching the chart's PostgreSQL without TLS"
+
+render "${standalone[@]}" --set postgresql.standalone.existingSecret=hd-own-password \
+  --set postgresql.standalone.secretKey=db-password
+expect_standalone_dumps hd-own-password db-password
+finish "dumps with standalone and existingSecret: the password from the named Secret"
+
+render "${standalone[@]}" --set dumps.enabled=false
+expect_kind CronJob 0
+expect_kind PersistentVolumeClaim 0
+expect_standalone_postgresql hd-postgresql password
+finish "dumps with standalone and dumps.enabled=false: off when asked"
+
+render "${standalone[@]}" --set-string dumps.enabled=false
+expect_kind CronJob 0
+finish "dumps with standalone and dumps.enabled=false as a string: off as well"
+
+render "${standalone[@]}" --set dumps.enabled=true
+expect_standalone_dumps hd-postgresql password
+finish "dumps with standalone and dumps.enabled=true: on"
+
+render "${cluster[@]}"
+expect_kind CronJob 0
+render "${url_form[@]}"
+expect_kind CronJob 0
+render "${separate_values[@]}"
+expect_kind CronJob 0
+finish "dumps with cloudnativepg and external: off unless asked for"
+
+refused "dumps.enabled that is neither true nor false: refused, naming what it takes" \
+  'dumps.enabled is "sometimes": it must be true, false, or empty for on with postgresql.mode=standalone and off otherwise' \
+  --set dumps.enabled=sometimes
+
 dumps_tls "external and a URL Secret" "${url_form[@]}"
 dumps_tls "external and separate values" "${separate_values[@]}"
 
@@ -407,14 +658,13 @@ lint "helm lint: default values"
 lint "helm lint: the staging example" -f "$chart/values-staging.example.yaml"
 lint "helm lint: external with a URL Secret" "${url_form[@]}" --set dumps.enabled=true
 lint "helm lint: external with separate values" "${separate_values[@]}" --set dumps.enabled=true
+lint "helm lint: standalone" "${standalone[@]}" --set networkPolicy.enabled=true
+lint "helm lint: standalone with existingSecret" "${standalone[@]}" \
+  --set postgresql.standalone.existingSecret=hd-own-password --set dumps.enabled=false
 
 # ---------------------------------------------------------------------------------------------
 # Modes the chart does not have
 # ---------------------------------------------------------------------------------------------
-
-refused "postgresql.mode=standalone: refused, not available yet" \
-  'postgresql.mode=standalone is not available yet: set postgresql.mode to cloudnativepg or external' \
-  --set postgresql.mode=standalone
 
 refused "an unknown postgresql.mode: refused, naming the three modes" \
   'postgresql.mode is "operator": it must be standalone, cloudnativepg or external' \

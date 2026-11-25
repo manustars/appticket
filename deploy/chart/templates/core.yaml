@@ -8,6 +8,12 @@
 {{- $databaseCaSecret := ternary (printf "%s-ca" (include "hd.dbName" .)) $db.ca.existingSecret $cnpg }}
 {{- $databaseCaKey := ternary "ca.crt" $db.ca.secretKey $cnpg }}
 {{- $databaseSslMode := ternary "verify-full" $db.sslMode $cnpg }}
+{{- /* The chart's own PostgreSQL serves no TLS: said explicitly, so that the core's warning names it. */}}
+{{- if eq $databaseSource "standalone" }}
+{{- $databaseCaSecret = "" }}
+{{- $databaseSslMode = "disable" }}
+{{- end }}
+{{- $parameters := include "hd.databaseParameters" . | fromYaml }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -50,21 +56,20 @@ spec:
           env:
             - name: HD_LISTEN
               value: "0.0.0.0:8080"
-            {{- if eq $databaseSource "external-values" }}
-            {{- $external := .Values.postgresql.external }}
+            {{- if $parameters }}
             - name: HD_DATABASE_HOST
-              value: {{ $external.host | quote }}
+              value: {{ $parameters.host | quote }}
             - name: HD_DATABASE_PORT
-              value: {{ $external.port | quote }}
+              value: {{ $parameters.port | toString | quote }}
             - name: HD_DATABASE_NAME
-              value: {{ $external.name | quote }}
+              value: {{ $parameters.name | quote }}
             - name: HD_DATABASE_USER
-              value: {{ $external.user | quote }}
+              value: {{ $parameters.user | quote }}
             - name: HD_DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ $external.password.existingSecret }}
-                  key: {{ $external.password.secretKey }}
+                  name: {{ $parameters.secret }}
+                  key: {{ $parameters.key }}
             {{- else }}
             - name: HD_DATABASE_URL
               valueFrom:
