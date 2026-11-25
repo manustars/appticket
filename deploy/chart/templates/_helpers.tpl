@@ -63,7 +63,7 @@ values the chart refuses stop it with the same message whichever template render
 {{- if ne (toString $pg.enabled) "true" }}
 {{- fail "postgresql.enabled is no longer a value: set postgresql.mode=external and remove postgresql.enabled" }}
 {{- else if .Values.core.database.existingSecret }}
-{{- fail "postgresql.enabled is no longer a value: set postgresql.mode=external and remove postgresql.enabled (with core.database.existingSecret the core uses that database; the CloudNativePG cluster then leaves the release, and stays in place only with postgresql.keepOnUninstall)" }}
+{{- fail (printf "postgresql.enabled is no longer a value: set postgresql.mode=external and remove postgresql.enabled (with core.database.existingSecret the core uses that database, not the CloudNativePG cluster %s the chart made beside it: delete that cluster first, since the chart refuses postgresql.mode=external while it exists)" (include "hd.dbName" .)) }}
 {{- else }}
 {{- fail "postgresql.enabled is no longer a value: set postgresql.mode=cloudnativepg and remove postgresql.enabled" }}
 {{- end }}
@@ -123,6 +123,40 @@ values the chart refuses stop it with the same message whichever template render
 {{- else }}
 {{- "external-values" }}
 {{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+The upgrade guard (ADR 0009): the chart refuses a postgresql.mode that is not the mode of the
+database it finds in the cluster, so that no install or upgrade, and no change of the default
+mode, starts the core on another, empty database. It finds
+- the CloudNativePG cluster of the release, by its name: `helm uninstall` leaves it in place
+  (postgresql.keepOnUninstall), so an install finds it as an upgrade does;
+- the chart's own PostgreSQL, by its StatefulSet: there while a standalone release is installed.
+  Its volume alone, which `helm uninstall` leaves, does not count: whoever moves to another
+  database deletes the StatefulSet and keeps the volume until the move has proved good.
+Included once, by templates/guard.yaml, after the values have been checked. `lookup` finds
+nothing where Helm does not read the cluster (helm template, a dry run that is not
+--dry-run=server, Argo CD): the guard does not run there. It fails where the cluster does not
+know the kind it asks for, hence the question about CloudNativePG's first.
+*/}}
+{{- define "hd.databaseGuard" -}}
+{{- $source := include "hd.databaseSource" . }}
+{{- $mode := .Values.postgresql.mode }}
+{{- $namespace := .Release.Namespace }}
+{{- $clusterName := include "hd.dbName" . }}
+{{- $standaloneName := include "hd.standaloneName" . }}
+{{- $cluster := dict }}
+{{- if .Capabilities.APIVersions.Has "postgresql.cnpg.io/v1/Cluster" }}
+{{- $cluster = lookup "postgresql.cnpg.io/v1" "Cluster" $namespace $clusterName }}
+{{- end }}
+{{- $standalone := lookup "apps/v1" "StatefulSet" $namespace $standaloneName }}
+{{- if and $cluster $standalone }}
+{{- fail (printf "the upgrade guard found two databases of this release in the namespace %s, the CloudNativePG cluster %s and the chart's own PostgreSQL (the StatefulSet %s), and cannot tell which one holds the help desk's data. Delete the one that does not (kubectl -n %s delete cluster %s, or kubectl -n %s delete statefulset %s, which leaves its volume in place), then install or upgrade with the postgresql.mode of the other" $namespace $clusterName $standaloneName $namespace $clusterName $namespace $standaloneName) }}
+{{- else if and $cluster (ne $source "cloudnativepg") }}
+{{- fail (printf "the upgrade guard found the CloudNativePG cluster %s of this release in the namespace %s, and postgresql.mode is %s: the core would leave the database it has for another one, which starts empty. Set postgresql.mode=cloudnativepg to stay on the cluster: it was the chart's default before 0.4.0, and standalone is since. To leave the cluster for good, move its data to the new database first, then delete it (kubectl -n %s delete cluster %s): the chart refuses every other mode for as long as that cluster exists" $clusterName $namespace $mode $namespace $clusterName) }}
+{{- else if and $standalone (ne $source "standalone") }}
+{{- fail (printf "the upgrade guard found the chart's own PostgreSQL of this release (the StatefulSet %s) in the namespace %s, and postgresql.mode is %s: the core would leave the database it has for another one. Set postgresql.mode=standalone to stay on it. To leave it for good, move its data to the new database first, then delete the StatefulSet (kubectl -n %s delete statefulset %s, which leaves its volume and its password's Secret in place): the chart refuses every other mode for as long as that StatefulSet exists" $standaloneName $namespace $mode $namespace $standaloneName) }}
 {{- end }}
 {{- end }}
 

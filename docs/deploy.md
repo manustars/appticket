@@ -6,7 +6,7 @@ The help desk ships as two container images and a Helm chart:
 |---|---|
 | `ghcr.io/manustars/hd-core` | The core: API, the agents' UI (served by the core itself), mail reading and sending, add-on events. Runs `hd serve`; any other `hd` command runs the same way. |
 | `ghcr.io/manustars/hd-assistant` | The Assistant add-on (optional). |
-| `oci://ghcr.io/manustars/charts/hd` | The Helm chart `hd` (its source is `deploy/chart`): both components, the database in one of three modes (a PostgreSQL cluster through CloudNativePG, a PostgreSQL the chart runs itself, or one of your own), backups, an optional test mail server for staging. |
+| `oci://ghcr.io/manustars/charts/hd` | The Helm chart `hd` (its source is `deploy/chart`): both components, the database in one of three modes (a PostgreSQL the chart runs itself, a PostgreSQL cluster through CloudNativePG, or one of your own), backups, an optional test mail server for staging. |
 
 The images are published by `.github/workflows/release.yml` when a version tag (`v1.2.3`) is
 pushed: tagged with the version and, for a final version, `latest`. Both are built from
@@ -18,10 +18,10 @@ the version in `deploy/chart/Chart.yaml`.
 ## Prerequisites
 
 - Kubernetes 1.27 or later, Helm 3.
-- The CloudNativePG operator for `postgresql.mode=cloudnativepg` (the default). Not when the chart
-  runs PostgreSQL itself (`postgresql.mode=standalone`, see
-  [The chart's own PostgreSQL](#the-charts-own-postgresql)), which needs only a StorageClass, or
-  when you bring your own PostgreSQL (`postgresql.mode=external`).
+- A StorageClass for the database's volume, when the chart runs PostgreSQL itself
+  (`postgresql.mode=standalone`, the default; see
+  [The chart's own PostgreSQL](#the-charts-own-postgresql)): nothing else is needed for it.
+- The CloudNativePG operator, only for `postgresql.mode=cloudnativepg`.
 - For your own PostgreSQL, a database prepared as
   [Running on a PostgreSQL database of your own](external-database.md#what-the-dba-creates) says:
   PostgreSQL 16 or later, a database dedicated to the help desk and owned by the core's user.
@@ -63,7 +63,7 @@ kubectl -n helpdesk create secret generic hd-mail \
 
 Percent-encode `@`, `/` and `:` inside the user name or password.
 
-With `postgresql.mode=cloudnativepg` (the default) nothing is needed for the database:
+With `postgresql.mode=cloudnativepg` nothing is needed for the database:
 CloudNativePG creates the Secret `<name>-db-app` (`hd-db-app` for a release named `hd`) and the
 core reads its `uri`, and verifies the cluster's certificate against the cluster's own authority
 (see [TLS to the database](#tls-to-the-database)).
@@ -75,12 +75,14 @@ a connection string, or the separate parameters, from `postgresql.external.host`
 every secret of the core and of the Assistant can also be read from a file instead of a variable
 ([Secrets from files](external-database.md#secrets-from-files)).
 
-With `postgresql.mode=standalone` nothing is needed either, unless a tool renders the chart
-without reading the cluster: the chart generates the password into the Secret `<name>-postgresql`
+With `postgresql.mode=standalone` (the default) nothing is needed either, unless a tool renders
+the chart without reading the cluster: the chart generates the password into the Secret `<name>-postgresql`
 ([The chart's own PostgreSQL](#the-charts-own-postgresql)).
 
 The chart stops with a message for:
 
+- a `postgresql.mode` that is not the mode of the database the release already has
+  ([The upgrade guard](#the-upgrade-guard));
 - `postgresql.enabled`, which `postgresql.mode` replaces: `false` was `external`, and so was `true`
   beside `core.database.existingSecret`; `true` alone was `cloudnativepg`;
 - with `cloudnativepg` and with `standalone`, what names an external database:
@@ -138,7 +140,7 @@ The most common settings:
 | `ingress.*` | Host, class, annotations and TLS (see [HTTPS](#https)). |
 | `core.signIn.*` | Failed sign-in limits and trusted proxies (see [Failed sign-ins](#failed-sign-ins)). |
 | `dumps.*` | Scheduled database dumps to a volume (see [Backups](#backups)). |
-| `postgresql.mode` | Where the database comes from: `cloudnativepg` (the default), `standalone` or `external`. |
+| `postgresql.mode` | Where the database comes from: `standalone` (the default), `cloudnativepg` or `external`. The chart refuses a mode that is not the one of the database it finds (see [The upgrade guard](#the-upgrade-guard)). |
 | `postgresql.standalone.*` | The chart's own PostgreSQL: storage size and class, its password's Secret (see [The chart's own PostgreSQL](#the-charts-own-postgresql)). |
 | `postgresql.external.*` | An external database as separate values. |
 | `postgresql.*` | The CloudNativePG cluster's instances, storage size and class, backups. |
@@ -155,9 +157,9 @@ only checks that the port answers.
 
 ### The chart's own PostgreSQL
 
-With `postgresql.mode=standalone` the chart runs PostgreSQL itself, with no operator: a
-StatefulSet of the official `postgres` image, one instance, with the database `hd` owned by the
-user `hd`. It is not the default yet.
+With `postgresql.mode=standalone`, the default, the chart runs PostgreSQL itself, with no
+operator: a StatefulSet of the official `postgres` image, one instance, with the database `hd`
+owned by the user `hd`.
 
 - **Version.** The chart fixes the major version, 18, and refuses a
   `postgresql.standalone.image.tag` of another one; the minor version follows the chart, so that
@@ -180,6 +182,9 @@ user `hd`. It is not the default yet.
     --from-literal=password='PASSWORD'
   ```
 
+  Set `postgresql.mode` explicitly with such a tool too: [the upgrade guard](#the-upgrade-guard)
+  does not run there.
+
 - **No TLS inside the cluster.** The core reaches the database by its Service without TLS, and
   the chart sets that explicitly (`HD_DATABASE_SSLMODE=disable`), so that the core's log names
   the choice in a warning at every start. `core.database.sslMode` and `core.database.ca` are for
@@ -194,6 +199,58 @@ user `hd`. It is not the default yet.
   desk is up. Install without `--wait` and follow the core with `kubectl -n helpdesk rollout
   status deployment/hd-core`, or give the dumps a claim that is already bound
   (`dumps.storage.existingClaim`). The same holds in the other modes with `dumps.enabled=true`.
+
+### The upgrade guard
+
+The chart refuses an install or an upgrade whose `postgresql.mode` is not the mode of the
+database it finds in the release's namespace, so that the core never starts on another, empty
+database while the help desk's data sits in the one it left. That holds for a mode set by
+mistake and for one that comes from the chart's defaults, which changed in 0.4.0
+([Upgrading from 0.3](#upgrading-from-03-standalone-is-the-default-database-mode)). It finds:
+
+- **the CloudNativePG cluster** of the release (`hd-db`), and then refuses every mode but
+  `cloudnativepg`. `helm uninstall` leaves that cluster in place, so an install under the same
+  release name finds it as an upgrade does;
+- **the chart's own PostgreSQL**, by its StatefulSet (`hd-postgresql`), and then refuses every
+  mode but `standalone`. The volume and the password's Secret that `helm uninstall` leaves do
+  not count: installing again in another mode is not refused, and leaves them where they are.
+
+The message names what it found, the mode asked for and the mode to set:
+
+```
+the upgrade guard found the CloudNativePG cluster hd-db of this release in the namespace
+helpdesk, and postgresql.mode is standalone: the core would leave the database it has for
+another one, which starts empty. Set postgresql.mode=cloudnativepg to stay on the cluster: …
+```
+
+Nothing has changed when it appears: the release, the database and the core are as they were.
+Upgrade again with the mode it names.
+
+To leave a database for good, move its data to the new one first, then delete what the guard
+finds, and upgrade with the new mode: the chart refuses every other mode for as long as that
+object exists.
+
+- The chart's own PostgreSQL: `kubectl -n helpdesk delete statefulset hd-postgresql` stops it
+  and leaves its volume and its password's Secret in place, to go back to or to delete later
+  ([Uninstalling](#uninstalling)).
+- The CloudNativePG cluster: `kubectl -n helpdesk delete cluster hd-db` deletes the cluster with
+  its data. Keep a dump or a backup of it until the new database has proved good.
+
+If it finds both, it cannot tell which one holds the help desk's data, and refuses every mode
+until one of the two is deleted.
+
+**What the guard needs.** Helm must read the cluster while it renders the chart, as `helm
+install` and `helm upgrade` do, with the right to read StatefulSets in the release's namespace
+and, where CloudNativePG is installed, its clusters there. Where Helm does not read the cluster
+the guard finds nothing and refuses nothing:
+
+- **GitOps tools** that render the chart themselves, such as Argo CD and anything else built on
+  `helm template`. Set `postgresql.mode` explicitly in the values there, so that no new default
+  ever changes it, and with `standalone` name the password's Secret too
+  (`postgresql.standalone.existingSecret`, see
+  [The chart's own PostgreSQL](#the-charts-own-postgresql)).
+- **`helm template`**, and **`helm upgrade --dry-run`** unless it is `--dry-run=server`, which
+  reads the cluster and shows the guard's answer without changing anything.
 
 ### HTTPS
 
@@ -773,18 +830,17 @@ backup can be taken with a CloudNativePG `Backup` resource for the cluster `<rel
 Restoring means creating a new cluster that bootstraps from the backup (CloudNativePG's
 `bootstrap.recovery`), then pointing the core at it with `postgresql.mode=external`,
 `core.database.existingSecret` (its `<cluster>-app` Secret) and, for its authority,
-`core.database.ca.existingSecret` (`<cluster>-ca`).
+`core.database.ca.existingSecret` (`<cluster>-ca`). The chart refuses `external` while the
+release's own cluster `<release>-db` exists ([The upgrade guard](#the-upgrade-guard)): once the
+restored cluster holds what you need, delete that one (`kubectl -n helpdesk delete cluster
+hd-db`), then upgrade.
 
 ## Uninstalling
 
-`helm uninstall` removes the core, the Assistant and the rest, but leaves the database cluster
-(`postgresql.keepOnUninstall`, true by default) so that its data survives; installing again with
-the same release name takes it back. To delete the data too, delete the cluster by hand
-(`kubectl -n helpdesk delete cluster hd-db`). Changing `postgresql.mode` to `external` in an
-upgrade also leaves the kept cluster in place.
+`helm uninstall` removes the core, the Assistant and the rest, but leaves the database.
 
-With the chart's own PostgreSQL (`postgresql.mode=standalone`) `helm uninstall` leaves the
-database's volume claim (`data-hd-postgresql-0`) and the Secret with the generated password
+With the chart's own PostgreSQL (`postgresql.mode=standalone`) it leaves the database's volume
+claim (`data-hd-postgresql-0`) and the Secret with the generated password
 (`hd-postgresql`): the data directory accepts no other password, and installing again with the
 same release name, in the same namespace, takes both back. To delete the data too, delete both by
 hand:
@@ -798,6 +854,12 @@ Whether the volume itself goes with its claim is up to the StorageClass's reclai
 delete the Secret alone: a new install would generate another password, which the data kept on
 the volume does not accept. The volume of the dumps (`hd-dumps`) is kept in every mode.
 
+With `postgresql.mode=cloudnativepg` it leaves the database cluster
+(`postgresql.keepOnUninstall`, true by default) so that its data survives; installing again with
+the same release name and `postgresql.mode=cloudnativepg` takes it back, and with any other mode
+is refused for as long as the cluster exists ([The upgrade guard](#the-upgrade-guard)). To delete
+the data too, delete the cluster by hand (`kubectl -n helpdesk delete cluster hd-db`).
+
 ## Upgrades
 
 ```sh
@@ -810,6 +872,46 @@ with the new version, which applies its migrations before serving: expect a shor
 and mail (mail waits in the mailbox and is read on start). Take a backup before upgrading across
 versions with migrations. The Assistant can be upgraded on its own (`assistant.image.tag`); events
 wait in the core while it restarts.
+
+### Upgrading from 0.3: standalone is the default database mode
+
+Until 0.3 the chart's default database was a CloudNativePG cluster (`postgresql.enabled`, true
+by default). Since 0.4.0 the value is `postgresql.mode`, and its default is `standalone`: a
+PostgreSQL the chart runs itself, which needs no operator
+([The chart's own PostgreSQL](#the-charts-own-postgresql)). The same values therefore mean
+another database, and an upgrade has to say which one the release has:
+
+- **A release on the CloudNativePG cluster the chart made** (0.3 with its default values, or
+  with `postgresql.enabled: true`): set `postgresql.mode=cloudnativepg`, and remove
+  `postgresql.enabled` from the values if it is there.
+
+  ```sh
+  helm upgrade hd oci://ghcr.io/manustars/charts/hd --version <version> -n helpdesk \
+    -f my-values.yaml --set postgresql.mode=cloudnativepg
+  ```
+
+  Put `postgresql.mode: cloudnativepg` in the values file to keep: every later upgrade needs
+  it. The cluster, its data and its Secrets stay as they are.
+- **A release on a database of your own** (`postgresql.enabled: false` with
+  `core.database.existingSecret`): set `postgresql.mode=external` and remove
+  `postgresql.enabled`.
+- **`postgresql.enabled: true` beside `core.database.existingSecret`**: the core used the
+  Secret's database, and the chart made a CloudNativePG cluster beside it that nothing used. Set
+  `postgresql.mode=external`, remove `postgresql.enabled`, and delete that cluster first
+  (`kubectl -n helpdesk delete cluster hd-db`), since the chart refuses `external` while it
+  exists.
+
+An upgrade that leaves the mode out is refused, and changes nothing: the chart finds the
+release's CloudNativePG cluster, and stops with a message that names `postgresql.mode=cloudnativepg`
+([The upgrade guard](#the-upgrade-guard)); a `postgresql.enabled` left in the values stops it as
+well, with the mode to set in its place.
+
+A tool that renders the chart without reading the cluster, such as Argo CD, gets no such
+refusal: there the new default would replace the CloudNativePG cluster in the release with an
+empty PostgreSQL of the chart's own, and the core would start on it. Set `postgresql.mode` in
+the values **before** moving such a release to 0.4.0. Whether the cluster and its data would
+survive that is up to the tool: Helm leaves in place a cluster that leaves the release
+(`postgresql.keepOnUninstall`), and a tool that prunes what the chart no longer renders may not.
 
 ### Upgrading from 0.3: verified TLS to the database
 
