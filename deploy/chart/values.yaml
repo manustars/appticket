@@ -68,9 +68,11 @@ core:
     # Import the mail already in the mailbox on the very first read (normally left alone).
     importExisting: false
 
-  # Limits on failed sign-ins, per account and per address (docs/kubernetes.md, "Failed sign-ins"). After `failures` failures within `windowSeconds`, the next four attempts wait 1, 2,
-  # 4 and 8 seconds, and attempts after those are refused until `windowSeconds` have passed since
-  # the last failure: at most failures + 4 passwords are checked per account within a window.
+  # Limits on failed sign-ins, per account and per address (docs/kubernetes.md, "Failed
+  # sign-ins"). After `failures` failures within `windowSeconds`, the next four attempts wait 1,
+  # 2, 4 and 8 seconds, and attempts after those are refused until `windowSeconds` have passed
+  # since the last failure: at most failures + 4 passwords are checked per account within a
+  # window.
   signIn:
     # HD_SIGN_IN_FAILURES (1 to 100)
     failures: 5

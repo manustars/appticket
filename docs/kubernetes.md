@@ -336,11 +336,13 @@ not happen:
   default ever changes it; to change it, follow
   [Moving to another database mode](#moving-to-another-database-mode) yourself, since nothing
   stops a step left out.
-- **The generated password is not found** ([The chart's own PostgreSQL](#the-charts-own-postgresql)):
-  with `standalone` the chart would generate another password at every sync, which the database
-  does not accept. Create a Secret of your own before the first sync and name it in
-  `postgresql.standalone.existingSecret` (its key in `secretKey`, `password` by default); the
-  chart then generates nothing:
+- **The generated password is not found**
+  ([The chart's own PostgreSQL](#the-charts-own-postgresql)): with `standalone` the chart would
+  generate another password at every sync, which the database does not accept. Create a Secret
+  of your own before the first sync and name it in `postgresql.standalone.existingSecret` (its
+  key in `secretKey`, `password` by default); the chart then generates nothing. For a release
+  that Helm installed before, put in it the password of the Secret `hd-postgresql`: the database
+  keeps the password it was created with.
 
   ```sh
   kubectl -n helpdesk create secret generic hd-postgresql-password \
@@ -418,6 +420,7 @@ To take one now and to list the dumps:
 
 ```sh
 kubectl -n helpdesk create job --from=cronjob/hd-dumps hd-dump-now
+kubectl -n helpdesk wait --for=condition=complete job/hd-dump-now --timeout=600s
 kubectl -n helpdesk logs job/hd-dump-now
 ```
 
@@ -509,7 +512,9 @@ version or newer: the image is the one of `dumps.image.tag`.
 
 With `networkPolicy.enabled`, only the pods of the core and of the dumps reach the chart's own
 PostgreSQL, which is why the Job's pod has the labels of the dumps (with another release name,
-`app.kubernetes.io/instance` is that name). With `dumps.enabled=false` the policy admits no pod
+`app.kubernetes.io/instance` is that name, and with `nameOverride`, `app.kubernetes.io/name` is
+that). With `postgresql.standalone.existingSecret` the password is in that Secret, and with
+`dumps.storage.existingClaim` the dumps are on that claim. With `dumps.enabled=false` the policy admits no pod
 of the dumps at all: turn the dumps on, or the NetworkPolicies off, for the restore. For another
 database, the Job reaches it as the dumps do (above), with the variables of `pg_dump`; moving to a
 database of your own shows one
@@ -796,7 +801,8 @@ The chart's own PostgreSQL (`postgresql.mode=standalone`) runs the major version
 18. A data directory belongs to one major version: a version of the chart that moves to another
 one says so in its upgrade notes, and is upgraded to with a dump and a restore. An upgrade that
 leaves them out loses nothing, but the new version's image finds the old data directory on the
-volume and does not start:
+volume and does not start. The image of PostgreSQL 18, on the volume of a PostgreSQL 17 laid out
+as the chart lays out its own, names the old version's data directory:
 
 ```
 Error: in 18+, these Docker images are configured to store database data in a
@@ -804,7 +810,7 @@ Error: in 18+, these Docker images are configured to store database data in a
        major-version-specific directory names).  …
 
        Counter to that, there appears to be PostgreSQL data in:
-         /var/lib/postgresql/18/docker
+         /var/lib/postgresql/17/docker
 ```
 
 The core then waits, unready, for its database. `helm -n helpdesk rollback hd` brings the old
@@ -837,7 +843,7 @@ the new major version:
    ```
 
 3. Upgrade with the core still stopped. The new version starts on a new, empty volume, with the
-   password that the Secret `hd-postgresql` keeps:
+   password that its Secret keeps:
 
    ```sh
    helm upgrade hd oci://ghcr.io/manustars/charts/hd --version <version> -n helpdesk \
@@ -863,8 +869,9 @@ the new major version:
    kubectl -n helpdesk rollout status deployment/hd-core --timeout=300s
    ```
 
-6. Once the help desk has proved good on the new version, delete the old volume (`kubectl get
-   persistentvolume` lists it as `Released`), and what its storage keeps behind it, as the
+6. Once the help desk has proved good on the new version, delete the old volume, the one that
+   step 2 put in `volume` (`kubectl get persistentvolume` lists it as `Released`, for the claim
+   `helpdesk/data-hd-postgresql-0`), and what its storage keeps behind it, as the
    StorageClass's provisioner documents: a volume kept with `Retain` is not cleaned up by
    Kubernetes.
 
@@ -910,8 +917,8 @@ release's CloudNativePG cluster, and stops with a message that names `postgresql
 well, with the mode to set in its place.
 
 A tool that renders the chart without reading the cluster, such as Argo CD
-([GitOps tools](#gitops-tools-argo-cd)), gets no such refusal: there the new default would replace the CloudNativePG cluster in the release with an
-empty PostgreSQL of the chart's own, and the core would start on it. Set `postgresql.mode` in
+([GitOps tools](#gitops-tools-argo-cd)), gets no such refusal: there the new default would
+replace the CloudNativePG cluster in the release with an empty PostgreSQL of the chart's own, and the core would start on it. Set `postgresql.mode` in
 the values **before** moving such a release to 0.4.0. Whether the cluster and its data would
 survive that is up to the tool: Helm leaves in place a cluster that leaves the release
 (`postgresql.keepOnUninstall`), and a tool that prunes what the chart no longer renders may not.
