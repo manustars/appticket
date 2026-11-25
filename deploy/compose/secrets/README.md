@@ -50,14 +50,15 @@ A secret is read when its service starts. After changing one, recreate the servi
 
 ## The database's password
 
-With the profile `db`, the command
+With the profile `db`, run once before the first start, after closing the directory:
 
 ```sh
+chmod 700 secrets
 docker compose run --rm db-password
 ```
 
-writes a random password to `db_password`, once, before the first start: the bundled PostgreSQL
-is created with it. Run again, it keeps the file there. Keep the file as long as the volume
+The second command writes a random password to `db_password`, and the bundled PostgreSQL is
+created with it. Run again, it keeps the file there; it warns when the directory is not `700`. Keep the file as long as the volume
 `db-data`: the database keeps the password it was created with, and a new file does not change
 it.
 
