@@ -2,21 +2,31 @@
 # Starts the Compose install (deploy/compose) on this machine and checks it in both of its
 # database modes (ADR 0009):
 #
-#   1. the configuration, every profile on: the bundled PostgreSQL publishes no port on the
-#      host, and the core waits for it to be healthy;
-#   2. with the profile db: the core starts on the bundled PostgreSQL, reached by its service
-#      name, and /api/health answers that the database is up;
-#   3. the profiles greenmail and assistant added: a message sent to the test mail server's port
-#      on the host is read by the core, and the Assistant, registered on the core with
-#      `hd addon add` inside the core's container, reaches the core with its token;
+#   1. the configuration, every profile on: secrets/ ships with no secret; the bundled
+#      PostgreSQL publishes no port on the host, and the core waits for it to be healthy; every
+#      secret reaches the services as a file named by its _FILE variable (POSTGRES_PASSWORD_FILE
+#      for PostgreSQL), none as a variable, even one set in .env, and an optional secret that
+#      .env does not name reaches no service;
+#   2. with the profile db and no password in .env: `docker compose run --rm db-password`
+#      writes a password to secrets/db_password, a file the core and PostgreSQL can read, and
+#      the core starts on the bundled PostgreSQL, reached by its service name, with that file
+#      the only secret; /api/health answers that the database is up, and the database takes the
+#      file's password and refuses another. After `down` and `up -d` the core reaches it again,
+#      with the same file, which running the command again keeps;
+#   3. the profiles greenmail and assistant added, their secrets in files: a message sent to the
+#      test mail server's port on the host is read by the core, and the Assistant, registered on
+#      the core with `hd addon add` inside the core's container, reaches the core with its
+#      token; neither `compose config` nor `inspect` of any container shows any secret's value;
 #   4. without the profile db: the core starts on a PostgreSQL of the test's own, given to it
-#      through the HD_DATABASE_* parameters, with another database, user and password than the
-#      bundled one's; /api/health answers that the database is up, and the core's migrations are
-#      in that database.
+#      through the HD_DATABASE_* parameters and secrets/db_password, with another database,
+#      user and password than the bundled one's; /api/health answers that the database is up,
+#      and the core's migrations are in that database.
 #
-# The install's settings are the shipped .env.example with the test's values put in, written to
-# a directory of the test's own and given with --env-file: nothing is written into the Compose
-# directory, so a .env there is neither read nor touched.
+# The install the test runs is a copy of the Compose directory in a directory of the test's own,
+# where it writes the secrets as secrets/README.md says, with the permissions it gives. Its
+# settings are the shipped .env.example with the test's values put in, written there too and
+# given with --env-file: nothing is written into the Compose directory, so a .env or a secret
+# there is neither read nor touched.
 #
 # Usage:
 #   bash scripts/test-compose.sh VERSION
@@ -59,6 +69,9 @@ native_path() {
 }
 compose_dir=$(native_path "$compose_dir")
 work=$(native_path "$(mktemp -d)")
+# The install, a copy of the Compose directory, and its secrets.
+install="$work/install"
+secrets="$install/secrets"
 
 step() {
   echo
@@ -76,7 +89,7 @@ fail() {
 
 # Compose on the install's own file, with the test's settings.
 hd_compose() {
-  local files=(-f "$compose_dir/compose.yaml")
+  local files=(-f "$install/compose.yaml")
   if [ -f "$work/external.yaml" ]; then
     files+=(-f "$work/external.yaml")
   fi
@@ -150,6 +163,18 @@ extra() {
   echo "$1=$2" >> "$work/.env"
 }
 
+# Writes VALUE to the install's secret file NAME, as secrets/README.md says, with the mode it
+# gives.
+secret() {
+  printf '%s\n' "$2" > "$secrets/$1"
+  chmod 644 "$secrets/$1"
+}
+
+# The files of the directory DIRECTORY, separated by spaces, in order.
+files_of() {
+  find "$1" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'
+}
+
 # Waits up to a minute for the log of SERVICE to hold TEXT.
 expect_log() {
   local service=$1 text=$2
@@ -164,7 +189,7 @@ expect_log() {
 
 # The settings both modes share, from the shipped example.
 settings() {
-  cp "$compose_dir/.env.example" "$work/.env"
+  cp "$install/.env.example" "$work/.env"
   setting HD_VERSION "$version"
   setting HD_PUBLIC_URL "http://127.0.0.1:$port"
   setting HD_HTTP_PORT "$port"
@@ -197,6 +222,30 @@ health() {
   ok "/api/health answered 200 $(cat "$work/health.json")"
 }
 
+# Expects none of the secret VALUES given as arguments in what Compose and the engine show of the
+# install: its configuration (`compose config`) and everything `inspect` says of each of its
+# containers, their environment included. A value found is named by its position, not printed.
+no_secret_shown() {
+  hd_compose config > "$work/shown.txt"
+  local containers
+  containers=$("$engine" ps -aq --filter "label=com.docker.compose.project=$project")
+  [ -n "$containers" ] || fail "the install has no container to inspect"
+  local id
+  for id in $containers; do
+    "$engine" inspect "$id" >> "$work/shown.txt"
+  done
+  local count index=0 value
+  count=$(echo "$containers" | wc -w)
+  for value in "$@"; do
+    index=$((index + 1))
+    [ -n "$value" ] || fail "secret $index is empty: the check would find nothing"
+    if grep -qF -- "$value" "$work/shown.txt"; then
+      fail "secret $index of $# is shown by compose config or by inspect"
+    fi
+  done
+  ok "none of the $# secrets is shown by compose config or by inspect of the $count containers"
+}
+
 # ---------------------------------------------------------------------------------------------
 step "Tools"
 "${compose_command[@]}" version
@@ -209,13 +258,32 @@ done
 
 # ---------------------------------------------------------------------------------------------
 step "1. The configuration, every profile on"
+shipped=$(files_of "$compose_dir/secrets")
+[ "$shipped" = ".gitignore README.md" ] \
+  || fail "secrets/ ships with more than its README and .gitignore: $shipped"
+ok "secrets/ ships with its README and .gitignore alone"
+cp -R "$compose_dir/." "$install"
+chmod 700 "$secrets"
 settings
-setting HD_DATABASE_PASSWORD "$(password)"
-hd_compose --profile db --profile assistant --profile greenmail config > "$work/config.yaml"
+setting COMPOSE_PROFILES db,greenmail,assistant
+setting HD_SECRET_IMAP_URL ./secrets/imap_url
+setting HD_SECRET_SMTP_URL ./secrets/smtp_url
+setting HD_SECRET_OIDC_CLIENT_SECRET ./secrets/oidc_client_secret
+setting HD_SECRET_ASSISTANT_API_KEY ./secrets/assistant_api_key
+# The secrets as variables, as .env set them before they were files: none may be passed on.
+plain="HD_DATABASE_URL HD_DATABASE_PASSWORD HD_IMAP_URL HD_SMTP_URL HD_OIDC_CLIENT_SECRET"
+plain="$plain HD_ASSISTANT_TOKEN HD_ASSISTANT_EVENT_SECRET HD_ASSISTANT_API_KEY POSTGRES_PASSWORD"
+for variable in $plain; do
+  extra "$variable" "$(password)"
+done
+hd_compose config > "$work/config.yaml"
 service db < "$work/config.yaml" > "$work/db.yaml"
 service core < "$work/config.yaml" > "$work/core.yaml"
+service assistant < "$work/config.yaml" > "$work/assistant.yaml"
 [ -s "$work/db.yaml" ] || fail "the configuration has no service db: $(cat "$work/config.yaml")"
 [ -s "$work/core.yaml" ] || fail "the configuration has no service core: $(cat "$work/config.yaml")"
+[ -s "$work/assistant.yaml" ] \
+  || fail "the configuration has no service assistant: $(cat "$work/config.yaml")"
 # The same reading finds the core's port, so that finding none for the database means something.
 grep -qE "^ +published: \"?$port\"?$" "$work/core.yaml" \
   || fail "the core is not published on the port $port: $(cat "$work/core.yaml")"
@@ -227,18 +295,103 @@ grep -A 2 -E '^      db:$' "$work/core.yaml" | grep -qE '^        condition: ser
   || fail "the core does not wait for the bundled PostgreSQL to be healthy: $(cat "$work/core.yaml")"
 ok "the core waits for the bundled PostgreSQL to be healthy"
 
-# ---------------------------------------------------------------------------------------------
-step "2. Start with the profile db: the core on the bundled PostgreSQL"
+# Expects the service whose configuration is in FILE to be given VARIABLE=VALUE.
+given() {
+  local file=$1 variable=$2 value=$3
+  grep -qE "^      $variable: $value$" "$work/$file" \
+    || fail "${file%.yaml} is not given $variable=$value: $(cat "$work/$file")"
+}
+given core.yaml HD_DATABASE_PASSWORD_FILE /run/secrets/db_password
+given core.yaml HD_IMAP_URL_FILE /run/secrets/imap_url
+given core.yaml HD_SMTP_URL_FILE /run/secrets/smtp_url
+given core.yaml HD_OIDC_CLIENT_SECRET_FILE /run/secrets/oidc_client_secret
+given db.yaml POSTGRES_PASSWORD_FILE /run/secrets/db_password
+given assistant.yaml HD_ASSISTANT_TOKEN_FILE /run/secrets/assistant_token
+given assistant.yaml HD_ASSISTANT_EVENT_SECRET_FILE /run/secrets/assistant_event_secret
+given assistant.yaml HD_ASSISTANT_API_KEY_FILE /run/secrets/assistant_api_key
+ok "every secret is given to its services as a file, through its _FILE variable"
+for variable in $plain; do
+  if grep -qE "^      $variable:" "$work/config.yaml"; then
+    fail "a service is given $variable as a variable"
+  fi
+done
+ok "no secret is given as a variable, even one that .env sets"
+
+# Without the optional secrets named in .env, no service is told of them.
 settings
-setting HD_DATABASE_PASSWORD "$(password)"
-hd_compose up -d
-health
+setting COMPOSE_PROFILES db,greenmail,assistant
+hd_compose config > "$work/config.yaml"
+if grep -E '^      (HD_IMAP_URL|HD_SMTP_URL|HD_OIDC_CLIENT_SECRET|HD_ASSISTANT_API_KEY)_FILE:' \
+  "$work/config.yaml"; then
+  fail "an optional secret that .env does not name is given"
+fi
+ok "an optional secret that .env does not name is given to no service"
 
 # ---------------------------------------------------------------------------------------------
-step "3. Add the profiles greenmail and assistant beside db"
+step "2. Start with the profile db and no password in .env: one is written to secrets/"
+settings
+if grep -iE '^[^#]*password' "$work/.env"; then
+  fail ".env sets a password"
+fi
+[ "$(files_of "$secrets")" = ".gitignore README.md" ] \
+  || fail "secrets/ holds $(files_of "$secrets")"
+# The command secrets/README.md gives, once before the first start.
+hd_compose run --rm db-password > "$work/db-password.txt" 2>&1 \
+  || fail "db-password failed: $(cat "$work/db-password.txt")"
+grep -qF "secrets/db_password written" "$work/db-password.txt" \
+  || fail "db-password did not write secrets/db_password: $(cat "$work/db-password.txt")"
+[ -f "$secrets/db_password" ] && [ ! -L "$secrets/db_password" ] \
+  || fail "secrets/db_password is not a regular file: $(ls -la "$secrets")"
+db_password=$(cat "$secrets/db_password")
+[ "${#db_password}" -ge 32 ] || fail "the password written is ${#db_password} characters long"
+# Readable inside the containers, whose users are not the host's, and the administrator's, as
+# the directory is.
+[ "$(stat -c %a "$secrets/db_password")" = 644 ] \
+  || fail "secrets/db_password has the mode $(stat -c %a "$secrets/db_password"), not 644"
+owner=$(stat -c %u:%g "$secrets/db_password")
+[ "$owner" = "$(stat -c %u:%g "$secrets")" ] \
+  || fail "secrets/db_password belongs to $owner, not to the directory's owner"
+ok "secrets/db_password written: ${#db_password} characters, mode 644, the directory's owner's"
+hd_compose up -d
+health
+[ "$(files_of "$secrets")" = ".gitignore README.md db_password" ] \
+  || fail "the install started with secrets/ holding $(files_of "$secrets")"
+ok "started with secrets/db_password the only secret"
+# The database takes that password over the network, where it asks for one (it trusts its own
+# loopback address), and refuses another.
+# shellcheck disable=SC2016 # expanded inside the container
+hd_compose exec -T db sh -c 'PGPASSWORD=$(cat /run/secrets/db_password) psql -h db \
+  -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT 1"' > /dev/null \
+  || fail "the bundled PostgreSQL refuses the password of secrets/db_password"
+# shellcheck disable=SC2016 # expanded inside the container
+if hd_compose exec -T db sh -c 'PGPASSWORD=not-the-password psql -h db \
+  -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT 1"' > /dev/null 2>&1; then
+  fail "the bundled PostgreSQL takes a password other than that of secrets/db_password"
+fi
+ok "the bundled PostgreSQL takes the password of secrets/db_password, and refuses another"
+hd_compose down
+hd_compose up -d
+health
+[ "$(cat "$secrets/db_password")" = "$db_password" ] \
+  || fail "secrets/db_password changed across down and up -d"
+ok "after down and up -d the core reaches the database, secrets/db_password unchanged"
+hd_compose run --rm db-password > "$work/db-password.txt" 2>&1 \
+  || fail "db-password failed the second time: $(cat "$work/db-password.txt")"
+grep -qF "secrets/db_password is there: kept" "$work/db-password.txt" \
+  || fail "db-password did not keep secrets/db_password: $(cat "$work/db-password.txt")"
+[ "$(cat "$secrets/db_password")" = "$db_password" ] \
+  || fail "running db-password again changed secrets/db_password"
+ok "running db-password again keeps secrets/db_password"
+
+# ---------------------------------------------------------------------------------------------
+step "3. Add the profiles greenmail and assistant beside db, their secrets in files"
+imap_url="imap://helpdesk:helpdesk@127.0.0.1:3143/INBOX"
+smtp_url="smtp://127.0.0.1:3025"
+secret imap_url "$imap_url"
+secret smtp_url "$smtp_url"
 setting COMPOSE_PROFILES db,greenmail
-setting HD_IMAP_URL "imap://helpdesk:helpdesk@127.0.0.1:3143/INBOX"
-setting HD_SMTP_URL "smtp://127.0.0.1:3025"
+setting HD_SECRET_IMAP_URL ./secrets/imap_url
+setting HD_SECRET_SMTP_URL ./secrets/smtp_url
 setting HD_MAIL_FROM helpdesk@helpdesk.test
 setting HD_GREENMAIL_SMTP_PORT "$smtp_port"
 setting HD_GREENMAIL_IMAP_PORT "$imap_port"
@@ -279,18 +432,23 @@ event_secret=$(sed -n 's/^event secret: //p' "$work/addon.txt")
 [ -n "$token" ] && [ -n "$event_secret" ] \
   || fail "hd addon add printed no token and event secret: $(cat "$work/addon.txt")"
 ok "the Assistant is registered on the core"
+secret assistant_token "$token"
+secret assistant_event_secret "$event_secret"
+# A model service on the Assistant's own machine, which takes a key when one is given: the test
+# sends it nothing.
+api_key=$(password)
+secret assistant_api_key "$api_key"
 setting COMPOSE_PROFILES db,greenmail,assistant
-setting HD_ASSISTANT_TOKEN "$token"
-setting HD_ASSISTANT_EVENT_SECRET "$event_secret"
-# A model service on the Assistant's own machine that takes no key: the test sends it nothing.
 setting HD_ASSISTANT_MODEL_PROVIDER ollama
 setting HD_ASSISTANT_MODEL test-model
+setting HD_SECRET_ASSISTANT_API_KEY ./secrets/assistant_api_key
 core_before=$(hd_compose ps -q core)
 hd_compose up -d
 [ "$(hd_compose ps -q core)" = "$core_before" ] \
   || fail "adding the Assistant's settings recreated the core"
 expect_log assistant "connected to the core"
 ok "the Assistant reached the core with its token, and the core kept running"
+no_secret_shown "$db_password" "$imap_url" "$smtp_url" "$token" "$event_secret" "$api_key"
 hd_compose down -v
 ok "stopped, with its volume removed"
 
@@ -325,13 +483,15 @@ networks:
     name: $external_network
     external: true
 YAML
+# A fresh install's secrets/, with the existing database's password alone.
+find "$secrets" -mindepth 1 ! -name README.md ! -name .gitignore -delete
+secret db_password "$owner_password"
 settings
 setting COMPOSE_PROFILES ""
 setting HD_DATABASE_HOST "$external_db"
 setting HD_DATABASE_PORT 5432
 setting HD_DATABASE_NAME helpdesk
 setting HD_DATABASE_USER helpdesk
-setting HD_DATABASE_PASSWORD "$owner_password"
 # The test's PostgreSQL serves no TLS; a real one is verified (verify-full, the default).
 setting HD_DATABASE_SSLMODE disable
 hd_compose up -d
@@ -342,7 +502,8 @@ ok "the bundled PostgreSQL was not started"
 health
 migrations=$(external_sql helpdesk helpdesk "SELECT count(*) FROM _sqlx_migrations")
 [ "$migrations" -gt 0 ] || fail "the core applied no migration to the test's own PostgreSQL"
-ok "the core applied its $migrations migrations to the test's own PostgreSQL"
+ok "the core applied its $migrations migrations to the test's own PostgreSQL, as the user" \
+  "whose password is secrets/db_password"
 hd_compose down -v
 ok "stopped"
 
