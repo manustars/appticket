@@ -37,7 +37,9 @@ the version in `deploy/chart/Chart.yaml`.
 
 ## Secrets to create
 
-The chart never holds secrets; it refers to Secrets you create in the release's namespace.
+The chart never holds secrets; it refers to Secrets you create in the release's namespace. The
+one Secret it makes itself is the generated password of its own PostgreSQL
+(`postgresql.mode=standalone`).
 
 | Secret | Keys | When |
 |---|---|---|
@@ -157,7 +159,7 @@ user `hd`. It is not the default yet.
   `postgresql.standalone.image.tag` of another one; the minor version follows the chart, so that
   upgrading the chart brings PostgreSQL's fixes.
 - **Volume.** `postgresql.standalone.storage.size` (5Gi) and `storageClass` describe the volume
-  when it is first created; a later upgrade cannot change them. The chart never deletes the
+  when it is first created; Kubernetes refuses an upgrade that changes them. The chart never deletes the
   volume: `helm uninstall` leaves its claim, `data-hd-postgresql-0`, in place.
 - **Password.** On the first install the chart generates the password of the user `hd` into the
   Secret `hd-postgresql`; upgrades find that Secret and keep what it holds, and `helm uninstall`
