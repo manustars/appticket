@@ -11,9 +11,10 @@
 #
 # The profiles in COMPOSE_PROFILES (.env) choose what runs beside the core:
 #
-#   db          the bundled PostgreSQL, its data on the volume db-data; without it the core uses
-#               the existing database that the HD_DATABASE_* settings and secrets/db_password
-#               name (docs/external-database.md)
+#   db          the bundled PostgreSQL, its data on the volume db-data, with its dumps on the
+#               volume dumps; without it the core uses the existing database that the
+#               HD_DATABASE_* settings and secrets/db_password name (docs/external-database.md)
+#   dumps       the dumps of an existing database, without db; db has them already (dumps.md)
 #   assistant   the Assistant add-on, once registered on the core (secrets/README.md)
 #   greenmail   a test mail server, to try the help desk; not for production
 #
@@ -148,6 +149,160 @@ services:
     cap_add: [CHOWN, DAC_OVERRIDE]
     security_opt: [no-new-privileges:true]
 
+  # Dumps the database now, with `docker compose run --rm dumps`; `up` never starts it. Its
+  # definition is that of dumps-schedule, below, which `up` starts with the profile db or dumps.
+  # Each dump is PostgreSQL's custom format, compressed, named after the time it was taken in UTC
+  # (hd-20261125T023000Z.dump) on the volume dumps, which keeps the latest HD_DUMPS_KEEP. dumps.md
+  # says how to list the dumps, copy them off the host and restore one.
+  dumps: &dumps
+    profiles: [dumps-now]
+    # pg_dump must be at least as new as the server: the image of db, unless HD_DUMPS_IMAGE_TAG
+    # names another, for an existing database of a later major version.
+    image: docker.io/library/postgres:${HD_DUMPS_IMAGE_TAG:-18.7-trixie}
+    # The database's settings, as the core gets them; its password is read from the file, when a
+    # dump starts, and given to pg_dump alone.
+    environment:
+      - HD_DATABASE_HOST
+      - HD_DATABASE_PORT
+      - HD_DATABASE_NAME
+      - HD_DATABASE_USER
+      - HD_DATABASE_SSLMODE
+      - HD_DUMPS_KEEP
+      - HD_DUMPS_TIME
+    secrets: [db_password]
+    volumes:
+      - dumps:/dumps
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+    # As the image's root, which owns the volume, with no capability: it reads the secret, which
+    # every user can, and writes the volume as its owner.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # The script's first argument says what it does: none, a dump now; schedule, the dumps at
+    # HD_DUMPS_TIME every day; restore, a restore of the dump on standard input (dumps.md). Any
+    # other command runs as it is, such as ls -l /dumps.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        dumps=/dumps
+
+        # The database, reached as the core reaches it (docs/external-database.md): TLS verified
+        # unless HD_DATABASE_SSLMODE says otherwise. The image holds no certificate authority, so
+        # without one given in HD_DATABASE_CA_FILE, which the core trusts besides the public
+        # ones, TLS is required but the server's certificate is not verified.
+        connect() {
+          if [ -z "$${HD_DATABASE_HOST:-}" ] || [ -z "$${HD_DATABASE_NAME:-}" ] \
+            || [ -z "$${HD_DATABASE_USER:-}" ]; then
+            echo "set HD_DATABASE_HOST, HD_DATABASE_NAME and HD_DATABASE_USER in .env" >&2
+            return 1
+          fi
+          export PGHOST="$$HD_DATABASE_HOST" PGDATABASE="$$HD_DATABASE_NAME"
+          export PGUSER="$$HD_DATABASE_USER" PGPORT="$${HD_DATABASE_PORT:-5432}"
+          mode=$${HD_DATABASE_SSLMODE:-verify-full}
+          if [ -n "$${HD_DATABASE_CA_FILE:-}" ]; then
+            export PGSSLROOTCERT="$$HD_DATABASE_CA_FILE"
+          elif [ "$$mode" = verify-full ] || [ "$$mode" = verify-ca ]; then
+            echo "warning: sslmode require, not $$mode: without HD_DATABASE_CA_FILE the server's" \
+              "certificate is not verified" >&2
+            mode=require
+          fi
+          export PGSSLMODE="$$mode"
+          PGPASSWORD=$$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' /run/secrets/db_password)
+          if [ -z "$$PGPASSWORD" ]; then
+            echo "secrets/db_password is empty" >&2
+            return 1
+          fi
+          export PGPASSWORD
+        }
+
+        # Run in a subshell, which releases the lock when it ends.
+        dump() {
+          keep=$${HD_DUMPS_KEEP:-7}
+          case $$keep in
+            "" | *[!0-9]*) keep=0 ;;
+          esac
+          if [ "$$keep" -lt 1 ]; then
+            echo "HD_DUMPS_KEEP is to be 1 or more, not '$${HD_DUMPS_KEEP:-}'" >&2
+            return 1
+          fi
+          connect || return 1
+          # One dump at a time on the volume, the schedule's or one taken now.
+          exec 9< "$$dumps"
+          flock 9
+          name=hd-$$(date -u +%Y%m%dT%H%M%SZ).dump
+          while [ -e "$$dumps/$$name" ]; do
+            sleep 1
+            name=hd-$$(date -u +%Y%m%dT%H%M%SZ).dump
+          done
+          # Written under a temporary name: an interrupted dump never counts as one.
+          pg_dump --format=custom --no-owner --file="$$dumps/$$name.partial" || return 1
+          mv "$$dumps/$$name.partial" "$$dumps/$$name" || return 1
+          # The latest by name, which is the time in UTC: the oldest come first.
+          set -- "$$dumps"/hd-*Z.dump
+          while [ "$$#" -gt "$$keep" ]; do
+            rm -f -- "$$1"
+            shift
+          done
+          rm -f "$$dumps"/*.partial
+          echo "dumped $$name; kept:"
+          ls -l "$$dumps"
+        }
+
+        schedule() {
+          time=$${HD_DUMPS_TIME:-02:30}
+          case $$time in
+            [01][0-9]:[0-5][0-9] | 2[0-3]:[0-5][0-9]) ;;
+            *)
+              echo "HD_DUMPS_TIME is to be a time of day in UTC, such as 02:30, not '$$time'" >&2
+              exit 1
+              ;;
+          esac
+          # Stopped at once while it waits; a dump under way ends first, or is cut by the stop.
+          trap 'exit 0' TERM INT
+          while :; do
+            now=$$(date -u +%s)
+            next=$$(date -u -d "$$(date -u +%F) $$time" +%s)
+            if [ "$$next" -le "$$now" ]; then
+              next=$$((next + 86400))
+            fi
+            echo "next dump at $$(date -u -d "@$$next" +%Y-%m-%dT%H:%M:%SZ)"
+            sleep $$((next - now)) &
+            wait $$!
+            (dump) || echo "the dump failed; the next is at $$time UTC" >&2
+          done
+        }
+
+        # Into the database, from the dump on standard input, replacing what the dump holds, in
+        # one transaction: one that fails changes nothing.
+        restore() {
+          connect || return 1
+          pg_restore --clean --if-exists --no-owner --no-privileges --single-transaction \
+            --dbname="$$PGDATABASE" || return 1
+          echo "restored"
+        }
+
+        case $${1:-} in
+          "") (dump) ;;
+          schedule) schedule ;;
+          restore) (restore) ;;
+          *) exec "$$@" ;;
+        esac
+      - dumps
+
+  # The dumps of dumps, on a schedule: every day at HD_DUMPS_TIME, in UTC (02:30 when not set).
+  # On with the profile db, whose database has no other backup, and turned on with an existing
+  # database by the profile dumps.
+  dumps-schedule:
+    <<: *dumps
+    profiles: [db, dumps]
+    command: [schedule]
+    restart: unless-stopped
+
   # The Assistant, which the core sends its events to at http://assistant:8090. It needs the
   # token and event secret that registering it on the core prints, in secrets/assistant_token
   # and secrets/assistant_event_secret (secrets/README.md), so it is started after that. Its
@@ -237,3 +392,5 @@ secrets:
 
 volumes:
   db-data:
+  # The dumps, kept by `down`; `down -v` removes them with db-data.
+  dumps:
