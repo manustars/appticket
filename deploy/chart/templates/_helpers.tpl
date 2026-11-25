@@ -238,7 +238,7 @@ until the first dump, and helm install --wait running into its timeout; mounted 
 it binds when the database starts. The claim is ReadWriteOnce, so the dumps then run on the
 database's node. A claim of dumps.storage.existingClaim is the user's, and left alone.
 */}}
-{{- define "hd.dumpsBesideDatabase" -}}
+{{- define "hd.databaseMountsDumps" -}}
 {{- if and (include "hd.dumpsEnabled" .) (not .Values.dumps.storage.existingClaim) (eq (include "hd.databaseSource" .) "standalone") }}
 {{- "true" }}
 {{- end }}

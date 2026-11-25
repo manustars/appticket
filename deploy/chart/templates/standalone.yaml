@@ -144,9 +144,9 @@ spec:
               mountPath: /var/run/postgresql
             - name: tmp
               mountPath: /tmp
-            {{- if include "hd.dumpsBesideDatabase" . }}
+            {{- if include "hd.databaseMountsDumps" . }}
             # Not used by PostgreSQL: mounted so that the dumps' claim binds when the database
-            # starts, not at the first dump (see hd.dumpsBesideDatabase).
+            # starts, not at the first dump (see hd.databaseMountsDumps).
             - name: dumps
               mountPath: /dumps
               readOnly: true
@@ -156,7 +156,7 @@ spec:
           emptyDir: {}
         - name: tmp
           emptyDir: {}
-        {{- if include "hd.dumpsBesideDatabase" . }}
+        {{- if include "hd.databaseMountsDumps" . }}
         - name: dumps
           persistentVolumeClaim:
             claimName: {{ include "hd.dumpsName" . }}

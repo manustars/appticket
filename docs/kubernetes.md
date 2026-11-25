@@ -197,8 +197,9 @@ owned by the user `hd`.
   unused, so that the claim is bound when the database starts and `helm install --wait` ends
   even with a StorageClass that binds a volume only when a pod first uses it
   (`volumeBindingMode: WaitForFirstConsumer`). The claim is ReadWriteOnce, used on one node at
-  a time, so the dumps run on the database's node. Turning the dumps on or off restarts the
-  database. A claim of your own (`dumps.storage.existingClaim`) is left to the dumps alone.
+  a time, so the dumps run on the database's node, with its tolerations, and its group on the
+  volume. Turning the dumps on or off restarts the database. A claim of your own
+  (`dumps.storage.existingClaim`) is left to the dumps alone.
 
 ### The upgrade guard
 
@@ -395,7 +396,9 @@ cluster's time zone; default every day at 02:30). It writes a compressed dump in
 format to a volume, and keeps the latest `dumps.keep` (default 7). It needs no object storage and
 works in every database mode; the volume (`dumps.storage.size`,
 `storageClass`, or `existingClaim`) is kept on `helm uninstall`. Keep the job's image
-(`dumps.image.tag`) at the database's major version or newer.
+(`dumps.image.tag`) at the database's major version or newer. A dump that has not ended after
+`dumps.activeDeadlineSeconds` (6 hours), waiting for its pod included, fails, so that the next one
+runs.
 
 With `cloudnativepg` or `external`, the claim the chart makes for the dumps is used only by the
 dumps. Helm's `--wait` (and `--atomic`, which implies it) waits for every PersistentVolumeClaim of
@@ -533,14 +536,15 @@ version or newer: the image is the one of `dumps.image.tag`.
 With `networkPolicy.enabled`, only the pods of the core and of the dumps reach the chart's own
 PostgreSQL, which is why the Job's pod has the labels of the dumps (with another release name,
 `app.kubernetes.io/instance` is that name, and with `nameOverride`, `app.kubernetes.io/name` is
-that, in the affinity too). The affinity is for the chart's own PostgreSQL, which mounts the
-dumps' claim: leave it out with a claim of your own (`dumps.storage.existingClaim`) and where
-that PostgreSQL is not running, or the Job's pod waits for it. With `postgresql.standalone.existingSecret` the password is in that Secret, and with
-`dumps.storage.existingClaim` the dumps are on that claim. With `dumps.enabled=false` the policy admits no pod
-of the dumps at all: turn the dumps on, or the NetworkPolicies off, for the restore. For another
-database, the Job reaches it as the dumps do (above), with the variables of `pg_dump`; moving to a
-database of your own shows one
-([Moving to another database mode](#moving-to-another-database-mode)).
+that, in the affinity too). The affinity is for the chart's own PostgreSQL, which mounts the dumps'
+claim: leave it out with a claim of your own (`dumps.storage.existingClaim`) and where that
+PostgreSQL is not running, or the Job's pod waits for it; with `postgresql.standalone.tolerations`,
+give the Job those too. With `postgresql.standalone.existingSecret` the password is in that Secret,
+and with `dumps.storage.existingClaim` the dumps are on that claim. With `dumps.enabled=false` the
+policy admits no pod of the dumps at all: turn the dumps on, or the NetworkPolicies off, for the
+restore. For another database, the Job reaches it as the dumps do (above), with the variables of
+`pg_dump`; moving to a database of your own shows one ([Moving to another database
+mode](#moving-to-another-database-mode)).
 
 A dump is as old as its schedule: anything after the last dump is lost on restore. Copy the
 dumps off the cluster too if the cluster's storage is the only place they live.

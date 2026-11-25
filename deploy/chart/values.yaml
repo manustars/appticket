@@ -368,6 +368,9 @@ dumps:
   schedule: "30 2 * * *"
   # How many dumps to keep; older ones are deleted after each successful dump.
   keep: 7
+  # How long a dump may take, waiting for its pod included, before it fails (6 hours). A dump
+  # still running then holds back the next one.
+  activeDeadlineSeconds: 21600
   image:
     # pg_dump must be at least as new as the server: keep its major version in step with the
     # database's.
