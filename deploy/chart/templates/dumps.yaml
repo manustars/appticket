@@ -62,6 +62,9 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 1
+      # A dump that does not end in time fails, and the next one runs: one whose pod cannot start
+      # would otherwise hold back every later dump (concurrencyPolicy: Forbid).
+      activeDeadlineSeconds: {{ int $d.activeDeadlineSeconds }}
       template:
         metadata:
           labels:
@@ -73,10 +76,20 @@ spec:
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- $security := include "hd.podSecurityContext" . | fromYaml }}
+          {{- if include "hd.databaseMountsDumps" . }}
+          {{- /*
+          The volume's group is the one of the chart's own PostgreSQL, which mounts it too: with
+          another, each pod would hand the volume to its own group at every start, and a dump
+          running then could lose the right to write.
+          */}}
+          {{- $_ := set $security "fsGroup" 999 }}
+          {{- end }}
           securityContext:
-            {{- include "hd.podSecurityContext" . | nindent 12 }}
-          {{- if include "hd.dumpsBesideDatabase" . }}
-          # On the node of the chart's own PostgreSQL, which mounts the same ReadWriteOnce claim.
+            {{- toYaml $security | nindent 12 }}
+          {{- if include "hd.databaseMountsDumps" . }}
+          # On the node of the chart's own PostgreSQL, which mounts the same ReadWriteOnce claim,
+          # with its tolerations to reach that node.
           affinity:
             podAffinity:
               requiredDuringSchedulingIgnoredDuringExecution:
@@ -84,6 +97,10 @@ spec:
                   labelSelector:
                     matchLabels:
                       {{- include "hd.selectorLabels" (dict "root" . "component" "postgresql") | nindent 22 }}
+          {{- with .Values.postgresql.standalone.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- end }}
           containers:
             - name: pg-dump

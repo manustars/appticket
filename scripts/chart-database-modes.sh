@@ -606,8 +606,17 @@ finish "cloudnativepg and external: no PostgreSQL of the chart's own, no Secret"
 # Dumps: pg_dump reaches the same database as the core
 # ---------------------------------------------------------------------------------------------
 
+# expect_dumps_apart: the dumps' claim is theirs alone, and they run wherever they are scheduled.
+expect_dumps_apart() {
+  expect_no_text standalone.yaml 'dumps'
+  expect_no_text dumps.yaml 'affinity:'
+  expect_no_text dumps.yaml 'tolerations:'
+  expect_line dumps.yaml '            fsGroup: 10001'
+}
+
 render "${cluster[@]}" --set dumps.enabled=true
 expect_cluster_dumps
+expect_dumps_apart
 finish "dumps with cloudnativepg: the URL from the cluster's Secret, and nothing else"
 
 render "${url_form[@]}" --set core.database.secretKey=url --set dumps.enabled=true
@@ -617,6 +626,7 @@ expect_text dumps.yaml 'pg_dump --dbname="$DATABASE_URL" --format=custom'
 for variable in PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD; do
   expect_no_env dumps.yaml "$variable"
 done
+expect_dumps_apart
 finish "dumps with external and a URL Secret: the URL from the named Secret"
 
 render "${separate_values[@]}" --set postgresql.external.port=6432 --set dumps.enabled=true
@@ -629,6 +639,7 @@ expect_env dumps.yaml PGPASSWORD 'valueFrom: secretKeyRef: name: hd-database-pas
 expect_text dumps.yaml 'pg_dump --format=custom'
 # The script runs with `set -u`: a reference to a variable that is not set would stop it.
 expect_no_text dumps.yaml 'DATABASE_URL'
+expect_dumps_apart
 finish "dumps with external and separate values: pg_dump's own variables, the password from its Secret"
 
 # expect_standalone_dumps SECRET KEY: pg_dump reaches the chart's own PostgreSQL as the core does.
@@ -648,41 +659,42 @@ expect_standalone_dumps() {
 
 render "${standalone[@]}"
 expect_standalone_dumps hd-postgresql password
-finish "dumps with standalone: on by default, reaching the chart's PostgreSQL without TLS"
+# A StorageClass that binds a volume only for its first pod (WaitForFirstConsumer) would leave the
+# dumps' claim pending until the first dump, and helm install --wait in its timeout: the database
+# uses the claim from its start, and the dumps, sharing a ReadWriteOnce volume, run on its node,
+# with its group on the volume.
+expect_entry standalone.yaml dumps 'persistentVolumeClaim: claimName: hd-dumps'
+expect_entry standalone.yaml dumps 'mountPath: /dumps readOnly: true'
+expect_line dumps.yaml '                - topologyKey: kubernetes.io/hostname'
+expect_line dumps.yaml '                      app.kubernetes.io/component: postgresql'
+expect_line dumps.yaml '            fsGroup: 999'
+expect_no_text dumps.yaml 'tolerations:'
+# A dump that cannot start, its database gone, fails in time: the next ones are not skipped.
+expect_line dumps.yaml '      activeDeadlineSeconds: 21600'
+finish "dumps with standalone: on by default, on the database's node and its claim mounted there"
+
+render "${standalone[@]}" --set 'postgresql.standalone.tolerations[0].key=dedicated' \
+  --set 'postgresql.standalone.tolerations[0].operator=Exists' --set dumps.activeDeadlineSeconds=600
+expect_line dumps.yaml '            - key: dedicated'
+expect_line dumps.yaml '      activeDeadlineSeconds: 600'
+finish "dumps with standalone and the database's tolerations: theirs too, to reach its node"
 
 render "${standalone[@]}" --set postgresql.standalone.existingSecret=hd-own-password \
   --set postgresql.standalone.secretKey=db-password
 expect_standalone_dumps hd-own-password db-password
 finish "dumps with standalone and existingSecret: the password from the named Secret"
 
-# A StorageClass that binds a volume only for its first pod (WaitForFirstConsumer) would leave the
-# dumps' claim pending until the first dump, and helm install --wait in its timeout: the database
-# uses the claim from its start, and the dumps, sharing a ReadWriteOnce volume, run on its node.
-render "${standalone[@]}"
-expect_entry standalone.yaml dumps 'persistentVolumeClaim: claimName: hd-dumps'
-expect_entry standalone.yaml dumps 'mountPath: /dumps readOnly: true'
-expect_line dumps.yaml '                - topologyKey: kubernetes.io/hostname'
-expect_line dumps.yaml '                      app.kubernetes.io/component: postgresql'
-finish "dumps with standalone: the database mounts their claim, and they run on its node"
-
 render "${standalone[@]}" --set dumps.storage.existingClaim=hd-own-dumps
 expect_entry dumps.yaml dumps 'persistentVolumeClaim: claimName: hd-own-dumps'
 expect_kind PersistentVolumeClaim 0
-expect_no_text standalone.yaml 'dumps'
-expect_no_text dumps.yaml 'podAffinity'
-render "${standalone[@]}" --set dumps.enabled=false
-expect_no_text standalone.yaml 'dumps'
-for form in cluster url_form separate_values; do
-  declare -n values=$form
-  render "${values[@]}" --set dumps.enabled=true
-  expect_no_text dumps.yaml 'podAffinity'
-done
-finish "dumps with a claim of their own, off, or in the other modes: no claim in the database, no node of its"
+expect_dumps_apart
+finish "dumps with standalone and a claim of their own: not mounted by the database"
 
 render "${standalone[@]}" --set dumps.enabled=false
 expect_kind CronJob 0
 expect_kind PersistentVolumeClaim 0
 expect_standalone_postgresql hd-postgresql password
+expect_no_text standalone.yaml 'dumps'
 finish "dumps with standalone and dumps.enabled=false: off when asked"
 
 render "${standalone[@]}" --set-string dumps.enabled=false
