@@ -456,6 +456,30 @@ refused "standalone with another major version: refused, naming the chart's" \
   'postgresql.standalone.image.tag is "17.5": the chart runs PostgreSQL 18, and a tag must be of that major version' \
   "${standalone[@]}" --set postgresql.standalone.image.tag=17.5
 
+# A tag that YAML reads as a number would lose its form: 18.10 is the number 18.1.
+not_text='must be a string: quote it in a values file ("18.8"), or give it with --set-string'
+
+printf 'postgresql:\n  standalone:\n    image:\n      tag: 18.10\n' > "$work/number-tag.yaml"
+refused "standalone with an unquoted tag in a values file: refused, a number is not a tag" \
+  "postgresql.standalone.image.tag $not_text" \
+  "${standalone[@]}" -f "$work/number-tag.yaml"
+
+printf 'postgresql:\n  standalone:\n    image:\n      tag: 18\n' > "$work/whole-tag.yaml"
+refused "standalone with an unquoted whole number as the tag: refused as well" \
+  "postgresql.standalone.image.tag $not_text" \
+  "${standalone[@]}" -f "$work/whole-tag.yaml"
+
+refused "standalone with a tag that --set reads as a number: refused, naming --set-string" \
+  "postgresql.standalone.image.tag $not_text" \
+  "${standalone[@]}" --set postgresql.standalone.image.tag=18
+
+printf 'postgresql:\n  standalone:\n    image:\n      tag: "18.10"\n' > "$work/quoted-tag.yaml"
+render "${standalone[@]}" -f "$work/quoted-tag.yaml"
+expect_line standalone.yaml '          image: docker.io/library/postgres:18.10'
+render "${standalone[@]}" --set-string postgresql.standalone.image.tag=18
+expect_line standalone.yaml '          image: docker.io/library/postgres:18'
+finish "standalone with a quoted tag, or one given with --set-string: used as it is written"
+
 refused "standalone with core.database.existingSecret: refused, it belongs to external" \
   'core.database.existingSecret is for postgresql.mode=external: with postgresql.mode=standalone the core uses the chart'"'"'s own PostgreSQL' \
   "${standalone[@]}" --set core.database.existingSecret=hd-database

@@ -86,7 +86,11 @@ The chart stops with a message for:
 - with `cloudnativepg` and with `standalone`, what names an external database:
   `core.database.existingSecret`, `sslMode` and `ca.existingSecret`, and
   `postgresql.external.host`, `name`, `user` and `password.existingSecret`;
-- with `standalone`, a `postgresql.standalone.image.tag` of another major version than 18;
+- with `standalone`, a `postgresql.standalone.image.tag` of another major version than 18, or
+  one that is a number rather than a string (quote it in a values file, or use `--set-string`:
+  YAML reads `18.10` as 18.1); and, on an upgrade, a `postgresql.standalone.secretKey` that the
+  Secret with the generated password does not have, since the chart would generate another
+  password under it;
 - with `external`, both forms together, the separate values in part, and neither form;
 - a `dumps.enabled` that is not `true`, `false` or empty.
 
@@ -183,6 +187,13 @@ user `hd`. It is not the default yet.
   dumps reach the database's port.
 - **Dumps.** The [database dumps](#database-dumps) are on unless `dumps.enabled=false`: the
   chart's own PostgreSQL has no other backup.
+- **`helm install --wait`.** Helm's `--wait` (and `--atomic`, which implies it) waits for every
+  PersistentVolumeClaim of the release to be bound. With a StorageClass that binds a volume only
+  when a pod first uses it (`volumeBindingMode: WaitForFirstConsumer`), the claim of the dumps
+  stays pending until the first dump runs, and `--wait` runs into its timeout though the help
+  desk is up. Install without `--wait` and follow the core with `kubectl -n helpdesk rollout
+  status deployment/hd-core`, or give the dumps a claim that is already bound
+  (`dumps.storage.existingClaim`). The same holds in the other modes with `dumps.enabled=true`.
 
 ### HTTPS
 
@@ -726,7 +737,12 @@ To restore, stop the core, restore the chosen dump into the database with `pg_re
 that mounts the dumps volume (for example `pg_restore --clean --if-exists --no-owner
 --dbname="$DATABASE_URL" /dumps/hd-<date>.dump`; with the chart's own PostgreSQL or an external
 database given as separate values the job has `PGHOST`, `PGUSER` and the others instead of a URL:
-`--dbname="$PGDATABASE"`), then start the core again:
+`--dbname="$PGDATABASE"`), then start the core again. With the chart's own PostgreSQL and
+`networkPolicy.enabled`, only the pods of the core and of the dumps reach the database: give the
+restore pod the labels of the dumps (`app.kubernetes.io/name: hd`, `app.kubernetes.io/instance:
+<release>` and `app.kubernetes.io/component: dumps`), or it gets no answer. With
+`dumps.enabled=false` the policy admits no pod of the dumps at all: turn the dumps on, or the
+NetworkPolicies off, for the restore.
 
 ```sh
 kubectl -n helpdesk scale deploy/hd-core --replicas=0

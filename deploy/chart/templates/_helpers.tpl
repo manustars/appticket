@@ -85,7 +85,11 @@ values the chart refuses stop it with the same message whichever template render
 {{- if or $external.host $external.name $external.user $password }}
 {{- fail "postgresql.external is for postgresql.mode=external, and postgresql.mode is standalone" }}
 {{- end }}
-{{- $tag := $pg.standalone.image.tag | toString }}
+{{- $tag := $pg.standalone.image.tag }}
+{{- /* A number would lose its form: YAML reads 18.10 as 18.1. */}}
+{{- if not (kindIs "string" $tag) }}
+{{- fail "postgresql.standalone.image.tag must be a string: quote it in a values file (\"18.8\"), or give it with --set-string" }}
+{{- end }}
 {{- if not (regexMatch "^18([.@-]|$)" $tag) }}
 {{- fail (printf "postgresql.standalone.image.tag is %q: the chart runs PostgreSQL 18, and a tag must be of that major version" $tag) }}
 {{- end }}
