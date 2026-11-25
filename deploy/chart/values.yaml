@@ -1,5 +1,6 @@
 # Values of the help desk chart. Secrets are never values here: the chart refers to Kubernetes
-# Secrets by name, which you create before installing (see docs/deploy.md).
+# Secrets by name, which you create before installing (see docs/deploy.md). The one Secret the
+# chart makes itself is the generated password of its own PostgreSQL (postgresql.standalone).
 
 nameOverride: ""
 fullnameOverride: ""
@@ -267,6 +268,8 @@ postgresql:
     # Secret afterwards does not change the password in the database.
     existingSecret: ""
     secretKey: password
+    # The volume as it is first created: a StatefulSet's volume claim cannot change afterwards,
+    # and an upgrade that changes the size or the class here is refused by Kubernetes.
     storage:
       size: 5Gi
       # Empty: the cluster's default StorageClass.
