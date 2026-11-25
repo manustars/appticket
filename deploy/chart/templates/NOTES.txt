@@ -43,6 +43,13 @@ The core verifies the certificate of a database on another host (verify-full) un
 core.database.sslMode{{ if eq $databaseSource "external-url" }} or the URL's sslmode{{ end }} says otherwise; a core that cannot verify it does not
 start and logs why (docs/deploy.md, "TLS to the database").
 {{- end }}
+
+Upgrading from 0.3: the default postgresql.mode is standalone since 0.4.0. A release that runs
+on the CloudNativePG cluster, the default until then, sets postgresql.mode=cloudnativepg from now
+on. The chart refuses an install or an upgrade whose mode is not that of the database it finds
+in the cluster, so that the core never starts on another, empty database. A tool that renders
+the chart without reading the cluster, such as Argo CD, gets no such check:
+set postgresql.mode explicitly there (docs/deploy.md, "Upgrading from 0.3").
 {{- if not .Values.assistant.enabled }}
 
 To add the Assistant, register it first:

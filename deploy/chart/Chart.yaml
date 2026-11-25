@@ -2,9 +2,10 @@ apiVersion: v2
 name: hd
 description: >-
   The help desk: the core (API, agents' UI, mail) and, optionally, the Assistant add-on, on a
-  PostgreSQL cluster managed by CloudNativePG, a PostgreSQL the chart runs itself, or a database
-  of your own.
+  PostgreSQL the chart runs itself (the default), a PostgreSQL cluster managed by CloudNativePG,
+  or a database of your own. Upgrading from 0.3 with the CloudNativePG cluster: set
+  postgresql.mode=cloudnativepg.
 type: application
-version: 0.3.1
-appVersion: "0.3.1"
+version: 0.4.0
+appVersion: "0.4.0"
 kubeVersion: ">=1.27.0-0"

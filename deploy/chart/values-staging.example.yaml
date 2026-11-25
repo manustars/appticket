@@ -32,6 +32,9 @@ ingress:
     secretName: ""
 
 postgresql:
+  # A cluster through the CloudNativePG operator, which the lab cluster runs. Said here because
+  # the chart's default is standalone (its own PostgreSQL, with no operator), and because the
+  # chart refuses any other mode once this cluster exists.
   mode: cloudnativepg
   instances: 1
   storage:

@@ -257,17 +257,14 @@ lint() {
 # cloudnativepg
 # ---------------------------------------------------------------------------------------------
 
-render
-expect_cluster_database
-expect_kind ScheduledBackup 0
-expect_kind CronJob 0
-finish "default values: the CloudNativePG cluster, verified against its own authority"
-
 cluster=(--set postgresql.mode=cloudnativepg)
 
 render "${cluster[@]}"
 expect_cluster_database
-finish "postgresql.mode=cloudnativepg: the same as the default"
+expect_kind ScheduledBackup 0
+expect_kind CronJob 0
+expect_kind StatefulSet 0
+finish "postgresql.mode=cloudnativepg: the CloudNativePG cluster, verified against its own authority"
 
 refused "cloudnativepg with core.database.existingSecret: refused, it belongs to external" \
   'core.database.existingSecret is for postgresql.mode=external: with postgresql.mode=cloudnativepg the core uses the Secret of the CloudNativePG cluster' \
@@ -422,6 +419,14 @@ expect_standalone_postgresql() {
   expect_line standalone.yaml '    whenDeleted: Retain'
 }
 
+# The default (ADR 0009): an install that needs nothing but the chart.
+render
+expect_standalone_database hd-postgresql password
+expect_standalone_postgresql hd-postgresql password
+expect_kind Secret 1
+expect_kind CronJob 1
+finish "default values: standalone, the chart's own PostgreSQL with its dumps, and no cluster"
+
 render "${standalone[@]}"
 expect_standalone_postgresql hd-postgresql password
 expect_kind Secret 1
@@ -544,6 +549,21 @@ expect_kind NetworkPolicy 1
 expect_no_text networkpolicy.yaml 'postgresql'
 finish "no NetworkPolicy for the database without networkPolicy.enabled, or in another mode"
 
+# expect_upgrade_notes: what whoever upgrades from 0.3 has to set, and what the guard does.
+expect_upgrade_notes() {
+  expect_note 'Upgrading from 0.3: the default postgresql.mode is standalone since 0.4.0.'
+  expect_note 'sets postgresql.mode=cloudnativepg'
+  expect_note 'refuses an install or an upgrade whose mode is not that of the database it finds'
+  expect_note 'such as Argo CD'
+  expect_note 'set postgresql.mode explicitly'
+}
+
+notes
+expect_note 'The database is the chart'"'"'s own PostgreSQL hd-postgresql (postgresql.mode=standalone)'
+expect_note 'Database dumps run on "30 2 * * *", keeping 7.'
+expect_upgrade_notes
+finish "the notes of the default values: those of standalone, and what to set upgrading from 0.3"
+
 notes "${standalone[@]}"
 expect_note 'The database is the chart'"'"'s own PostgreSQL hd-postgresql (postgresql.mode=standalone)'
 expect_note 'without TLS'
@@ -551,8 +571,8 @@ expect_note 'data-hd-postgresql-0'
 expect_note 'Its password was generated into the Secret hd-postgresql'
 expect_note 'postgresql.standalone.existingSecret'
 expect_note 'Database dumps run on "30 2 * * *", keeping 7.'
-expect_no_note 'external'
-expect_no_note 'CloudNativePG'
+expect_no_note 'The database is an external one'
+expect_no_note 'The database is the CloudNativePG cluster'
 expect_no_note 'do not verify its certificate'
 finish "the notes of standalone: its own PostgreSQL, no TLS, what uninstalling keeps, the dumps"
 
@@ -566,11 +586,13 @@ finish "the notes of standalone with existingSecret and no dumps: the named Secr
 notes "${cluster[@]}"
 expect_note 'The database is the CloudNativePG cluster hd-db (postgresql.mode=cloudnativepg)'
 expect_no_note 'Database dumps run'
+expect_upgrade_notes
 notes "${url_form[@]}" --set dumps.enabled=true
 expect_note 'The database is an external one (postgresql.mode=external), given as a Secret holding its URL.'
 expect_note 'Database dumps run'
 expect_note 'do not verify its certificate'
-finish "the notes of cloudnativepg and external: as before"
+expect_upgrade_notes
+finish "the notes of cloudnativepg and external: their database, and what to set upgrading from 0.3"
 
 render "${cluster[@]}"
 expect_kind StatefulSet 0
@@ -687,6 +709,32 @@ lint "helm lint: standalone with existingSecret" "${standalone[@]}" \
   --set postgresql.standalone.existingSecret=hd-own-password --set dumps.enabled=false
 
 # ---------------------------------------------------------------------------------------------
+# The upgrade guard, as far as it shows without a cluster: it finds nothing, and refuses nothing
+# (scripts/test-upgrade-guard.sh installs and upgrades in a cluster, where it does)
+# ---------------------------------------------------------------------------------------------
+
+# A cluster that knows CloudNativePG's kinds: the guard asks it for the release's cluster, and a
+# render that reads no cluster gets no answer.
+cloudnativepg_known=(--api-versions postgresql.cnpg.io/v1 --api-versions postgresql.cnpg.io/v1/Cluster)
+
+render "${cloudnativepg_known[@]}"
+expect_standalone_database hd-postgresql password
+expect_standalone_postgresql hd-postgresql password
+render "${cloudnativepg_known[@]}" "${url_form[@]}"
+expect_no_cluster
+expect_kind StatefulSet 0
+render "${cloudnativepg_known[@]}" "${cluster[@]}"
+expect_cluster_database
+finish "the guard without a cluster to read: every mode renders, CloudNativePG's kinds known or not"
+
+render
+expect_text core.yaml 'kind: Deployment'
+if grep -q 'templates/guard.yaml' "$work/all.yaml"; then
+  problem "guard.yaml rendered something"
+fi
+finish "the guard renders nothing of its own"
+
+# ---------------------------------------------------------------------------------------------
 # Modes the chart does not have
 # ---------------------------------------------------------------------------------------------
 
@@ -706,9 +754,10 @@ refused "postgresql.enabled=true: refused, naming postgresql.mode=cloudnativepg"
   'postgresql.enabled is no longer a value: set postgresql.mode=cloudnativepg and remove postgresql.enabled' \
   --set postgresql.enabled=true
 
-# Before, the core then used the Secret's database, not the cluster the chart still created.
+# Before, the core then used the Secret's database, not the cluster the chart still created, which
+# the upgrade guard finds.
 refused "postgresql.enabled=true with core.database.existingSecret: refused, naming postgresql.mode=external" \
-  'postgresql.enabled is no longer a value: set postgresql.mode=external and remove postgresql.enabled (with core.database.existingSecret the core uses that database; the CloudNativePG cluster then leaves the release, and stays in place only with postgresql.keepOnUninstall)' \
+  'postgresql.enabled is no longer a value: set postgresql.mode=external and remove postgresql.enabled (with core.database.existingSecret the core uses that database, not the CloudNativePG cluster hd-db the chart made beside it: delete that cluster first, since the chart refuses postgresql.mode=external while it exists)' \
   --set postgresql.enabled=true --set core.database.existingSecret=hd-database
 
 refused "postgresql.enabled=false: refused, naming postgresql.mode=external" \

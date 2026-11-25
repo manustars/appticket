@@ -1,0 +1,5 @@
+{{- /*
+The upgrade guard: renders nothing, and stops the chart when postgresql.mode is not the mode of
+the database the release already has in the cluster (see hd.databaseGuard).
+*/ -}}
+{{- include "hd.databaseGuard" . -}}
