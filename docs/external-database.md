@@ -5,7 +5,7 @@ brings (the external database of
 [ADR 0009](adr/0009-two-ways-to-install-three-ways-to-get-the-database.md)). This page holds
 what applies to every installation: what the DBA creates, how the core connects, how the connection is
 protected, and how secrets are read from files. The installation guides say where each setting
-goes: [Deploying to Kubernetes](deploy.md) for the Helm chart.
+goes: [Installing on Kubernetes](kubernetes.md) for the Helm chart.
 
 ## What the DBA creates
 

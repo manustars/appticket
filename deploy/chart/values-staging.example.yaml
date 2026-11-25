@@ -14,7 +14,7 @@ core:
     pollSeconds: 5
   signIn:
     # The addresses the ingress controller connects from, so that failed sign-ins count per
-    # address rather than all under the controller (docs/deploy.md, "Failed sign-ins").
+    # address rather than all under the controller (docs/kubernetes.md, "Failed sign-ins").
     trustedProxies:
       - 10.0.0.0/8                         # your cluster's pod network
 
