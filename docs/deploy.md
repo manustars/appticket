@@ -6,7 +6,7 @@ The help desk ships as two container images and a Helm chart:
 |---|---|
 | `ghcr.io/manustars/hd-core` | The core: API, the agents' UI (served by the core itself), mail reading and sending, add-on events. Runs `hd serve`; any other `hd` command runs the same way. |
 | `ghcr.io/manustars/hd-assistant` | The Assistant add-on (optional). |
-| `oci://ghcr.io/manustars/charts/hd` | The Helm chart `hd` (its source is `deploy/chart`): both components, an optional PostgreSQL cluster through CloudNativePG, optional backups, an optional test mail server for staging. |
+| `oci://ghcr.io/manustars/charts/hd` | The Helm chart `hd` (its source is `deploy/chart`): both components, the database in one of three modes (a PostgreSQL cluster through CloudNativePG, a PostgreSQL the chart runs itself, or one of your own), backups, an optional test mail server for staging. |
 
 The images are published by `.github/workflows/release.yml` when a version tag (`v1.2.3`) is
 pushed: tagged with the version and, for a final version, `latest`. Both are built from
@@ -18,7 +18,10 @@ the version in `deploy/chart/Chart.yaml`.
 ## Prerequisites
 
 - Kubernetes 1.27 or later, Helm 3.
-- The CloudNativePG operator, unless you bring your own PostgreSQL (`postgresql.mode=external`).
+- The CloudNativePG operator for `postgresql.mode=cloudnativepg` (the default). Not when the chart
+  runs PostgreSQL itself (`postgresql.mode=standalone`, see
+  [The chart's own PostgreSQL](#the-charts-own-postgresql)), which needs only a StorageClass, or
+  when you bring your own PostgreSQL (`postgresql.mode=external`).
 - For your own PostgreSQL, a database prepared as
   [Running on a PostgreSQL database of your own](external-database.md#what-the-dba-creates) says:
   PostgreSQL 16 or later, a database dedicated to the help desk and owned by the core's user.
@@ -40,6 +43,7 @@ The chart never holds secrets; it refers to Secrets you create in the release's 
 |---|---|---|
 | database | `uri`: `postgres://user:password@host:5432/db` | only with `postgresql.mode=external`, for a database given as a URL; set `core.database.existingSecret` (and `secretKey`) |
 | database password | `password` | only with `postgresql.mode=external`, for a database given as separate values; set `postgresql.external.password.existingSecret` (and `secretKey`) |
+| standalone password | `password` | only with `postgresql.mode=standalone` under a tool that renders the chart without reading the cluster, such as Argo CD; set `postgresql.standalone.existingSecret` (and `secretKey`); otherwise the chart generates it (see [The chart's own PostgreSQL](#the-charts-own-postgresql)) |
 | mail | `imap-url`, `smtp-url` | real mail: `core.mail.imap.existingSecret`, `core.mail.smtp.existingSecret` (may be the same Secret) |
 | mail CA | `ca.crt` | mail servers with a private certificate authority: `core.mail.ca.existingSecret` |
 | database CA | `ca.crt` | an external database whose certificate comes from a private authority: `core.database.ca.existingSecret` (see [TLS to the database](#tls-to-the-database)) |
@@ -69,17 +73,24 @@ a connection string, or the separate parameters, from `postgresql.external.host`
 every secret of the core and of the Assistant can also be read from a file instead of a variable
 ([Secrets from files](external-database.md#secrets-from-files)).
 
+With `postgresql.mode=standalone` nothing is needed either, unless a tool renders the chart
+without reading the cluster: the chart generates the password into the Secret `<name>-postgresql`
+([The chart's own PostgreSQL](#the-charts-own-postgresql)).
+
 The chart stops with a message for:
 
 - `postgresql.enabled`, which `postgresql.mode` replaces: `false` was `external`, and so was `true`
   beside `core.database.existingSecret`; `true` alone was `cloudnativepg`;
-- with `cloudnativepg`, what names an external database: `core.database.existingSecret`,
-  `sslMode` and `ca.existingSecret`, and `postgresql.external.host`, `name`, `user` and
-  `password.existingSecret`;
-- with `external`, both forms together, the separate values in part, and neither form.
+- with `cloudnativepg` and with `standalone`, what names an external database:
+  `core.database.existingSecret`, `sslMode` and `ca.existingSecret`, and
+  `postgresql.external.host`, `name`, `user` and `password.existingSecret`;
+- with `standalone`, a `postgresql.standalone.image.tag` of another major version than 18;
+- with `external`, both forms together, the separate values in part, and neither form;
+- a `dumps.enabled` that is not `true`, `false` or empty.
 
-It ignores, without a message: with `external`, the cluster's values (`postgresql.instances`,
-`storage`, `backup` and the others); beside a URL Secret and with `cloudnativepg`,
+It ignores, without a message: the values of the modes not chosen (with `external` and
+`standalone` the cluster's `postgresql.instances`, `storage`, `backup` and the others; without
+`standalone`, `postgresql.standalone`); beside a URL Secret and without `external`,
 `postgresql.external.port` and `password.secretKey`; with the separate values,
 `core.database.secretKey`.
 
@@ -104,7 +115,7 @@ registry, an image or the chart, starts out private: make it public in the packa
 and for the images create a registry Secret and list it in `imagePullSecrets`.
 
 The examples on this page use the release name `hd` and the namespace `helpdesk`: the chart
-names its objects after the release (`hd-core`, `hd-assistant`, `hd-db`), and a release whose name
+names its objects after the release (`hd-core`, `hd-assistant`, `hd-db`, `hd-postgresql`), and a release whose name
 does not contain `hd` gets `<release>-hd-…` instead.
 
 `deploy/chart/values.yaml` documents every value (`helm show values
@@ -121,18 +132,55 @@ The most common settings:
 | `ingress.*` | Host, class, annotations and TLS (see [HTTPS](#https)). |
 | `core.signIn.*` | Failed sign-in limits and trusted proxies (see [Failed sign-ins](#failed-sign-ins)). |
 | `dumps.*` | Scheduled database dumps to a volume (see [Backups](#backups)). |
-| `postgresql.mode` | Where the database comes from: `cloudnativepg` (the default) or `external`. |
+| `postgresql.mode` | Where the database comes from: `cloudnativepg` (the default), `standalone` or `external`. |
+| `postgresql.standalone.*` | The chart's own PostgreSQL: storage size and class, its password's Secret (see [The chart's own PostgreSQL](#the-charts-own-postgresql)). |
 | `postgresql.external.*` | An external database as separate values. |
 | `postgresql.*` | The CloudNativePG cluster's instances, storage size and class, backups. |
 | `assistant.*` | See [The Assistant](#the-assistant). |
 | `greenmail.enabled` | The staging test mail server. |
-| `networkPolicy.enabled` | Ingress NetworkPolicies; list the ingress controller's namespace in `networkPolicy.coreFrom`. |
+| `networkPolicy.enabled` | Ingress NetworkPolicies; list the ingress controller's namespace in `networkPolicy.coreFrom`. With `standalone`, only the core and the dumps reach the database. |
 
-On a first install the core waits and restarts until CloudNativePG has created the database and
-its Secret, usually within a minute or two. The core applies database migrations when it starts. It runs as one replica and is replaced, not
+On a first install the core waits and restarts until the database is there (until CloudNativePG
+has created it and its Secret, or the chart's own PostgreSQL has started), usually within a
+minute or two. The core applies database migrations when it starts. It runs as one replica and is replaced, not
 rolled, on upgrade: it reads the mailbox and sends the outbox, and two cores at once would do both
 twice. Its readiness follows `/api/health` (unready while the database is unreachable); liveness
 only checks that the port answers.
+
+### The chart's own PostgreSQL
+
+With `postgresql.mode=standalone` the chart runs PostgreSQL itself, with no operator: a
+StatefulSet of the official `postgres` image, one instance, with the database `hd` owned by the
+user `hd`. It is not the default yet.
+
+- **Version.** The chart fixes the major version, 18, and refuses a
+  `postgresql.standalone.image.tag` of another one; the minor version follows the chart, so that
+  upgrading the chart brings PostgreSQL's fixes.
+- **Volume.** `postgresql.standalone.storage.size` (5Gi) and `storageClass` describe the volume
+  when it is first created; a later upgrade cannot change them. The chart never deletes the
+  volume: `helm uninstall` leaves its claim, `data-hd-postgresql-0`, in place.
+- **Password.** On the first install the chart generates the password of the user `hd` into the
+  Secret `hd-postgresql`; upgrades find that Secret and keep what it holds, and `helm uninstall`
+  leaves it beside the volume. PostgreSQL takes the password when it first creates its data
+  directory: changing the Secret afterwards does not change the password in the database.
+- **GitOps tools.** A tool that renders the chart without reading the cluster, such as Argo CD
+  and anything else built on `helm template`, cannot find the Secret the chart made, and would
+  generate another password at every sync, which the database does not accept. There, create a
+  Secret of your own before installing and name it in `postgresql.standalone.existingSecret`
+  (its key in `secretKey`, `password` by default); the chart then generates nothing:
+
+  ```sh
+  kubectl -n helpdesk create secret generic hd-postgresql-password \
+    --from-literal=password='PASSWORD'
+  ```
+
+- **No TLS inside the cluster.** The core reaches the database by its Service without TLS, and
+  the chart sets that explicitly (`HD_DATABASE_SSLMODE=disable`), so that the core's log names
+  the choice in a warning at every start. `core.database.sslMode` and `core.database.ca` are for
+  an external database and refused here. With `networkPolicy.enabled`, only the core and the
+  dumps reach the database's port.
+- **Dumps.** The [database dumps](#database-dumps) are on unless `dumps.enabled=false`: the
+  chart's own PostgreSQL has no other backup.
 
 ### HTTPS
 
@@ -152,7 +200,9 @@ The core reaches a database on another host over TLS and verifies its certificat
 (`verify-full`) unless told otherwise. [TLS](external-database.md#tls) in the guide to running on
 your own database gives the modes, the defaults, the warning a weaker mode logs and what stops the
 core. The chart sets its two variables from two values, which are for an external database
-(`postgresql.mode=external`, in either form) only and refused with the CloudNativePG cluster:
+(`postgresql.mode=external`, in either form) only and refused with the CloudNativePG cluster and
+with the chart's own PostgreSQL, which is reached without TLS
+([The chart's own PostgreSQL](#the-charts-own-postgresql)):
 
 - `core.database.sslMode`: `HD_DATABASE_SSLMODE`, for the separate values and for a URL without
   its own `sslmode`;
@@ -629,16 +679,24 @@ out, not for keeping anything.
 
 ## Backups
 
-Two independent kinds, both off by default.
+Two independent kinds: database dumps, in every database mode, and CloudNativePG's own backups,
+off by default.
 
 ### Database dumps
 
-With `dumps.enabled=true`, a CronJob runs `pg_dump` on `dumps.schedule` (five-field cron, the
+The dumps are on by default with the chart's own PostgreSQL (`postgresql.mode=standalone`),
+which has no other backup, and off by default in the other modes: `dumps.enabled`, left empty,
+means that, and `true` or `false` say it explicitly.
+
+When they are on, a CronJob runs `pg_dump` on `dumps.schedule` (five-field cron, the
 cluster's time zone; default every day at 02:30). It writes a compressed dump in PostgreSQL's custom
 format to a volume, and keeps the latest `dumps.keep` (default 7). It needs no object storage and
-works with the CloudNativePG cluster or an external database; the volume (`dumps.storage.size`,
+works in every database mode; the volume (`dumps.storage.size`,
 `storageClass`, or `existingClaim`) is kept on `helm uninstall`. Keep the job's image
 (`dumps.image.tag`) at the database's major version or newer.
+
+`pg_dump` reaches the chart's own PostgreSQL as the core does: inside the cluster, without TLS,
+with the password from its Secret.
 
 `pg_dump` reaches an external database, in either form, over TLS, but the job's image holds no
 public certificate authorities: it verifies the server's certificate only against
@@ -664,7 +722,9 @@ kubectl -n helpdesk logs job/hd-dump-now
 
 To restore, stop the core, restore the chosen dump into the database with `pg_restore` from a pod
 that mounts the dumps volume (for example `pg_restore --clean --if-exists --no-owner
---dbname="$DATABASE_URL" /dumps/hd-<date>.dump`), then start the core again:
+--dbname="$DATABASE_URL" /dumps/hd-<date>.dump`; with the chart's own PostgreSQL or an external
+database given as separate values the job has `PGHOST`, `PGUSER` and the others instead of a URL:
+`--dbname="$PGDATABASE"`), then start the core again:
 
 ```sh
 kubectl -n helpdesk scale deploy/hd-core --replicas=0
@@ -704,6 +764,21 @@ Restoring means creating a new cluster that bootstraps from the backup (CloudNat
 the same release name takes it back. To delete the data too, delete the cluster by hand
 (`kubectl -n helpdesk delete cluster hd-db`). Changing `postgresql.mode` to `external` in an
 upgrade also leaves the kept cluster in place.
+
+With the chart's own PostgreSQL (`postgresql.mode=standalone`) `helm uninstall` leaves the
+database's volume claim (`data-hd-postgresql-0`) and the Secret with the generated password
+(`hd-postgresql`): the data directory accepts no other password, and installing again with the
+same release name, in the same namespace, takes both back. To delete the data too, delete both by
+hand:
+
+```sh
+kubectl -n helpdesk delete persistentvolumeclaim data-hd-postgresql-0
+kubectl -n helpdesk delete secret hd-postgresql
+```
+
+Whether the volume itself goes with its claim is up to the StorageClass's reclaim policy. Do not
+delete the Secret alone: a new install would generate another password, which the data kept on
+the volume does not accept. The volume of the dumps (`hd-dumps`) is kept in every mode.
 
 ## Upgrades
 
