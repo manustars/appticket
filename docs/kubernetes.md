@@ -457,6 +457,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: pg-restore
+          # The image of the dumps (dumps.image), at the database's major version or newer.
           image: docker.io/library/postgres:18.7-trixie
           env:
             - name: DUMP
@@ -539,12 +540,12 @@ point-in-time recovery. Turn them on with `postgresql.backup.enabled=true` and o
   `credentialsSecret` and `retentionPolicy` (for example `30d`).
 
 The schedule has six fields, seconds first: `"0 0 2 * * *"` is every day at 02:00. An on-demand
-backup can be taken with a CloudNativePG `Backup` resource for the cluster `<release>-db`.
+backup can be taken with a CloudNativePG `Backup` resource for the cluster `<name>-db`.
 Restoring means creating a new cluster that bootstraps from the backup (CloudNativePG's
 `bootstrap.recovery`), then pointing the core at it with `postgresql.mode=external`,
 `core.database.existingSecret` (its `<cluster>-app` Secret) and, for its authority,
 `core.database.ca.existingSecret` (`<cluster>-ca`). The chart refuses `external` while the
-release's own cluster `<release>-db` exists ([The upgrade guard](#the-upgrade-guard)): once the
+release's own cluster `<name>-db` exists ([The upgrade guard](#the-upgrade-guard)): once the
 restored cluster holds what you need, delete that one (`kubectl -n helpdesk delete cluster
 hd-db`), then upgrade.
 
@@ -618,6 +619,7 @@ from a private authority whose certificate is in `database-ca.crt`.
              type: RuntimeDefault
          containers:
            - name: pg-restore
+             # The image of the dumps (dumps.image), at the database's major version or newer.
              image: docker.io/library/postgres:18.7-trixie
              env:
                - name: DUMP
