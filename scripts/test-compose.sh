@@ -36,7 +36,27 @@
 #      added; it and `docker compose run --rm dumps` dump the test's own PostgreSQL of step 4,
 #      and a stop ends the schedule at once; no one is shown that database's password. Without
 #      HD_DATABASE_SSLMODE the dumps require TLS, which that PostgreSQL does not serve, and warn
-#      that they would not verify the server's certificate.
+#      that they would not verify the server's certificate;
+#   8. without the profile https, behind nginx started by the test on the host's network, as a
+#      proxy on the host is, with the configuration of examples/nginx.conf (its ports changed)
+#      and a certificate of the test's own for the host name and at the paths it names. The
+#      install's network is HD_SUBNET, or its default without it, and the core trusts it as its
+#      proxies. An install made before HD_SUBNET is moved to it by `down` and `up -d` (whether
+#      `up -d` alone does is noted): the core then sees the connections to its published port
+#      come from the gateway. An agent signs in over HTTPS through nginx and is answered with
+#      the session cookie, which a request needing it then takes. A failed sign-in counts under
+#      the address nginx saw it from, not the one the client made up, also with
+#      HD_TRUSTED_PROXIES set to the gateway in .env, and under nginx's address with it set
+#      empty. Caddy is not started;
+#   9. with the profile https and the certificate internal: Caddy's root certificate is read as
+#      reverse-proxy.md gives it, /api/health answers over HTTPS through Caddy verified against
+#      it, plain HTTP is sent to HTTPS, and an agent signs in through Caddy, a failed sign-in
+#      counting under the address Caddy saw it from, the gateway;
+#  10. with the certificate files: a certificate the test makes, in secrets/, is the one Caddy
+#      serves;
+#  11. with the certificate acme: Caddy turns the install's Caddyfile into a configuration that
+#      asks Let's Encrypt for the host of HD_PUBLIC_URL, without starting (`caddy adapt`), so
+#      that Let's Encrypt is never asked.
 #
 # The install the test runs is a copy of the Compose directory in a directory of the test's own,
 # where it writes the secrets as secrets/README.md says, with the permissions it gives. Its
@@ -51,15 +71,22 @@
 # local engine holds, as the install names it (HD_VERSION), such as images built with
 #   docker build -f deploy/Dockerfile --target core      -t ghcr.io/manustars/hd-core:VERSION .
 #   docker build -f deploy/Dockerfile --target assistant -t ghcr.io/manustars/hd-assistant:VERSION .
-# The test never pulls them; it pulls PostgreSQL, GreenMail and BusyBox. Needs docker (or podman)
-# with Compose, curl, and GNU find and stat (as on Linux and in Git Bash). It prints a line per
-# step and exits with 1 at the first check that fails, after printing the containers' logs; it
-# removes what it started either way.
+# The test never pulls them; it pulls PostgreSQL, GreenMail, BusyBox, nginx and Caddy. Needs
+# docker (or podman) with Compose, curl, openssl, and GNU find and stat (as on Linux and in Git
+# Bash); its sed takes only what POSIX sed does. It prints a line per step and exits with 1 at the first check that fails, after printing
+# the containers' logs; it removes what it started either way.
 #
 # Environment: COMPOSE_DIR (the Compose directory, deploy/compose; such as an unpacked copy of
 # it), CONTAINER_ENGINE (docker by default; podman), COMPOSE (the Compose command,
 # "$CONTAINER_ENGINE compose"), PROJECT (the Compose project, hd-test-compose), PORT (a free
-# local port for the core, 55479; the two after it are the test mail server's).
+# local port for the core, 55479; the two after it are the test mail server's), PROXY_PORT (the
+# first of four free local ports, the three after PORT's by default: nginx's HTTP and HTTPS, then
+# Caddy's), SUBNET (the install's network, a /24: 172.16.N.0/24 by default, N being the core's
+# port modulo 256).
+#
+# nginx runs on the host's network, which Docker and Podman on Linux have. With Podman (or Docker)
+# on Windows or macOS that network is the one of the engine's machine, and the test reaches
+# nginx's ports only where the machine forwards its loopback ports to the host's, as WSL does.
 set -euo pipefail
 
 version=${1:?usage: test-compose.sh VERSION}
@@ -72,6 +99,20 @@ port=${PORT:-55479}
 # The test mail server's ports on the host, for sending it messages: the two after the core's.
 smtp_port=$((port + 1))
 imap_port=$((port + 2))
+# The proxies' ports on the host: nginx's for HTTP and HTTPS, then Caddy's.
+proxy_port=${PROXY_PORT:-$((port + 3))}
+nginx_http_port=$proxy_port
+nginx_https_port=$((proxy_port + 1))
+caddy_http_port=$((proxy_port + 2))
+caddy_https_port=$((proxy_port + 3))
+# The install's network, one of this run's own so that runs on one engine do not collide: a /24,
+# whose gateway is the first address.
+subnet=${SUBNET:-172.16.$((port % 256)).0/24}
+if ! [[ $subnet =~ ^([0-9]{1,3}\.){3}0/24$ ]]; then
+  echo "SUBNET must be a /24, such as the default, not $subnet" >&2
+  exit 2
+fi
+gateway=${subnet%.0/24}.1
 
 # The environment would win over the test's settings: Compose takes a variable from it before
 # the file given with --env-file.
@@ -141,8 +182,15 @@ finish() {
     if [ "$status" -ne 0 ]; then
       diagnose
     fi
-    hd_compose --profile db --profile assistant --profile greenmail down -v --remove-orphans \
-      > /dev/null 2>&1 || true
+    hd_compose --profile db --profile assistant --profile greenmail --profile https down -v \
+      --remove-orphans > /dev/null 2>&1 || true
+  fi
+  if [ -n "${proxy_started:-}" ]; then
+    if [ "$status" -ne 0 ]; then
+      echo "---- the test's own nginx ----"
+      "$engine" logs --tail=50 "$proxy" || true
+    fi
+    "$engine" rm -f "$proxy" > /dev/null 2>&1 || true
   fi
   if [ -n "$external_started" ]; then
     if [ "$status" -ne 0 ]; then
@@ -254,6 +302,7 @@ settings() {
   setting HD_VERSION "$version"
   setting HD_PUBLIC_URL "http://127.0.0.1:$port"
   setting HD_HTTP_PORT "$port"
+  setting HD_SUBNET "$subnet"
 }
 
 # The service NAME of the configuration that `compose config` prints on standard input, with its
@@ -324,7 +373,7 @@ ok "secrets/ ships with its README and .gitignore alone"
 cp -R "$compose_dir/." "$install"
 chmod 700 "$secrets"
 settings
-setting COMPOSE_PROFILES db,greenmail,assistant
+setting COMPOSE_PROFILES db,greenmail,assistant,https
 for variable in $optional_secrets; do
   name_secret "$variable"
 done
@@ -371,7 +420,7 @@ ok "no secret is given as a variable, even one that .env sets"
 
 # Without the optional secrets named in .env, no service is told of them.
 settings
-setting COMPOSE_PROFILES db,greenmail,assistant
+setting COMPOSE_PROFILES db,greenmail,assistant,https
 hd_compose config > "$work/config.yaml"
 if grep -E "^      (${optional_secrets// /|})_FILE:" "$work/config.yaml"; then
   fail "an optional secret that .env does not name is given"
@@ -856,6 +905,380 @@ grep -qF "the server's certificate is not verified" "$work/dump.txt" \
 ok "without HD_DATABASE_SSLMODE the dumps require TLS, and warn that they do not verify it"
 hd_compose down -v
 ok "stopped"
+
+# ---------------------------------------------------------------------------------------------
+# Behind a reverse proxy (deploy/compose/reverse-proxy.md): steps 8 to 11.
+
+# The certificates the test makes for itself: an authority of its own, and a certificate it signs
+# for each host name, in $work/tls.
+tls="$work/tls"
+
+# Makes the authority, once: $tls/authority.pem.
+authority() {
+  [ -f "$tls/authority.pem" ] && return 0
+  mkdir -p "$tls"
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 \
+    -subj "/CN=The test authority of the help desk" \
+    -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign \
+    -keyout "$tls/authority.key" -out "$tls/authority.pem" 2> "$tls/openssl.txt" \
+    || fail "openssl made no authority: $(cat "$tls/openssl.txt")"
+}
+
+# Makes a certificate for the host NAME, signed by the authority: $tls/NAME.pem and NAME.key.
+certificate() {
+  local name=$1
+  authority
+  printf '%s\n' "subjectAltName=DNS:$name" "basicConstraints=CA:FALSE" \
+    "keyUsage=critical,digitalSignature" "extendedKeyUsage=serverAuth" > "$tls/$name.ext"
+  openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -subj "/CN=$name" \
+    -keyout "$tls/$name.key" -out "$tls/$name.csr" 2> "$tls/openssl.txt" \
+    || fail "openssl made no key for $name: $(cat "$tls/openssl.txt")"
+  openssl x509 -req -in "$tls/$name.csr" -CA "$tls/authority.pem" -CAkey "$tls/authority.key" \
+    -CAcreateserial -days 1 -extfile "$tls/$name.ext" -out "$tls/$name.pem" \
+    2> "$tls/openssl.txt" || fail "openssl made no certificate for $name: $(cat "$tls/openssl.txt")"
+}
+
+# The SHA-256 fingerprint of the certificate on standard input.
+fingerprint() {
+  openssl x509 -noout -fingerprint -sha256 | sed 's/.*=//'
+}
+
+# curl to the host NAME at PORT on this machine, over HTTPS, trusting only the authority whose
+# certificate is in the file AUTHORITY; the other arguments are curl's. Built on Schannel (curl
+# for Windows), curl would also ask for the revocation status that the test's certificates and
+# Caddy's own do not give, and refuse them.
+curl_tls=()
+if curl --version | grep -q Schannel; then
+  curl_tls=(--ssl-no-revoke)
+fi
+https() {
+  local name=$1 port=$2 authority=$3
+  shift 3
+  curl -sS "${curl_tls[@]}" --cacert "$authority" --resolve "$name:$port:127.0.0.1" "$@"
+}
+
+# Replaces TEXT with REPLACEMENT in FILE, and fails when FILE does not hold TEXT: the example
+# would no longer be the one that the test runs.
+replace() {
+  local file=$1 text=$2 replacement=$3 content
+  content=$(cat "$file")
+  [[ $content == *"$text"* ]] || fail "$(basename "$file") holds no '$text'"
+  printf '%s\n' "${content//"$text"/"$replacement"}" > "$file"
+}
+
+# Runs SQL in the bundled PostgreSQL, as the core's user.
+db_sql() {
+  # shellcheck disable=SC2016 # expanded inside the container
+  hd_compose exec -T db sh -c 'psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+    -v ON_ERROR_STOP=1 -tA -c "$1"' sh "$1"
+}
+
+# The address that the failed sign-in as ACCOUNT counted under, as the core keeps it.
+failure_address() {
+  db_sql "SELECT address FROM sign_in_failures WHERE account = '$1'"
+}
+
+# A sign-in as ACCOUNT with a wrong password, at BASE (the address of the help desk) with the
+# curl arguments that follow.
+fail_sign_in() {
+  local account=$1 base=$2 status
+  shift 2
+  status=$("$@" -o "$work/answer.txt" -w '%{http_code}' -H 'Content-Type: application/json' \
+    --data "{\"email\":\"$account\",\"password\":\"not the password at all\"}" \
+    "$base/api/session") || fail "the sign-in as $account did not reach the core"
+  [ "$status" = 401 ] || fail "the wrong password for $account was answered $status, not 401"
+}
+
+# The agent the test signs in as, made with `hd agent add` inside the core's container.
+agent_email=ines.varga@example.com
+add_agent() {
+  agent_password=$(password)
+  hd_compose exec -T core env HD_AGENT_PASSWORD="$agent_password" \
+    hd agent add "$agent_email" --name "Ines Varga" > /dev/null \
+    || fail "hd agent add failed"
+}
+
+# Signs the agent in at BASE with the curl arguments that follow, and expects the session cookie,
+# marked Secure and HttpOnly, and a request that needs it to be answered with the agent.
+sign_in_through() {
+  local base=$1 status
+  shift
+  rm -f "$work/cookies.txt"
+  status=$("$@" -o "$work/answer.txt" -D "$work/headers.txt" -c "$work/cookies.txt" \
+    -w '%{http_code}' -H 'Content-Type: application/json' \
+    --data "{\"email\":\"$agent_email\",\"password\":\"$agent_password\"}" \
+    "$base/api/session") || fail "the sign-in did not reach the core"
+  [ "$status" = 204 ] || fail "the sign-in was answered $status: $(cat "$work/headers.txt")"
+  grep -iE '^set-cookie: hd_session=' "$work/headers.txt" | grep -i 'secure' | grep -qi 'httponly' \
+    || fail "the sign-in set no Secure, HttpOnly session cookie: $(cat "$work/headers.txt")"
+  status=$("$@" -o "$work/answer.txt" -w '%{http_code}' "$base/api/session")
+  [ "$status" = 401 ] || fail "GET /api/session without the cookie was answered $status, not 401"
+  status=$("$@" -o "$work/session.json" -w '%{http_code}' -b "$work/cookies.txt" \
+    "$base/api/session")
+  [ "$status" = 200 ] \
+    || fail "GET /api/session with the cookie was answered $status: $(cat "$work/session.json")"
+  grep -qF "$agent_email" "$work/session.json" \
+    || fail "GET /api/session answered with another agent: $(cat "$work/session.json")"
+  ok "signed in at $base: the session cookie is set, and GET /api/session answers with the agent"
+}
+
+# The test's own nginx, on the host's network as a proxy installed on the host is.
+proxy="$project-proxy"
+
+# ---------------------------------------------------------------------------------------------
+step "8. Without the profile https: an agent signs in through nginx, a proxy on the host"
+# The addition to the install's file for the test's own PostgreSQL (steps 4 and 7) is not
+# wanted any more.
+rm -f "$work/external.yaml"
+fresh_secrets
+db_password_command "secrets/db_password written"
+settings
+setting COMPOSE_PROFILES db
+hd_compose config > "$work/config.yaml"
+service core < "$work/config.yaml" > "$work/core.yaml"
+given core.yaml HD_TRUSTED_PROXIES "$subnet"
+grep -qE "^ +- subnet: $subnet$" "$work/config.yaml" \
+  || fail "the install's network is not $subnet: $(cat "$work/config.yaml")"
+ok "the install's network is HD_SUBNET ($subnet), and the core trusts it as its proxies"
+# The same without HD_SUBNET, as the shipped settings leave it: the network's default subnet and
+# the core's default trusted proxies are one.
+grep -v '^HD_SUBNET=' "$work/.env" > "$work/.env.new"
+mv "$work/.env.new" "$work/.env"
+hd_compose config > "$work/config.yaml"
+default_subnet=$(sed -n 's/^ *- subnet: //p' "$work/config.yaml")
+service core < "$work/config.yaml" > "$work/core.yaml"
+[ -n "$default_subnet" ] || fail "the install's network has no subnet: $(cat "$work/config.yaml")"
+given core.yaml HD_TRUSTED_PROXIES "$default_subnet"
+ok "without HD_SUBNET the network is $default_subnet, which the core trusts as its proxies"
+
+# An install made before HD_SUBNET, whose compose.yaml had no networks: its network is the one
+# the engine chose. The new file must move the install to HD_SUBNET, with `down` and `up -d` as
+# reverse-proxy.md gives it, or the core would trust a network its proxy does not connect from.
+settings
+setting COMPOSE_PROFILES db
+cp "$install/compose.yaml" "$work/compose.yaml"
+awk '/^networks:/ { skip = 1; next } skip && /^[^ ]/ { skip = 0 } !skip { print }' \
+  "$work/compose.yaml" > "$install/compose.yaml"
+if grep -q "^networks:" "$install/compose.yaml"; then
+  fail "the install's file still names its network"
+fi
+hd_compose up -d
+health
+cp "$work/compose.yaml" "$install/compose.yaml"
+# Not what reverse-proxy.md says, only noted: whether `up -d` alone, which makes the network
+# anew, gives the containers back their service names on it (Podman gives them none).
+hd_compose up -d
+named=$(hd_compose exec -T db getent hosts db 2> /dev/null | awk '{ print $1 }') || true
+if [ "${named%.*}" = "${gateway%.*}" ]; then
+  echo "    note: up -d alone moved the install to HD_SUBNET, the name db included"
+else
+  echo "    note: after up -d alone the name db is '${named:-not found}', not in HD_SUBNET"
+fi
+hd_compose down
+hd_compose up -d
+health
+ok "the core answers on the port that .env sets (HD_HTTP_PORT=$port)"
+started=$(hd_compose ps -a --format '{{.Service}}')
+if grep -qx caddy <<< "$started"; then
+  fail "Caddy was started without the profile https"
+fi
+ok "Caddy was not started"
+add_agent
+
+# What the core sees of a connection to its published port, as a proxy on the host makes one.
+fail_sign_in direct@example.com "http://127.0.0.1:$port" curl -sS
+peer=$(failure_address direct@example.com)
+[ "$peer" = "$gateway" ] \
+  || fail "a connection to the core's published port comes from '$peer', not from $gateway"
+ok "the core sees connections to its published port come from $gateway, the gateway of" \
+  "HD_SUBNET, to which down and up -d moved the install made before HD_SUBNET"
+
+# The documented example, with the test's ports in place of 80, 443 and the core's 8080, and a
+# certificate of the test's for its host name at the paths it names: all read from the example,
+# so that the test runs whatever it holds.
+cp "$install/examples/nginx.conf" "$work/nginx.conf"
+replace "$work/nginx.conf" "listen 80;" "listen $nginx_http_port;"
+replace "$work/nginx.conf" "listen 443 ssl;" "listen $nginx_https_port ssl;"
+replace "$work/nginx.conf" "proxy_pass http://127.0.0.1:8080;" \
+  "proxy_pass http://127.0.0.1:$port;"
+# The first value of the nginx DIRECTIVE in the example.
+directive() {
+  awk -v name="$1" '$1 == name { sub(/;$/, "", $2); print $2; exit }' "$work/nginx.conf"
+}
+host=$(directive server_name)
+certificate_path=$(directive ssl_certificate)
+key_path=$(directive ssl_certificate_key)
+[ -n "$host" ] && [ -n "$certificate_path" ] && [ -n "$key_path" ] \
+  || fail "examples/nginx.conf names no server_name, ssl_certificate and ssl_certificate_key"
+certificate "$host"
+proxy_started=yes
+"$engine" run -d --name "$proxy" --network host \
+  -v "$work/nginx.conf:/etc/nginx/conf.d/default.conf:ro" \
+  -v "$tls/$host.pem:$certificate_path:ro" -v "$tls/$host.key:$key_path:ro" \
+  docker.io/library/nginx:1.30.8-alpine > /dev/null
+base="https://$host:$nginx_https_port"
+through_nginx=(https "$host" "$nginx_https_port" "$tls/authority.pem")
+status=""
+for _ in $(seq 30); do
+  status=$("${through_nginx[@]}" -o "$work/health.json" -w '%{http_code}' \
+    "$base/api/health" 2> "$work/curl.txt") && [ "$status" = 200 ] && break
+  sleep 1
+done
+[ "$status" = 200 ] || fail "/api/health through nginx answered '$status': $(cat "$work/curl.txt")"
+ok "/api/health answers over HTTPS through nginx, with the example's configuration for $host"
+sign_in_through "$base" "${through_nginx[@]}"
+
+# A failed sign-in through nginx, as ACCOUNT, with an address the client makes up, which only a
+# trusted proxy could vouch for: the address it counts under.
+through_nginx_address() {
+  fail_sign_in "$1" "$base" "${through_nginx[@]}" -H 'X-Forwarded-For: 203.0.113.7'
+  failure_address "$1"
+}
+address=$(through_nginx_address through-nginx@example.com)
+[ "$address" = 127.0.0.1 ] \
+  || fail "a sign-in through nginx counted under '$address', not under 127.0.0.1, nginx's client"
+ok "a failed sign-in through nginx counts under the address nginx saw it from (127.0.0.1)," \
+  "not under nginx's ($gateway) nor the one the client made up"
+
+# HD_TRUSTED_PROXIES set in .env: the gateway alone, then empty, which trusts no proxy. Only the
+# core is recreated.
+setting HD_TRUSTED_PROXIES "$gateway"
+hd_compose up -d
+health
+address=$(through_nginx_address trusting-the-gateway@example.com)
+[ "$address" = 127.0.0.1 ] \
+  || fail "with HD_TRUSTED_PROXIES=$gateway a sign-in through nginx counted under '$address'"
+ok "with HD_TRUSTED_PROXIES=$gateway in .env, it counts under 127.0.0.1 too"
+setting HD_TRUSTED_PROXIES ""
+hd_compose up -d
+health
+address=$(through_nginx_address trusting-none@example.com)
+[ "$address" = "$gateway" ] \
+  || fail "with HD_TRUSTED_PROXIES empty a sign-in through nginx counted under '$address'"
+ok "with HD_TRUSTED_PROXIES empty in .env, no proxy is trusted: it counts under nginx's" \
+  "address ($gateway)"
+"$engine" rm -f "$proxy" > /dev/null
+proxy_started=""
+hd_compose down -v
+ok "stopped"
+
+# The settings of the profile https, with the certificate MODE, for the host NAME on the test's
+# ports.
+https_settings() {
+  local mode=$1 name=$2
+  settings
+  setting COMPOSE_PROFILES db,https
+  setting HD_PUBLIC_URL "https://$name:$caddy_https_port"
+  setting HD_HTTPS_CERTIFICATE "$mode"
+  setting HD_CADDY_HTTP_PORT "$caddy_http_port"
+  setting HD_CADDY_HTTPS_PORT "$caddy_https_port"
+}
+
+# Waits up to a minute for /api/health to answer 200 over HTTPS through Caddy, at the host NAME,
+# trusting the authority in the file AUTHORITY.
+health_through_caddy() {
+  local name=$1 authority=$2 status=""
+  for _ in $(seq 60); do
+    status=$(https "$name" "$caddy_https_port" "$authority" -o "$work/health.json" \
+      -w '%{http_code}' "https://$name:$caddy_https_port/api/health" 2> "$work/curl.txt") \
+      && [ "$status" = 200 ] && break
+    sleep 1
+  done
+  [ "$status" = 200 ] \
+    || fail "/api/health through Caddy answered '$status': $(cat "$work/curl.txt")"
+}
+
+# ---------------------------------------------------------------------------------------------
+step "9. The profile https with the certificate internal: Caddy's own authority"
+fresh_secrets
+db_password_command "secrets/db_password written"
+https_settings internal helpdesk.test
+hd_compose up -d
+health
+# As reverse-proxy.md gives it, once Caddy has made its authority.
+root=""
+for _ in $(seq 30); do
+  if hd_compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt \
+    > "$work/caddy-root.crt" 2> /dev/null \
+    && grep -q 'BEGIN CERTIFICATE' "$work/caddy-root.crt"; then
+    root=yes
+    break
+  fi
+  sleep 1
+done
+[ -n "$root" ] || fail "Caddy's root certificate could not be read"
+ok "Caddy's root certificate read from its container"
+base="https://helpdesk.test:$caddy_https_port"
+health_through_caddy helpdesk.test "$work/caddy-root.crt"
+ok "/api/health answers over HTTPS through Caddy, verified against Caddy's root certificate"
+status=$(curl -sS -o "$work/answer.txt" -w '%{http_code} %{redirect_url}' \
+  --resolve "helpdesk.test:$caddy_http_port:127.0.0.1" "http://helpdesk.test:$caddy_http_port/")
+# To the HTTPS port only when it is 443: Caddy leaves the port it listens on out of the address.
+[ "$status" = "308 https://helpdesk.test/" ] || fail "plain HTTP to Caddy was answered '$status'"
+ok "plain HTTP to Caddy is sent to https://helpdesk.test/"
+add_agent
+through_caddy=(https helpdesk.test "$caddy_https_port" "$work/caddy-root.crt")
+sign_in_through "$base" "${through_caddy[@]}"
+fail_sign_in through-caddy@example.com "$base" "${through_caddy[@]}" \
+  -H 'X-Forwarded-For: 203.0.113.7'
+address=$(failure_address through-caddy@example.com)
+caddy_address=$("$engine" inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+  "$(hd_compose ps -q caddy)")
+# The test's curl reaches Caddy's published port from the gateway, as it reaches the core's.
+[ "$address" = "$gateway" ] \
+  || fail "a sign-in through Caddy counted under '$address', not under $gateway, Caddy's client"
+ok "a failed sign-in through Caddy counts under the address Caddy saw it from ($gateway)," \
+  "not under Caddy's ($caddy_address) nor the one the client made up"
+
+# ---------------------------------------------------------------------------------------------
+step "10. The same install with the certificate files: one of the test's own, in secrets/"
+certificate helpdesk.test
+secret tls_certificate "$(cat "$tls/helpdesk.test.pem")"
+secret tls_key "$(cat "$tls/helpdesk.test.key")"
+https_settings files helpdesk.test
+setting HD_SECRET_TLS_CERTIFICATE ./secrets/tls_certificate
+setting HD_SECRET_TLS_KEY ./secrets/tls_key
+hd_compose up -d
+health_through_caddy helpdesk.test "$tls/authority.pem"
+ok "/api/health answers over HTTPS through Caddy, verified against the test's authority"
+served=$(openssl s_client -connect "127.0.0.1:$caddy_https_port" -servername helpdesk.test \
+  < /dev/null 2> /dev/null | fingerprint)
+made=$(fingerprint < "$tls/helpdesk.test.pem")
+[ -n "$made" ] && [ "$served" = "$made" ] \
+  || fail "Caddy serves the certificate '$served', not the test's '$made'"
+ok "Caddy serves the test's certificate (SHA-256 $made)"
+hd_compose down -v
+ok "stopped, with its volumes removed"
+
+# ---------------------------------------------------------------------------------------------
+step "11. The certificate acme, read by Caddy without starting it: Let's Encrypt is not asked"
+settings
+setting COMPOSE_PROFILES https
+setting HD_PUBLIC_URL https://helpdesk.example.com
+setting HD_HTTPS_CERTIFICATE acme
+# Caddy only turns the install's Caddyfile, with the install's settings, into its configuration.
+hd_compose run --rm --no-deps -T caddy caddy adapt --config /etc/caddy/Caddyfile \
+  > "$work/caddy.json" 2> "$work/adapt.txt" \
+  || fail "caddy adapt refused the Caddyfile: $(cat "$work/adapt.txt")"
+# Each key and value as Caddy writes it, whatever the order of the keys around it.
+for expected in '"listen":[":443"]' '"host":["helpdesk.example.com"]' '"http_port":80' \
+  '"subjects":["helpdesk.example.com"]' '"dial":"core:8080"' '"protocols":["h1","h2"]'; do
+  grep -qF "$expected" "$work/caddy.json" \
+    || fail "Caddy's configuration holds no $expected: $(cat "$work/caddy.json")"
+done
+# The modules that issue certificates, and nothing else, have a "module" key here: ACME alone,
+# with no authority of its own ("ca"), so Let's Encrypt; no certificate is loaded from files.
+modules=$(grep -oE '"module":"[^"]*"' "$work/caddy.json" | LC_ALL=C sort -u | tr '\n' ' ')
+[ "$modules" = '"module":"acme" ' ] \
+  || fail "Caddy's certificates come from $modules, not from ACME alone: $(cat "$work/caddy.json")"
+for unexpected in '"ca":' '"load_files":'; do
+  if grep -qF "$unexpected" "$work/caddy.json"; then
+    fail "Caddy's configuration holds $unexpected: $(cat "$work/caddy.json")"
+  fi
+done
+ok "Caddy would serve helpdesk.example.com on 443 with a certificate from Let's Encrypt" \
+  "(ACME, its default authority), and pass requests on to the core"
+hd_compose down -v
 
 echo
 echo "All checks passed."

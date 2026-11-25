@@ -17,6 +17,8 @@ secret.
 | `assistant_token` | The token `hd addon add` printed. | With the profile `assistant`. |
 | `assistant_event_secret` | The event secret `hd addon add` printed. | With the profile `assistant`. |
 | `assistant_api_key` | `HD_ASSISTANT_API_KEY`, the model service's key. | For a provider that takes one, with `HD_SECRET_ASSISTANT_API_KEY` in `.env`. |
+| `tls_certificate` | The certificate Caddy serves, followed by its chain, in PEM. | With the profile `https` and the certificate `files`, with `HD_SECRET_TLS_CERTIFICATE` in `.env` ([reverse-proxy.md](../reverse-proxy.md)). |
+| `tls_key` | Its private key, in PEM. | The same, with `HD_SECRET_TLS_KEY` in `.env`. |
 
 A file holds the value alone; the surrounding whitespace, such as a final newline, is removed. The
 optional files are used only when `.env` names them (the `HD_SECRET_*` lines of `.env.example`):
@@ -36,9 +38,9 @@ chmod 644 secrets/*
 A clone or an unpacked archive gives the directory the usual mode (`755`): `chmod 700` it before
 writing the first secret. The files must be readable by everyone because the containers read
 them as users of their own, not as the user that runs Compose: the core and the Assistant as
-10001, PostgreSQL as 999 (as root first), the dumps as root without any capability. Compose
-mounts each file on its own, so a container never goes through the directory, and no other user
-of the host can.
+10001, PostgreSQL as 999 (as root first), the dumps as root without any capability, Caddy as a
+root with no right to bypass a file's mode. Compose mounts each file on its own, so a container
+never goes through the directory, and no other user of the host can.
 
 A file written with the usual `umask` (`022`) is `644` already:
 

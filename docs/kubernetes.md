@@ -268,7 +268,9 @@ The Ingress always lists its host for TLS when `ingress.tls.enabled` is true (th
   `ingress.annotations`, the controller serves that certificate.
 
 To send plain HTTP to HTTPS with ingress-nginx, add the annotation
-`nginx.ingress.kubernetes.io/force-ssl-redirect: "true"`.
+`nginx.ingress.kubernetes.io/force-ssl-redirect: "true"`. What the controller must pass on, and
+the size of the requests it must accept, are in
+[Behind a reverse proxy](deploy.md#behind-a-reverse-proxy).
 
 ### TLS to the database
 
@@ -318,11 +320,8 @@ core:
       - 10.0.0.0/8          # your cluster's pod network
 ```
 
-The core reads the header from the right and takes the first address that is not a trusted
-proxy; what the browser itself wrote on the left is never believed. With a load balancer in front
-of the ingress controller that adds to `X-Forwarded-For` too, list its addresses as well, and
-make sure the ingress controller passes on what the load balancer added. List only proxies that
-you run: anything that connects from a listed address can say it is anyone.
+How the core reads the header, a load balancer in front of the controller included, and what
+trusting a proxy allows it: [Trusted proxies](deploy.md#trusted-proxies).
 
 ## GitOps tools (Argo CD)
 

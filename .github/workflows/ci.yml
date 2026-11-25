@@ -158,7 +158,10 @@ jobs:
   # The Compose install (deploy/compose) with both images built here, under the names the install
   # gives them: docker compose starts it with its own PostgreSQL (the profile db), then with the
   # Assistant and the test mail server beside it, and then without the profile db on a
-  # PostgreSQL that the script starts itself and gives through HD_DATABASE_*. The images build
+  # PostgreSQL that the script starts itself and gives through HD_DATABASE_*; it dumps both
+  # databases and restores a dump into a fresh install; and then it runs behind proxies: an
+  # nginx that the script starts on the host's network with the documented example, and Caddy of
+  # the profile https with each of its three certificates. The images build
   # from the cache that the deploy job wrote on earlier runs: both jobs run at once, so a change
   # to the Dockerfile or the code builds here without it.
   compose:

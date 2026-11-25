@@ -28,6 +28,40 @@ The sections below are the same wherever the help desk runs. Their commands are 
 Kubernetes install, with the release `hd` in the namespace `helpdesk`, where `hd` runs inside the
 core's pod (`kubectl -n helpdesk exec deploy/hd-core -- hd …`).
 
+## Behind a reverse proxy
+
+The core serves the agents' UI and the API over plain HTTP. HTTPS is the job of a reverse proxy
+in front of it: the ingress controller on Kubernetes ([HTTPS](kubernetes.md#https)), the proxy
+the host has with Compose, or Caddy of the Compose install
+([deploy/compose/reverse-proxy.md](../deploy/compose/reverse-proxy.md)). Whatever the proxy:
+
+- It serves HTTPS at the address of `HD_PUBLIC_URL`, the `https://` address agents open, with no
+  path, which the identity provider sends agents back to. It passes every request on, the UI and
+  `/api/` alike. The session cookie is marked `Secure`, so browsers keep it only over HTTPS (or
+  for `http://localhost`).
+- It adds the browser's address on the right of `X-Forwarded-For`. That is the only header the
+  core reads from a proxy: it reads neither `Host` nor `X-Forwarded-Proto`, `X-Forwarded-Host` or
+  `Forwarded`, does not check `Origin`, and uses no WebSocket.
+- It accepts requests of up to 10 MiB, the size of an
+  [import](#importing-customers-sites-requesters-and-assets). nginx and ingress-nginx accept 1 MiB
+  unless told otherwise (`client_max_body_size`, the annotation
+  `nginx.ingress.kubernetes.io/proxy-body-size`).
+
+### Trusted proxies
+
+A failed sign-in counts under the address of the connection it comes on, which behind a proxy is
+the proxy's: with no proxy trusted, a handful of failures by anyone (nine with the defaults)
+refuse every agent for a while ([Failed sign-ins](kubernetes.md#failed-sign-ins)).
+`HD_TRUSTED_PROXIES` lists the proxies whose `X-Forwarded-For` the core believes, as addresses or
+networks separated by commas (`192.0.2.10, 198.51.100.0/24`); empty, it believes none.
+
+The core reads the header from the right and takes the first address that is not a trusted
+proxy; what the browser itself wrote on the left is never believed. With a load balancer in front
+of the proxy that adds to `X-Forwarded-For` too, list its addresses as well, and make sure the
+proxy passes on what the load balancer added. List only proxies that you run: anything that
+connects from a listed address can write `X-Forwarded-For`, and so get round the limit per
+address. The limit per account still holds.
+
 ## First steps
 
 The `hd` command runs inside the core's pod, with the pod's database settings:

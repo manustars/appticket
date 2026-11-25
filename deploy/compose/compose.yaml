@@ -17,6 +17,8 @@
 #   dumps       the dumps of an existing database, without db; db has them already (dumps.md)
 #   assistant   the Assistant add-on, once registered on the core (secrets/README.md)
 #   greenmail   a test mail server, to try the help desk; not for production
+#   https       Caddy in front of the core, for a host with no reverse proxy of its own; without
+#               it the proxy the host has does HTTPS (reverse-proxy.md)
 #
 # This is the install's file; the compose.yaml at the root of the repository is for development.
 name: hd
@@ -27,8 +29,10 @@ services:
     restart: unless-stopped
     # The core's settings, each passed only when .env (or the environment) sets it, so that the
     # core's own default applies to the others: docs/deploy.md and docs/external-database.md
-    # describe them. Its secrets are read from the files mounted below (secrets:), through the
-    # _FILE variables.
+    # describe them. One is always passed, HD_TRUSTED_PROXIES: the core's own default trusts no
+    # proxy, while the install's default trusts its own network (HD_SUBNET), where every proxy
+    # in front of the core connects from. Its secrets are read from the files mounted below
+    # (secrets:), through the _FILE variables.
     environment:
       - HD_DATABASE_HOST
       - HD_DATABASE_PORT
@@ -48,7 +52,9 @@ services:
       - HD_IMAP_IMPORT_EXISTING
       - HD_SIGN_IN_FAILURES
       - HD_SIGN_IN_WINDOW_SECONDS
-      - HD_TRUSTED_PROXIES
+      # The install's network (networks:, below) unless .env sets it, empty for none: the proxy
+      # on the host and Caddy reach the core from addresses of it (reverse-proxy.md).
+      - HD_TRUSTED_PROXIES=${HD_TRUSTED_PROXIES-${HD_SUBNET:-172.16.0.0/24}}
       - HD_OIDC_ISSUER
       - HD_OIDC_CLIENT_ID
       - HD_OIDC_CLIENT_SECRET_${HD_SECRET_OIDC_CLIENT_SECRET:+FILE=/run/secrets/oidc_client_secret}
@@ -59,7 +65,7 @@ services:
       - HD_LOG
     secrets: [db_password, imap_url, smtp_url, oidc_client_secret]
     # Published on the host for the reverse proxy in front of it, which does HTTPS: on the
-    # host's loopback address unless HD_HTTP_ADDRESS says otherwise.
+    # host's loopback address unless HD_HTTP_ADDRESS says otherwise (reverse-proxy.md).
     ports:
       - "${HD_HTTP_ADDRESS:-127.0.0.1}:${HD_HTTP_PORT:-8080}:8080"
     # With the profile db, the core starts once the bundled PostgreSQL is healthy; without it
@@ -386,11 +392,42 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
 
+  # Caddy in front of the core, for a host with no reverse proxy of its own: HTTPS on the ports
+  # HD_CADDY_HTTP_PORT and HD_CADDY_HTTPS_PORT (80 and 443) of every address of the host, with
+  # the certificate HD_HTTPS_CERTIFICATE names (acme, files or internal), for the address of
+  # HD_PUBLIC_URL; the Caddyfile beside this file says what each does. The certificates and
+  # Caddy's authority are kept on the volume caddy-data.
+  caddy:
+    profiles: [https]
+    image: docker.io/library/caddy:2.11.9-alpine
+    restart: unless-stopped
+    environment:
+      - HD_PUBLIC_URL
+      - HD_HTTPS_CERTIFICATE=${HD_HTTPS_CERTIFICATE:-acme}
+      - HD_CADDY_HTTP_PORT=${HD_CADDY_HTTP_PORT:-80}
+      - HD_CADDY_HTTPS_PORT=${HD_CADDY_HTTPS_PORT:-443}
+    # The same port inside as outside, since Caddy listens on the port of HD_PUBLIC_URL. TCP
+    # only: the Caddyfile leaves HTTP/3 off.
+    ports:
+      - "${HD_CADDY_HTTP_PORT:-80}:${HD_CADDY_HTTP_PORT:-80}"
+      - "${HD_CADDY_HTTPS_PORT:-443}:${HD_CADDY_HTTPS_PORT:-443}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    secrets: [tls_certificate, tls_key]
+    depends_on: [core]
+    read_only: true
+    cap_drop: [ALL]
+    # To listen on the ports 80 and 443.
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+
 # The files the services read their secrets from, mounted in /run/secrets/ by their names here;
-# secrets/README.md says what each holds. Those of the core and of the Assistant that an install
-# may go without are files only when .env names them (HD_SECRET_*): Compose refuses to create a
-# container whose secret's file is missing, so an unused one is /dev/null, which the service is
-# not told about.
+# secrets/README.md says what each holds. Those of the core, the Assistant and Caddy that an
+# install may go without are files only when .env names them (HD_SECRET_*): Compose refuses to
+# create a container whose secret's file is missing, so an unused one is /dev/null, which the
+# service is not told about.
 secrets:
   db_password:
     file: ./secrets/db_password
@@ -406,8 +443,23 @@ secrets:
     file: ./secrets/assistant_event_secret
   assistant_api_key:
     file: ${HD_SECRET_ASSISTANT_API_KEY:-/dev/null}
+  tls_certificate:
+    file: ${HD_SECRET_TLS_CERTIFICATE:-/dev/null}
+  tls_key:
+    file: ${HD_SECRET_TLS_KEY:-/dev/null}
 
 volumes:
   db-data:
   # The dumps, kept by `down`; `down -v` removes them with db-data.
   dumps:
+  caddy-data:
+  caddy-config:
+
+# The network of the install's containers, on a subnet that .env can change (HD_SUBNET). A proxy
+# on the host reaches the core's published port from the network's gateway, its first address,
+# and Caddy from another of its addresses: both are known, and trusted (HD_TRUSTED_PROXIES).
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${HD_SUBNET:-172.16.0.0/24}

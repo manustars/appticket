@@ -1,0 +1,40 @@
+# Caddy in front of the core, with the profile https (reverse-proxy.md): HTTPS for the address of
+# HD_PUBLIC_URL, plain HTTP sent there, and every request passed on to the core with the
+# browser's address in X-Forwarded-For. The settings come from .env through compose.yaml.
+{
+	http_port {$HD_CADDY_HTTP_PORT}
+	https_port {$HD_CADDY_HTTPS_PORT}
+	# The root certificate of the certificate internal is handed to the browsers by hand: there
+	# is no trust store to put it in inside the container.
+	skip_install_trust
+	# HTTP/1.1 and HTTP/2, over TCP: HTTP/3 would need UDP published too, which nothing tests.
+	servers {
+		protocols h1 h2
+	}
+}
+
+# The certificate, as HD_HTTPS_CERTIFICATE names it.
+
+# From Let's Encrypt, for the host name of HD_PUBLIC_URL, which must lead to this host from the
+# Internet on the ports 80 and 443.
+(acme) {
+	tls {
+		issuer acme
+	}
+}
+
+# One's own: secrets/tls_certificate (the certificate, followed by its chain) and
+# secrets/tls_key.
+(files) {
+	tls /run/secrets/tls_certificate /run/secrets/tls_key
+}
+
+# From Caddy's own authority, whose root certificate the browsers are given.
+(internal) {
+	tls internal
+}
+
+{$HD_PUBLIC_URL} {
+	import {$HD_HTTPS_CERTIFICATE}
+	reverse_proxy core:8080
+}
