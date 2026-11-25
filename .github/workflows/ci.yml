@@ -113,7 +113,8 @@ jobs:
 
   # The deployment artifacts: the Helm chart lints and renders, both images build (nothing is
   # pushed; publishing happens in release.yml on version tags), and the chart installs with its
-  # own PostgreSQL and the core's image built here, in a kind cluster.
+  # own PostgreSQL and the core's image built here, in a kind cluster, and in another one is
+  # upgraded from the released chart on a CloudNativePG cluster.
   deploy:
     runs-on: ubuntu-latest
     steps:
@@ -146,6 +147,13 @@ jobs:
       # later chart with the same password, uninstall with the volume kept, install again.
       - name: Install, upgrade and uninstall the chart with its own PostgreSQL
         run: bash scripts/test-standalone-install.sh hd-core:ci
+      # The upgrade guard in a kind cluster with the CloudNativePG operator: the released chart,
+      # whose default was a CloudNativePG cluster, is installed and then upgraded to this one. With
+      # the default values the upgrade is refused; with postgresql.mode=cloudnativepg it keeps the
+      # data; and a standalone release is refused another mode. The script fetches the released
+      # tag, which the checkout above does not hold.
+      - name: Upgrade from the released chart, and the guard's refusals
+        run: bash scripts/test-upgrade-guard.sh hd-core:ci
 
   # Publishing the chart, without a release: the script that a release runs (release.yml) pushes
   # the chart to a throwaway registry, and what it pushed is pulled back and rendered.
