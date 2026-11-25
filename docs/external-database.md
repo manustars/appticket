@@ -145,6 +145,10 @@ given:
 
 Every secret of the core and of the Assistant can be read from a file instead of a variable, such
 as a mounted Kubernetes Secret or a Compose secret: set the `_FILE` variable to the file's path.
+The Compose install does so for every secret, from the files of `deploy/compose/secrets/`, which
+[its README](../deploy/compose/secrets/README.md) describes with the permissions they need; it
+gives the database as the separate parameters, its password in `secrets/db_password`, not as
+`HD_DATABASE_URL`.
 
 | Secret | Its file | Read by |
 |---|---|---|

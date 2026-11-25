@@ -1,14 +1,18 @@
 # The help desk on a single host, with Docker or Podman, from the published images (ADR 0009).
-# Copy .env.example to .env beside this file, set what it asks for, then:
+# Copy .env.example to .env beside this file and set what it asks for. The passwords, mail URLs
+# and tokens are not in .env: each is a file in secrets/, which secrets/README.md describes with
+# the permissions they need. With the profile db, write the bundled PostgreSQL's password once,
+# before the first start, then start:
 #
-#   docker compose up -d        (or podman compose up -d)
+#   docker compose run --rm db-password
+#   docker compose up -d        (or podman compose …)
 #
 # The profiles in COMPOSE_PROFILES (.env) choose what runs beside the core:
 #
 #   db          the bundled PostgreSQL, its data on the volume db-data; without it the core uses
-#               the existing database that the HD_DATABASE_* settings name
-#               (docs/external-database.md)
-#   assistant   the Assistant add-on, once registered on the core (docs/deploy.md)
+#               the existing database that the HD_DATABASE_* settings and secrets/db_password
+#               name (docs/external-database.md)
+#   assistant   the Assistant add-on, once registered on the core (secrets/README.md)
 #   greenmail   a test mail server, to try the help desk; not for production
 #
 # This is the install's file; the compose.yaml at the root of the repository is for development.
@@ -20,18 +24,21 @@ services:
     restart: unless-stopped
     # The core's settings, each passed only when .env (or the environment) sets it, so that the
     # core's own default applies to the others: docs/deploy.md and docs/external-database.md
-    # describe them.
+    # describe them. Its secrets are read from the files mounted below (secrets:), through the
+    # _FILE variables.
     environment:
-      - HD_DATABASE_URL
       - HD_DATABASE_HOST
       - HD_DATABASE_PORT
       - HD_DATABASE_NAME
       - HD_DATABASE_USER
-      - HD_DATABASE_PASSWORD
+      - HD_DATABASE_PASSWORD_FILE=/run/secrets/db_password
       - HD_DATABASE_SSLMODE
       - HD_PUBLIC_URL
-      - HD_IMAP_URL
-      - HD_SMTP_URL
+      # The optional secrets: each _FILE variable is passed only when .env names the secret's
+      # file (HD_SECRET_*). Otherwise the line is a name with nothing after HD_IMAP_URL_, which no
+      # one sets, so Compose passes nothing: the core refuses an empty _FILE variable.
+      - HD_IMAP_URL_${HD_SECRET_IMAP_URL:+FILE=/run/secrets/imap_url}
+      - HD_SMTP_URL_${HD_SECRET_SMTP_URL:+FILE=/run/secrets/smtp_url}
       - HD_MAIL_FROM
       - HD_MAIL_FROM_NAME
       - HD_IMAP_POLL_SECONDS
@@ -41,12 +48,13 @@ services:
       - HD_TRUSTED_PROXIES
       - HD_OIDC_ISSUER
       - HD_OIDC_CLIENT_ID
-      - HD_OIDC_CLIENT_SECRET
+      - HD_OIDC_CLIENT_SECRET_${HD_SECRET_OIDC_CLIENT_SECRET:+FILE=/run/secrets/oidc_client_secret}
       - HD_OIDC_LABEL
       - HD_OIDC_SESSION_HOURS
       - HD_OIDC_AUTHORIZED_GROUP
       - HD_OIDC_GROUP_CLAIM
       - HD_LOG
+    secrets: [db_password, imap_url, smtp_url, oidc_client_secret]
     # Published on the host for the reverse proxy in front of it, which does HTTPS: on the
     # host's loopback address unless HD_HTTP_ADDRESS says otherwise.
     ports:
@@ -63,9 +71,9 @@ services:
 
   # PostgreSQL from the official image, with no port on the host: only the containers of this
   # install reach it, by the name db. It serves no TLS, hence HD_DATABASE_SSLMODE=disable in
-  # .env. The database, its user and its password are the core's HD_DATABASE_* settings, read
-  # when the data directory is first created and not afterwards: changing them later changes
-  # what the core asks for, not what the database has.
+  # .env. The database, its user and its password (secrets/db_password) are read when the data
+  # directory is first created and not afterwards: changing them later changes what the core
+  # asks for, not what the database has.
   db:
     profiles: [db]
     # The major version (18) changes only through a dump and a restore; the minor version follows
@@ -75,7 +83,8 @@ services:
     environment:
       POSTGRES_DB: ${HD_DATABASE_NAME:-}
       POSTGRES_USER: ${HD_DATABASE_USER:-}
-      POSTGRES_PASSWORD: ${HD_DATABASE_PASSWORD:-}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
     volumes:
       # Where the image of PostgreSQL 18 keeps its data, under 18/docker: the directory a later
       # major version is upgraded from.
@@ -88,25 +97,70 @@ services:
       retries: 60
     stop_grace_period: 60s
 
+  # Writes a random password for the bundled PostgreSQL to secrets/db_password, run once before
+  # the first start with `docker compose run --rm db-password`; `up` never starts it. Compose
+  # mounts a secret only from a file that is there when it creates the containers, which it does
+  # before starting any of them, so the password cannot be written by a service that `up` starts.
+  # A file already there is kept, never replaced: the database keeps the password it was created
+  # with.
+  db-password:
+    profiles: [db-password]
+    image: docker.io/library/busybox:1.37.0
+    network_mode: none
+    volumes:
+      # The directory must already be there, as the install ships it: one created here would be
+      # readable by every user of the host.
+      - type: bind
+        source: ./secrets
+        target: /secrets
+        bind:
+          create_host_path: false
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        file=/secrets/db_password
+        if [ -e "$$file" ]; then
+          if [ ! -f "$$file" ] || [ ! -s "$$file" ]; then
+            echo "secrets/db_password is there but is not a file holding a password" >&2
+            exit 1
+          fi
+          echo "secrets/db_password is there: kept"
+          exit 0
+        fi
+        if [ "$$(stat -c %a /secrets)" != 700 ]; then
+          echo "warning: secrets/ is not 0700, so other users of the host can read it" >&2
+        fi
+        umask 022
+        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > /secrets/.db_password.new
+        owner=$$(stat -c %u:%g /secrets)
+        if [ "$$owner" != "$$(id -u):$$(id -g)" ]; then
+          chown "$$owner" /secrets/.db_password.new
+        fi
+        mv /secrets/.db_password.new "$$file"
+        echo "secrets/db_password written"
+    read_only: true
+    cap_drop: [ALL]
+    # To write into the directory, which belongs to the administrator, and to give them the file.
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+
   # The Assistant, which the core sends its events to at http://assistant:8090. It needs the
-  # token and event secret that registering it on the core prints, so it is started after that:
-  #
-  #   docker compose exec core hd addon add assistant --url http://assistant:8090 \
-  #     --event message.received --event ticket.opened \
-  #     --scope directory:read --scope tickets:read --scope proposals:write
-  #
-  # Its settings are in addons/assistant/README.md.
+  # token and event secret that registering it on the core prints, in secrets/assistant_token
+  # and secrets/assistant_event_secret (secrets/README.md), so it is started after that. Its
+  # settings are in addons/assistant/README.md.
   assistant:
     profiles: [assistant]
     image: ghcr.io/manustars/hd-assistant:${HD_VERSION:?set HD_VERSION in .env, such as 1.2.3}
     restart: unless-stopped
-    # The first two set here; the others, as for the core, passed only when set.
+    # The first four set here; the others, as for the core, passed only when set.
     environment:
       - HD_ASSISTANT_LISTEN=0.0.0.0:8090
       - HD_ASSISTANT_CORE_URL=http://core:8080
-      - HD_ASSISTANT_TOKEN
-      - HD_ASSISTANT_EVENT_SECRET
-      - HD_ASSISTANT_API_KEY
+      - HD_ASSISTANT_TOKEN_FILE=/run/secrets/assistant_token
+      - HD_ASSISTANT_EVENT_SECRET_FILE=/run/secrets/assistant_event_secret
+      # Optional, as the core's mail URLs are: some providers take no key.
+      - HD_ASSISTANT_API_KEY_${HD_SECRET_ASSISTANT_API_KEY:+FILE=/run/secrets/assistant_api_key}
       - HD_ASSISTANT_MODEL_PROVIDER
       - HD_ASSISTANT_MODEL
       - HD_ASSISTANT_MODEL_URL
@@ -115,6 +169,7 @@ services:
       - HD_ASSISTANT_THINKING
       - HD_ASSISTANT_AZURE_API_VERSION
       - HD_ASSISTANT_LOG
+    secrets: [assistant_token, assistant_event_secret, assistant_api_key]
     depends_on: [core]
     read_only: true
     cap_drop: [ALL]
@@ -155,6 +210,27 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+
+# The files the services read their secrets from, mounted in /run/secrets/ by their names here;
+# secrets/README.md says what each holds. Those of the core and of the Assistant that an install
+# may go without are files only when .env names them (HD_SECRET_*): Compose refuses to create a
+# container whose secret's file is missing, so an unused one is /dev/null, which the service is
+# not told about.
+secrets:
+  db_password:
+    file: ./secrets/db_password
+  imap_url:
+    file: ${HD_SECRET_IMAP_URL:-/dev/null}
+  smtp_url:
+    file: ${HD_SECRET_SMTP_URL:-/dev/null}
+  oidc_client_secret:
+    file: ${HD_SECRET_OIDC_CLIENT_SECRET:-/dev/null}
+  assistant_token:
+    file: ./secrets/assistant_token
+  assistant_event_secret:
+    file: ./secrets/assistant_event_secret
+  assistant_api_key:
+    file: ${HD_SECRET_ASSISTANT_API_KEY:-/dev/null}
 
 volumes:
   db-data:
