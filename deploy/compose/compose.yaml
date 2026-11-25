@@ -1,12 +1,13 @@
 # The help desk on a single host, with Docker or Podman, from the published images (ADR 0009).
-# Copy .env.example to .env beside this file and set what it asks for. The passwords, mail URLs
-# and tokens are not in .env: each is a file in secrets/, which secrets/README.md describes with
-# the permissions they need. Close the directory to other users of the host; with the profile
-# db, write the bundled PostgreSQL's password once, before the first start; then start:
+# Copy .env.example to .env beside this file and set what it asks for. The passwords, the mail
+# servers' URLs and the tokens are not in .env: each is a file in secrets/, which
+# secrets/README.md describes with the permissions they need. Close the directory to other users
+# of the host; with the profile db, write the bundled PostgreSQL's password once, before the
+# first start; then start:
 #
 #   chmod 700 secrets
-#   docker compose run --rm db-password
-#   docker compose up -d        (or podman compose …)
+#   docker compose run --rm db-password        (or podman compose run --rm db-password)
+#   docker compose up -d                       (or podman compose up -d)
 #
 # The profiles in COMPOSE_PROFILES (.env) choose what runs beside the core:
 #
@@ -134,15 +135,16 @@ services:
         fi
         umask 022
         head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > /secrets/.db_password.new
-        owner=$$(stat -c %u:%g /secrets)
-        if [ "$$owner" != "$$(id -u):$$(id -g)" ]; then
-          chown "$$owner" /secrets/.db_password.new
+        ids=$$(stat -c %u:%g /secrets)
+        if [ "$$ids" != "$$(id -u):$$(id -g)" ]; then
+          chown "$$ids" /secrets/.db_password.new
         fi
         mv /secrets/.db_password.new "$$file"
         echo "secrets/db_password written"
     read_only: true
     cap_drop: [ALL]
-    # To write into the directory, which belongs to the administrator, and to give them the file.
+    # To write into the directory, which belongs to the user that runs Compose, and to give that
+    # user the file.
     cap_add: [CHOWN, DAC_OVERRIDE]
     security_opt: [no-new-privileges:true]
 
@@ -160,7 +162,7 @@ services:
       - HD_ASSISTANT_CORE_URL=http://core:8080
       - HD_ASSISTANT_TOKEN_FILE=/run/secrets/assistant_token
       - HD_ASSISTANT_EVENT_SECRET_FILE=/run/secrets/assistant_event_secret
-      # Optional, as the core's mail URLs are: some providers take no key.
+      # Optional, as the mail servers' URLs of the core are: some providers take no key.
       - HD_ASSISTANT_API_KEY_${HD_SECRET_ASSISTANT_API_KEY:+FILE=/run/secrets/assistant_api_key}
       - HD_ASSISTANT_MODEL_PROVIDER
       - HD_ASSISTANT_MODEL

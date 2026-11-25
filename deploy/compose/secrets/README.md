@@ -1,17 +1,17 @@
 # Secrets of the Compose install
 
-The passwords, mail URLs and tokens of the install are files in this directory, one secret per
-file, and never in `.env`. `compose.yaml` mounts each into the containers that read it, at
-`/run/secrets/<file>`, and gives the core and the Assistant its path in the matching `_FILE`
-variable ([Secrets from files](../../../docs/external-database.md#secrets-from-files)); the
-bundled PostgreSQL reads its password through `POSTGRES_PASSWORD_FILE`. Compose shows the
+The passwords, the mail servers' URLs and the tokens of the install are files in this directory,
+one secret per file, and never in `.env`. `compose.yaml` mounts each into the containers that
+read it, at `/run/secrets/<file>`, and gives the core and the Assistant its path in the matching
+`_FILE` variable ([Secrets from files](../../../docs/external-database.md#secrets-from-files));
+the bundled PostgreSQL reads its password through `POSTGRES_PASSWORD_FILE`. Compose shows the
 files' paths, never their content: neither `docker compose config` nor `docker inspect` holds a
 secret.
 
 | File | Holds | Needed |
 |---|---|---|
 | `db_password` | The password of `HD_DATABASE_USER`. | Always. |
-| `imap_url` | `HD_IMAP_URL`, the mailbox the core reads. | To read mail, with `HD_SECRET_IMAP_URL` in `.env`. |
+| `imap_url` | `HD_IMAP_URL`, the mailbox the core reads. | To read messages, with `HD_SECRET_IMAP_URL` in `.env`. |
 | `smtp_url` | `HD_SMTP_URL`, the server the core sends through. | To send replies, with `HD_SECRET_SMTP_URL` in `.env`. |
 | `oidc_client_secret` | `HD_OIDC_CLIENT_SECRET`. | To sign in through OpenID Connect, with `HD_SECRET_OIDC_CLIENT_SECRET` in `.env`. |
 | `assistant_token` | The token `hd addon add` printed. | With the profile `assistant`. |
@@ -25,8 +25,8 @@ not name `compose.yaml` mounts `/dev/null` instead and gives the service no `_FI
 
 ## Permissions
 
-The directory belongs to the administrator and only they can open it; the files in it are
-readable by everyone:
+The directory belongs to the user that runs Compose, and only that user can open it; the files in
+it are readable by everyone:
 
 ```sh
 chmod 700 secrets
@@ -35,9 +35,9 @@ chmod 644 secrets/*
 
 A clone or an unpacked archive gives the directory the usual mode (`755`): `chmod 700` it before
 writing the first secret. The files must be readable by everyone because the containers read
-them as users of their own, not as the administrator: the core and the Assistant as 10001,
-PostgreSQL as 999 (as root first). Compose mounts each file on its own, so a container never goes
-through the directory, and no other user of the host can.
+them as users of their own, not as the user that runs Compose: the core and the Assistant as
+10001, PostgreSQL as 999 (as root first). Compose mounts each file on its own, so a container
+never goes through the directory, and no other user of the host can.
 
 A file written with the usual `umask` (`022`) is `644` already:
 
@@ -57,10 +57,10 @@ chmod 700 secrets
 docker compose run --rm db-password
 ```
 
-The second command writes a random password to `db_password`, and the bundled PostgreSQL is
-created with it. Run again, it keeps the file there; it warns when the directory is not `700`. Keep the file as long as the volume
-`db-data`: the database keeps the password it was created with, and a new file does not change
-it.
+The second command writes a random password to `db_password`, belonging to the same user as the
+directory, and the bundled PostgreSQL is created with it. Run again, it keeps the file there; it
+warns when the directory is not `700`. Keep the file as long as the volume `db-data`: the
+database keeps the password it was created with, and a new file does not change it.
 
 Without the profile `db`, write the password of the existing database's user to `db_password`
 ([docs/external-database.md](../../../docs/external-database.md)).
