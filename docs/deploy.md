@@ -17,7 +17,8 @@ the version in `deploy/chart/Chart.yaml`.
 
 ## Prerequisites
 
-- Kubernetes 1.27 or later, Helm 3.
+- Kubernetes 1.27 or later, and Helm 3.8 or later, which reads the chart from the registry.
+  CI installs and upgrades the chart with Helm 4.
 - A StorageClass for the database's volume, when the chart runs PostgreSQL itself
   (`postgresql.mode=standalone`, the default; see
   [The chart's own PostgreSQL](#the-charts-own-postgresql)): nothing else is needed for it.
@@ -206,7 +207,10 @@ The chart refuses an install or an upgrade whose `postgresql.mode` is not the mo
 database it finds in the release's namespace, so that the core never starts on another, empty
 database while the help desk's data sits in the one it left. That holds for a mode set by
 mistake and for one that comes from the chart's defaults, which changed in 0.4.0
-([Upgrading from 0.3](#upgrading-from-03-standalone-is-the-default-database-mode)). It finds:
+([Upgrading from 0.3](#upgrading-from-03-standalone-is-the-default-database-mode)). Whatever
+its name, it runs on `helm install` as on `helm upgrade`: `helm uninstall` leaves a CloudNativePG
+cluster in place, and an install with other values beside it would start the core on an empty
+database just as an upgrade would. It finds:
 
 - **the CloudNativePG cluster** of the release (`hd-db`), and then refuses every mode but
   `cloudnativepg`. `helm uninstall` leaves that cluster in place, so an install under the same
@@ -264,7 +268,9 @@ the guard finds nothing and refuses nothing:
   (`postgresql.standalone.existingSecret`, see
   [The chart's own PostgreSQL](#the-charts-own-postgresql)).
 - **`helm template`**, and **`helm upgrade --dry-run`** unless it is `--dry-run=server`, which
-  reads the cluster and shows the guard's answer without changing anything.
+  reads the cluster and shows the guard's answer without changing anything. `--dry-run=server`
+  needs Helm 3.13 or later: earlier versions have only the dry run that does not read the
+  cluster.
 
 ### HTTPS
 

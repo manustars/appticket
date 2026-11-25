@@ -49,7 +49,8 @@ on the CloudNativePG cluster, the default until then, sets postgresql.mode=cloud
 on. The chart refuses an install or an upgrade whose mode is not that of the database it finds
 in the cluster, so that the core never starts on another, empty database. A tool that renders
 the chart without reading the cluster, such as Argo CD, gets no such check:
-set postgresql.mode explicitly there (docs/deploy.md, "Upgrading from 0.3").
+set postgresql.mode explicitly there
+(docs/deploy.md, "Upgrading from 0.3: standalone is the default database mode").
 {{- if not .Values.assistant.enabled }}
 
 To add the Assistant, register it first:

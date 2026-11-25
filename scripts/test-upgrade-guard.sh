@@ -14,7 +14,8 @@
 #      postgresql.mode=cloudnativepg takes the cluster and the row back;
 #   4. this chart installs with its default values, standalone, beside it; an upgrade with
 #      postgresql.mode=cloudnativepg or external is refused with the guard's message, and the
-#      release, the database and its row are as they were;
+#      release, the database and its row are as they were; with a CloudNativePG cluster of the
+#      release's name beside it, every mode is refused;
 #   5. once the StatefulSet of the chart's own PostgreSQL is deleted, as the message says, the
 #      guard lets another mode through, and the volume is still there.
 #
@@ -37,9 +38,9 @@ set -euo pipefail
 core_image=${1:?usage: test-upgrade-guard.sh CORE_IMAGE}
 root=$(cd "$(dirname "$0")/.." && pwd)
 chart=${CHART:-$root/deploy/chart}
-cluster=${CLUSTER:-hd-upgrade-guard}
+kind_cluster=${CLUSTER:-hd-upgrade-guard}
 port=${PORT:-55468}
-context="kind-$cluster"
+context="kind-$kind_cluster"
 
 # The last release whose chart had the CloudNativePG cluster as its default: the one this test
 # upgrades from. Pinned, and not "the latest tag": every later release defaults to standalone,
@@ -79,16 +80,17 @@ diagnose() {
   echo
   echo "---- the state of the cluster ----"
   kubectl --context "$context" get pods -A -o wide || true
-  for namespace in helpdesk helpdesk-standalone; do
-    echo "---- namespace $namespace ----"
-    h list || true
-    k get all,persistentvolumeclaims,secrets -o wide || true
-    k get clusters.postgresql.cnpg.io -o wide || true
-    k describe pods || true
-    k get events --sort-by=.lastTimestamp || true
-    echo "---- the core's log ($namespace) ----"
-    k logs deploy/hd-core --tail=100 || true
-    k logs deploy/hd-core --tail=100 --previous || true
+  local each
+  for each in helpdesk helpdesk-standalone; do
+    echo "---- namespace $each ----"
+    helm --kube-context "$context" -n "$each" list || true
+    kubectl --context "$context" -n "$each" get all,persistentvolumeclaims,secrets -o wide || true
+    kubectl --context "$context" -n "$each" get clusters.postgresql.cnpg.io -o wide || true
+    kubectl --context "$context" -n "$each" describe pods || true
+    kubectl --context "$context" -n "$each" get events --sort-by=.lastTimestamp || true
+    echo "---- the core's log ($each) ----"
+    kubectl --context "$context" -n "$each" logs deploy/hd-core --tail=100 || true
+    kubectl --context "$context" -n "$each" logs deploy/hd-core --tail=100 --previous || true
   done
   echo "---- the operator's log ----"
   kubectl --context "$context" -n cnpg-system logs deploy/cnpg-controller-manager --tail=100 || true
@@ -103,7 +105,7 @@ finish() {
     diagnose
   fi
   if [ -z "${KEEP_CLUSTER:-}" ]; then
-    kind delete cluster --name "$cluster" > /dev/null 2>&1 || true
+    kind delete cluster --name "$kind_cluster" > /dev/null 2>&1 || true
   fi
   rm -rf "$work"
   exit "$status"
@@ -158,12 +160,47 @@ release_is() {
   ok "the release hd is deployed at revision $1 of the chart $2"
 }
 
-# refused VERB MODE HELM_ARGUMENTS…: an upgrade to this chart with these arguments, or an install
-# of it (VERB is upgrade or install), ends with an error that is the guard's message, naming the
-# mode asked for and the one to set.
+# The checks below ask the cluster in a statement of their own, so that a kubectl or a helm that
+# fails stops the script, and is not taken for an answer that names nothing.
+
+# matching KINDS PATTERN…: leaves in $matching the namespace's objects of these kinds whose name
+# holds one of the patterns; empty when there is none.
+matching() {
+  local kinds=$1 listed pattern patterns=()
+  shift
+  for pattern in "$@"; do
+    patterns+=(-e "$pattern")
+  done
+  listed=$(k get "$kinds" -o name)
+  matching=$(grep -F "${patterns[@]}" <<< "$listed" || true)
+}
+
+# Leaves in $releases the namespace's releases named hd, whatever their state; empty when there
+# is none.
+releases() {
+  releases=$(h list --filter '^hd$' -q)
+}
+
+# Leaves in $clusters the namespace's CloudNativePG clusters; empty when there is none.
+clusters() {
+  clusters=$(k get clusters.postgresql.cnpg.io -o name)
+}
+
+# The core's pod, which there must be.
+core_pod_uid() {
+  local uid
+  uid=$(k get pods -l app.kubernetes.io/component=core -o jsonpath='{.items[0].metadata.uid}')
+  [ -n "$uid" ] || fail "the core has no pod"
+  echo "$uid"
+}
+
+# refused VERB MODE FOUND TO_SET HELM_ARGUMENTS…: an upgrade to this chart with these arguments,
+# or an install of it (VERB is upgrade or install), ends with an error that is the guard's
+# message: it starts with FOUND, what the guard found, names MODE, the mode asked for, and holds
+# TO_SET, the mode to set.
 refused() {
-  local verb=$1 asked=$2 output
-  shift 2
+  local verb=$1 asked=$2 found=$3 to_set=$4 output
+  shift 4
   if h "$verb" hd "$chart" "$@" > "$work/refused.txt" 2>&1; then
     fail "the $verb went through: $(cat "$work/refused.txt")"
   fi
@@ -209,9 +246,9 @@ if grep -q '^kind: Cluster$' "$work/this.yaml"; then
 fi
 ok "default values: the released chart renders a CloudNativePG cluster, this chart its own PostgreSQL and no cluster"
 
-step "Create the kind cluster $cluster and load the core's image $core_image"
-kind create cluster --name "$cluster" --wait 180s
-kind load docker-image "$core_image" --name "$cluster"
+step "Create the kind cluster $kind_cluster and load the core's image $core_image"
+kind create cluster --name "$kind_cluster" --wait 180s
+kind load docker-image "$core_image" --name "$kind_cluster"
 
 step "Install the CloudNativePG operator from $operator_manifest"
 kubectl --context "$context" apply --server-side -f "$operator_manifest" > "$work/operator.txt"
@@ -286,19 +323,20 @@ migrations_before=$(cluster_sql "select count(*) from _sqlx_migrations")
 ok "the released core applied $migrations_before migrations to that database"
 cluster_before=$(cluster_uid)
 claim_before=$(cluster_claim_uid)
-core_before=$(k get pods -l app.kubernetes.io/component=core -o jsonpath='{.items[0].metadata.uid}')
+core_before=$(core_pod_uid)
 echo "    the cluster: $cluster_before; its volume claim: $claim_before"
 
 # After a refused upgrade: the release, the cluster, its volume, the core and the row are as
 # they were, and the chart's own PostgreSQL has not appeared.
 expect_cluster_untouched() {
+  local core_now
   release_is 1 "hd-$released_version"
   [ "$(cluster_uid)" = "$cluster_before" ] || fail "the cluster hd-db is not the one it was"
   [ "$(cluster_claim_uid)" = "$claim_before" ] || fail "the cluster's volume claim is not the one it was"
-  [ "$(k get pods -l app.kubernetes.io/component=core -o jsonpath='{.items[0].metadata.uid}')" = "$core_before" ] \
-    || fail "the refused upgrade replaced the core"
-  [ -z "$(k get statefulsets,persistentvolumeclaims -o name | grep -F hd-postgresql || true)" ] \
-    || fail "the refused upgrade made the chart's own PostgreSQL"
+  core_now=$(core_pod_uid)
+  [ "$core_now" = "$core_before" ] || fail "the refused upgrade replaced the core"
+  matching statefulsets,persistentvolumeclaims hd-postgresql
+  [ -z "$matching" ] || fail "the refused upgrade made the chart's own PostgreSQL: $matching"
   ok "the cluster hd-db, its volume and the released core are the ones they were, and there is no PostgreSQL of the chart's own"
   expect_cluster_row
 }
@@ -307,12 +345,13 @@ expect_cluster_untouched() {
 step "2. Upgrade to this chart hd-$this_version with its default values: refused"
 found="the upgrade guard found the CloudNativePG cluster hd-db of this release in the namespace helpdesk"
 to_set="Set postgresql.mode=cloudnativepg to stay on the cluster"
-refused upgrade standalone
+refused upgrade standalone "$found" "$to_set"
 ok "UPGRADE REFUSED with the guard's message, for the default values (postgresql.mode=standalone)"
 expect_cluster_untouched
 
 step "2a. The same upgrade with postgresql.mode=external: refused as well"
-refused upgrade external --set postgresql.mode=external --set core.database.existingSecret=hd-database
+refused upgrade external "$found" "$to_set" \
+  --set postgresql.mode=external --set core.database.existingSecret=hd-database
 ok "UPGRADE REFUSED with the guard's message, for postgresql.mode=external"
 expect_cluster_untouched
 
@@ -323,8 +362,8 @@ k rollout status deployment/hd-core --timeout=600s
 release_is 2 "hd-$this_version"
 upgraded_image=$(k get deployment hd-core -o jsonpath='{.spec.template.spec.containers[0].image}')
 [ "$upgraded_image" = "$core_image" ] || fail "the core runs $upgraded_image, not $core_image"
-[ "$(k get pods -l app.kubernetes.io/component=core -o jsonpath='{.items[0].metadata.uid}')" != "$core_before" ] \
-  || fail "the upgrade did not start a new core"
+core_after=$(core_pod_uid)
+[ "$core_after" != "$core_before" ] || fail "the upgrade did not start a new core"
 database_secret=$(k get deployment hd-core \
   -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="HD_DATABASE_URL")].valueFrom.secretKeyRef.name}')
 [ "$database_secret" = hd-db-app ] || fail "the core's database is not the cluster's, but from '$database_secret'"
@@ -333,8 +372,8 @@ health
 [ "$(cluster_uid)" = "$cluster_before" ] || fail "the upgrade replaced the cluster hd-db"
 [ "$(cluster_claim_uid)" = "$claim_before" ] || fail "the upgrade replaced the cluster's volume claim"
 ok "the cluster hd-db and its volume are the ones they were"
-[ -z "$(k get statefulsets,persistentvolumeclaims -o name | grep -F hd-postgresql || true)" ] \
-  || fail "the upgrade made the chart's own PostgreSQL"
+matching statefulsets,persistentvolumeclaims hd-postgresql
+[ -z "$matching" ] || fail "the upgrade made the chart's own PostgreSQL: $matching"
 migrations_after=$(cluster_sql "select count(*) from _sqlx_migrations")
 [ "$migrations_after" -ge "$migrations_before" ] \
   || fail "the cluster's database holds $migrations_after migrations, fewer than the $migrations_before before"
@@ -344,14 +383,16 @@ expect_cluster_row
 # ---------------------------------------------------------------------------------------------
 step "3a. Uninstall the release, which leaves the cluster, and install this chart with its default values: refused"
 h uninstall hd --wait --timeout 300s
-[ -z "$(h list --filter '^hd$' -q)" ] || fail "the release is still there after helm uninstall"
+releases
+[ -z "$releases" ] || fail "the release is still there after helm uninstall: $releases"
 [ "$(cluster_uid)" = "$cluster_before" ] || fail "helm uninstall did not leave the cluster hd-db"
 ok "the release is gone, and the cluster hd-db is still there"
-refused install standalone "${image[@]}"
+refused install standalone "$found" "$to_set" "${image[@]}"
 ok "INSTALL REFUSED with the guard's message, for the default values beside the cluster that was left"
-[ -z "$(h list --filter '^hd$' -q)" ] || fail "the refused install left a release"
-[ -z "$(k get statefulsets,deployments,persistentvolumeclaims -o name | grep -F -e hd-postgresql -e hd-core || true)" ] \
-  || fail "the refused install made something"
+releases
+[ -z "$releases" ] || fail "the refused install left a release: $releases"
+matching statefulsets,deployments,persistentvolumeclaims hd-postgresql hd-core
+[ -z "$matching" ] || fail "the refused install made something: $matching"
 ok "the refused install left no release, no core and no PostgreSQL of the chart's own"
 expect_cluster_row
 
@@ -374,7 +415,8 @@ h install hd "$chart" --create-namespace "${image[@]}"
 k rollout status statefulset/hd-postgresql --timeout=300s
 k rollout status deployment/hd-core --timeout=600s
 release_is 1 "hd-$this_version"
-[ -z "$(k get clusters.postgresql.cnpg.io -o name)" ] || fail "the default values made a CloudNativePG cluster"
+clusters
+[ -z "$clusters" ] || fail "the default values made a CloudNativePG cluster: $clusters"
 ok "the default values installed the chart's own PostgreSQL and no CloudNativePG cluster, and the core is ready"
 
 standalone_sql() {
@@ -404,7 +446,8 @@ expect_standalone_untouched() {
   [ "$(standalone_claim_uid)" = "$standalone_claim_before" ] || fail "the database's volume claim is not the one it was"
   [ "$(k get pod hd-postgresql-0 -o jsonpath='{.metadata.uid}')" = "$standalone_pod_before" ] \
     || fail "the refused upgrade restarted the database"
-  [ -z "$(k get clusters.postgresql.cnpg.io -o name)" ] || fail "the refused upgrade made a CloudNativePG cluster"
+  clusters
+  [ -z "$clusters" ] || fail "the refused upgrade made a CloudNativePG cluster: $clusters"
   row=$(standalone_sql "select note from upgrade_guard_check")
   [ "$row" = "$standalone_note" ] || fail "the row is not in the chart's own PostgreSQL, but: '$row'"
   ok "the chart's own PostgreSQL, its volume and its row ('$row') are as they were, and there is no CloudNativePG cluster"
@@ -414,22 +457,45 @@ found="the upgrade guard found the chart's own PostgreSQL of this release (the S
 to_set="Set postgresql.mode=standalone to stay on it"
 
 step "4a. Upgrade the standalone release with postgresql.mode=cloudnativepg: refused"
-refused upgrade cloudnativepg --set postgresql.mode=cloudnativepg "${image[@]}"
+refused upgrade cloudnativepg "$found" "$to_set" --set postgresql.mode=cloudnativepg "${image[@]}"
 ok "STANDALONE REFUSAL with the guard's message, for postgresql.mode=cloudnativepg"
 expect_standalone_untouched
 
 step "4b. Upgrade the standalone release with postgresql.mode=external: refused"
-refused upgrade external --set postgresql.mode=external \
+refused upgrade external "$found" "$to_set" --set postgresql.mode=external \
   --set core.database.existingSecret=hd-database "${image[@]}"
 ok "STANDALONE REFUSAL with the guard's message, for postgresql.mode=external"
 expect_standalone_untouched
 
 step "4c. A dry run that reads the cluster (--dry-run=server) is refused in the same way"
-refused upgrade external --dry-run=server --set postgresql.mode=external \
+refused upgrade external "$found" "$to_set" --dry-run=server --set postgresql.mode=external \
   --set core.database.existingSecret=hd-database "${image[@]}"
 expect_standalone_untouched
 
-step "4d. Upgrade the standalone release with its own mode: not refused"
+step "4d. With a CloudNativePG cluster hd-db beside the chart's own PostgreSQL: every mode is refused"
+# A cluster under the name the chart would give its own, as one left behind by an earlier
+# install: the guard cannot tell which of the two holds the help desk's data.
+sed 's/^  name: probe$/  name: hd-db/' "$work/probe.yaml" > "$work/beside.yaml"
+k apply -f "$work/beside.yaml"
+both="the upgrade guard found two databases of this release in the namespace helpdesk-standalone, the CloudNativePG cluster hd-db and the chart's own PostgreSQL (the StatefulSet hd-postgresql), and cannot tell which one holds the help desk's data"
+for mode in standalone cloudnativepg; do
+  if h upgrade hd "$chart" --set "postgresql.mode=$mode" "${image[@]}" > "$work/both.txt" 2>&1; then
+    fail "the upgrade with postgresql.mode=$mode went through beside both databases: $(cat "$work/both.txt")"
+  fi
+  output=$(tr '\r\n' '  ' < "$work/both.txt")
+  grep -qF -- "$both" <<< "$output" \
+    || fail "the upgrade with postgresql.mode=$mode failed, but not with the guard's message '$both': $output"
+  for advice in "kubectl -n helpdesk-standalone delete cluster hd-db" \
+    "kubectl -n helpdesk-standalone delete statefulset hd-postgresql"; do
+    grep -qF -- "$advice" <<< "$output" || fail "the guard's message does not give '$advice': $output"
+  done
+  ok "refused with postgresql.mode=$mode: $output"
+done
+ok "BOTH FOUND: refused with the guard's message, in the mode of either"
+k delete clusters.postgresql.cnpg.io hd-db --wait=true --timeout=120s
+expect_standalone_untouched
+
+step "4e. Upgrade the standalone release with its own mode: not refused"
 h upgrade hd "$chart" "${image[@]}"
 k rollout status statefulset/hd-postgresql --timeout=300s
 k rollout status deployment/hd-core --timeout=600s
