@@ -362,7 +362,7 @@ standalone_claim_uid() {
   k get persistentvolumeclaim data-hd-postgresql-0 -o jsonpath='{.metadata.uid}'
 }
 
-standalone_note="written in the chart's own PostgreSQL"
+standalone_note="written in the PostgreSQL of the chart"
 standalone_sql "create table upgrade_guard_check (note text)"
 standalone_sql "insert into upgrade_guard_check values ('$standalone_note')"
 standalone_before=$(standalone_uid)

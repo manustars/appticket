@@ -220,7 +220,8 @@ The message names what it found, the mode asked for and the mode to set:
 ```
 the upgrade guard found the CloudNativePG cluster hd-db of this release in the namespace
 helpdesk, and postgresql.mode is standalone: the core would leave the database it has for
-another one, which starts empty. Set postgresql.mode=cloudnativepg to stay on the cluster: …
+another one, the chart's own PostgreSQL, which starts empty. Set postgresql.mode=cloudnativepg
+to stay on the cluster: …
 ```
 
 Nothing has changed when it appears: the release, the database and the core are as they were.
