@@ -108,8 +108,8 @@ The chart stops with a message for:
   Secret with the generated password does not have, since the chart would generate another
   password under it;
 - with `external`, both forms together, the separate values in part, and neither form;
-- a `dumps.enabled` that is not `true`, `false` or empty, and with the dumps on a
-  `dumps.image.tag` that is a number, as for the standalone tag.
+- a `dumps.enabled` that is not `true`, `false` or empty;
+- with the dumps on, a `dumps.image.tag` that is a number, as for the standalone tag.
 
 It ignores, without a message: the values of the modes not chosen (with `external` and
 `standalone` the cluster's `postgresql.instances`, `storage`, `backup` and the others; without

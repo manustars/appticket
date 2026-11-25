@@ -24,10 +24,7 @@ of core.database.ca, and without one requires TLS where the core verifies.
 {{- if lt (int $d.keep) 1 }}
 {{- fail "dumps.keep must be 1 or more" }}
 {{- end }}
-{{- /* A number would lose its form: YAML reads 18.10 as 18.1. */}}
-{{- if not (kindIs "string" $d.image.tag) }}
-{{- fail "dumps.image.tag must be a string: quote it in a values file (\"18.8\"), or give it with --set-string" }}
-{{- end }}
+{{- include "hd.requireStringTag" (dict "name" "dumps.image.tag" "tag" $d.image.tag) }}
 {{- if not $d.storage.existingClaim }}
 apiVersion: v1
 kind: PersistentVolumeClaim
