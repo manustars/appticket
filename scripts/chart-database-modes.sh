@@ -681,6 +681,24 @@ refused "dumps.enabled that is neither true nor false: refused, naming what it t
   'dumps.enabled is "sometimes": it must be true, false, or empty for on with postgresql.mode=standalone and off otherwise' \
   --set dumps.enabled=sometimes
 
+# The dumps' tag loses its form as a number just as the standalone tag does.
+refused "dumps with a tag that --set reads as a number: refused, naming --set-string" \
+  "dumps.image.tag $not_text" \
+  "${standalone[@]}" --set dumps.image.tag=18
+
+printf 'dumps:\n  image:\n    tag: 18.10\n' > "$work/number-dumps-tag.yaml"
+refused "dumps with external and an unquoted tag in a values file: refused as well" \
+  "dumps.image.tag $not_text" \
+  "${url_form[@]}" --set dumps.enabled=true -f "$work/number-dumps-tag.yaml"
+
+render "${standalone[@]}" --set-string dumps.image.tag=18
+expect_line dumps.yaml '              image: docker.io/library/postgres:18'
+finish "dumps with a tag given with --set-string: used as it is written"
+
+render "${cluster[@]}" --set dumps.image.tag=18
+expect_kind CronJob 0
+finish "dumps off: their tag is not looked at"
+
 dumps_tls "external and a URL Secret" "${url_form[@]}"
 dumps_tls "external and separate values" "${separate_values[@]}"
 

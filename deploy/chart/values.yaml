@@ -233,7 +233,8 @@ assistant:
 #   name, user and password.existingSecret;
 # - in standalone mode, an image tag of another major version than 18 or given as a number,
 #   and on an upgrade a secretKey that the Secret with the generated password does not have;
-# - in external mode, both forms together, the separate values in part, and neither form.
+# - in external mode, both forms together, the separate values in part, and neither form;
+# - with the dumps on, a dumps.image.tag given as a number.
 # It ignores, without a message: the values of the modes not chosen (in external and standalone
 # mode the cluster's instances, storage, backup and the others; outside standalone mode
 # postgresql.standalone); beside a URL Secret and outside external mode,
@@ -371,6 +372,8 @@ dumps:
     # pg_dump must be at least as new as the server: keep its major version in step with the
     # database's.
     repository: docker.io/library/postgres
+    # Quoted, as the standalone tag: the chart refuses a tag that is a number (with --set, use
+    # --set-string).
     tag: "18.7-trixie"
     pullPolicy: IfNotPresent
   storage:
