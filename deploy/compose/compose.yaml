@@ -181,6 +181,12 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+    # The engine's init runs the script, which is thus not the container's first process, which
+    # ignores the signals it has no handler for, and a stop sends SIGTERM rather than the image's
+    # SIGINT, which a shell waiting for a command ignores: a stop ends a dump or a restore at once
+    # (an interrupted restore changes nothing), and the schedule handles it itself.
+    init: true
+    stop_signal: SIGTERM
     # The script's first argument says what it does: none, a dump now; schedule, the dumps at
     # HD_DUMPS_TIME every day; restore, a restore of the dump on standard input (dumps.md). Any
     # other command runs as it is, such as ls -l /dumps.
@@ -220,8 +226,8 @@ services:
           export PGPASSWORD
         }
 
-        # Run in a subshell, which releases the lock when it ends.
-        dump() {
+        # How many dumps to keep, in keep.
+        check_keep() {
           keep=$${HD_DUMPS_KEEP:-7}
           case $$keep in
             "" | *[!0-9]*) keep=0 ;;
@@ -230,10 +236,17 @@ services:
             echo "HD_DUMPS_KEEP is to be 1 or more, not '$${HD_DUMPS_KEEP:-}'" >&2
             return 1
           fi
+        }
+
+        # Run in a subshell, which releases the lock when it ends, failed or not.
+        dump() {
+          check_keep || return 1
           connect || return 1
-          # One dump at a time on the volume, the schedule's or one taken now.
-          exec 9< "$$dumps"
-          flock 9
+          # One dump at a time on the volume, the schedule's or one taken now; what an
+          # interrupted one left is removed under the lock, before the dump.
+          exec 9< "$$dumps" || return 1
+          flock 9 || return 1
+          rm -f "$$dumps"/*.partial
           name=hd-$$(date -u +%Y%m%dT%H%M%SZ).dump
           while [ -e "$$dumps/$$name" ]; do
             sleep 1
@@ -248,7 +261,6 @@ services:
             rm -f -- "$$1"
             shift
           done
-          rm -f "$$dumps"/*.partial
           echo "dumped $$name; kept:"
           ls -l "$$dumps"
         }
@@ -262,7 +274,9 @@ services:
               exit 1
               ;;
           esac
-          # Stopped at once while it waits; a dump under way ends first, or is cut by the stop.
+          check_keep || exit 1
+          # Stopped at once while it waits; a dump under way ends first, within the service's
+          # stop_grace_period, or is cut, leaving a temporary file that the next dump removes.
           trap 'exit 0' TERM INT
           while :; do
             now=$$(date -u +%s)
@@ -294,14 +308,17 @@ services:
         esac
       - dumps
 
-  # The dumps of dumps, on a schedule: every day at HD_DUMPS_TIME, in UTC (02:30 when not set).
-  # On with the profile db, whose database has no other backup, and turned on with an existing
-  # database by the profile dumps.
+  # The dumps on a schedule: every day at HD_DUMPS_TIME, in UTC (02:30 when not set). On with
+  # the profile db, whose database has no other backup, and turned on with an existing database
+  # by the profile dumps.
   dumps-schedule:
     <<: *dumps
     profiles: [db, dumps]
     command: [schedule]
     restart: unless-stopped
+    # A dump under way when the service is stopped has this long to end, as db has to shut down;
+    # Compose stops this service before db.
+    stop_grace_period: 60s
 
   # The Assistant, which the core sends its events to at http://assistant:8090. It needs the
   # token and event secret that registering it on the core prints, in secrets/assistant_token
