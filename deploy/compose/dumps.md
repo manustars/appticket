@@ -79,8 +79,11 @@ passwords they had.
 `pg_restore` replaces what the dump holds (`--clean --if-exists`), in one transaction: a restore
 that fails changes nothing, and says why. The objects restored belong to `HD_DATABASE_USER`
 (`--no-owner --no-privileges`), so the old install's user may have had another name. If the core
-of the new install has already started, start over with its database removed before restoring:
-`docker compose down -v`, then the last two commands.
+of the new install has already started, start over with its database removed before restoring,
+and its dumps kept: `docker compose down`, then `docker volume rm hd_db-data` (the volume of the
+database, named after the project `hd`), then the last two commands. `docker compose down -v`
+would remove the volume `dumps` too, and on the host of the old install, whose project is `hd`
+as well, the old install's dumps with it.
 
 Without the profile `db`, the same command restores into the existing database of `HD_DATABASE_*`:
 a new, empty one ([What the DBA creates](../../docs/external-database.md#what-the-dba-creates)),

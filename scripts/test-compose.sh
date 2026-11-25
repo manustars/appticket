@@ -579,15 +579,18 @@ dump_holds() {
     || fail "$name does not hold '$text': $(cat "$work/list.txt")"
 }
 
-# Expects the running service SERVICE to have been started, or with "not" not to have been.
+# Expects the service SERVICE to be running, or with "not" to have no container at all, even
+# one that has ended: as the engine lists the containers of the project.
 started() {
   local service=$1 expected=${2:-}
   local found
-  found=$(hd_compose ps -q "$service" 2> /dev/null || true)
   if [ "$expected" = not ]; then
-    [ -z "$found" ] || fail "$service was started"
+    found=$("$engine" ps -a --filter "label=com.docker.compose.project=$project" \
+      --filter "label=com.docker.compose.service=$service" --format '{{.Names}}')
+    [ -z "$found" ] || fail "$service was started: $found"
   else
-    [ -n "$found" ] || fail "$service was not started: $(hd_compose ps -a)"
+    found=$(hd_compose ps -q "$service")
+    [ -n "$found" ] || fail "$service is not running: $(hd_compose ps -a)"
   fi
 }
 
@@ -633,16 +636,18 @@ db_password_command "secrets/db_password written"
 db_password=$(cat "$secrets/db_password")
 # The schedule's time, a minute or two from now by the engine's clock, which may not be the
 # test's (a virtual machine's): time for the install to start before the schedule's first dump.
-dump_time=$(in_dumps date -u -d '+100 sec' +%H:%M | tr -d '\r')
-[[ $dump_time =~ ^[0-9]{2}:[0-9]{2}$ ]] || fail "the engine's clock said '$dump_time'"
+read -r dump_day dump_time < <(in_dumps date -u -d '+100 sec' '+%F %H:%M' | tr -d '\r')
+[[ $dump_time =~ ^[0-9]{2}:[0-9]{2}$ ]] || fail "the engine's clock said '$dump_day $dump_time'"
 setting HD_DUMPS_TIME "$dump_time"
 hd_compose up -d
 health
 started dumps-schedule
 started dumps not
 expect_log dumps-schedule "next dump at "
-hd_compose logs --no-color dumps-schedule | grep -qE "next dump at [0-9-]{10}T$dump_time:00Z" \
-  || fail "the schedule is not at $dump_time: $(hd_compose logs --no-color dumps-schedule)"
+# Today's: a schedule started too late for it would wait for tomorrow's.
+hd_compose logs --no-color dumps-schedule | grep -qF "next dump at ${dump_day}T$dump_time:00Z" \
+  || fail "the schedule is not at $dump_day $dump_time:" \
+    "$(hd_compose logs --no-color dumps-schedule)"
 ok "up started the schedule, its next dump at $dump_time UTC, and not the one-shot dumps"
 
 # What a help desk writes: an agent added with the core's command, a customer through the API.
@@ -686,7 +691,8 @@ ok "$third is complete, and holds the customers"
 in_dumps cat "/dumps/$third" > "$work/$third"
 inside=$(in_dumps sha256sum "/dumps/$third" | tr -d '\r' | cut -d ' ' -f 1)
 outside=$(sha256sum "$work/$third" | cut -d ' ' -f 1)
-[ "$inside" = "$outside" ] || fail "$third copied out of the volume is not the same: $outside, $inside"
+[ "$inside" = "$outside" ] \
+  || fail "$third copied out of the volume is not the same: $outside, $inside"
 ok "$third copied out of the volume as it is ($(wc -c < "$work/$third") bytes)"
 no_secret_shown "$db_password"
 # The one-shot dumps' container, which `run --rm` removes when it ends, kept once to be inspected:
@@ -710,7 +716,8 @@ left=$("$engine" volume ls -q --filter "label=com.docker.compose.project=$projec
 [ -z "$left" ] || fail "down -v left the volumes $left"
 fresh_secrets
 db_password_command "secrets/db_password written"
-[ "$(cat "$secrets/db_password")" != "$db_password" ] || fail "the fresh install has the same password"
+[ "$(cat "$secrets/db_password")" != "$db_password" ] \
+  || fail "the fresh install has the same password"
 ok "a fresh install: no volume, and a new secrets/db_password"
 # The command of deploy/compose/dumps.md, run in the install's directory with the dump there.
 hd_compose run --rm -T dumps restore < "$work/$third" > "$work/restore.txt" 2>&1 \
@@ -762,9 +769,11 @@ core_before=$(hd_compose ps -q core)
 hd_compose up -d
 [ "$(hd_compose ps -q core)" = "$core_before" ] || fail "turning the dumps on recreated the core"
 started dumps-schedule
+started dumps not
 started db not
 expect_log dumps-schedule "next dump at "
-ok "with the profile dumps, up starts the schedule, and not the bundled PostgreSQL"
+ok "with the profile dumps, up starts the schedule, and neither the one-shot dumps nor the" \
+  "bundled PostgreSQL"
 existing=$(dump_now)
 dump_holds "$existing" "TABLE public _sqlx_migrations"
 ok "$existing is a complete dump of the test's own PostgreSQL, with the core's migrations"
