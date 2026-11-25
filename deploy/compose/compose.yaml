@@ -120,10 +120,10 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
 
-  # A test mail server that accepts any mail and keeps it in memory, in the mailbox
+  # A test mail server that accepts any message and keeps it in memory, in the mailbox
   # helpdesk@helpdesk.test (login helpdesk, password helpdesk); nothing leaves it. Its SMTP and
-  # IMAP ports are published on the host's loopback address, for sending it mail and reading
-  # the replies. Not for production.
+  # IMAP ports are published on the host's loopback address, for sending it messages and
+  # reading the replies. Not for production.
   greenmail:
     profiles: [greenmail]
     image: docker.io/greenmail/standalone:2.1.8

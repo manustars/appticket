@@ -159,7 +159,8 @@ jobs:
   # gives them: docker compose starts it with its own PostgreSQL (the profile db), then with the
   # Assistant and the test mail server beside it, and then without the profile db on a
   # PostgreSQL that the script starts itself and gives through HD_DATABASE_*. The images build
-  # from the cache the deploy job writes.
+  # from the cache that the deploy job wrote on earlier runs: both jobs run at once, so a change
+  # to the Dockerfile or the code builds here without it.
   compose:
     runs-on: ubuntu-latest
     steps:
