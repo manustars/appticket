@@ -6,8 +6,8 @@
 #      host, and the core waits for it to be healthy;
 #   2. with the profile db: the core starts on the bundled PostgreSQL, reached by its service
 #      name, and /api/health answers that the database is up;
-#   3. the profiles greenmail and assistant added: a mail sent to the test mail server's port on
-#      the host is read by the core, and the Assistant, registered on the core with
+#   3. the profiles greenmail and assistant added: a message sent to the test mail server's port
+#      on the host is read by the core, and the Assistant, registered on the core with
 #      `hd addon add` inside the core's container, reaches the core with its token;
 #   4. without the profile db: the core starts on a PostgreSQL of the test's own, given to it
 #      through the HD_DATABASE_* parameters, with another database, user and password than the
@@ -42,7 +42,7 @@ engine=${CONTAINER_ENGINE:-docker}
 read -r -a compose_command <<< "${COMPOSE:-$engine compose}"
 project=${PROJECT:-hd-test-compose}
 port=${PORT:-55479}
-# The test mail server's ports on the host, for sending it mail: the two after the core's.
+# The test mail server's ports on the host, for sending it messages: the two after the core's.
 smtp_port=$((port + 1))
 imap_port=$((port + 2))
 
@@ -242,8 +242,8 @@ setting HD_SMTP_URL "smtp://127.0.0.1:3025"
 setting HD_MAIL_FROM helpdesk@helpdesk.test
 setting HD_GREENMAIL_SMTP_PORT "$smtp_port"
 setting HD_GREENMAIL_IMAP_PORT "$imap_port"
-# Not settings of an install: the mail already in the mailbox is read too, every two seconds,
-# so that the test's mail is read whenever it arrives.
+# Not settings of an install: the messages already in the mailbox are read too, every two
+# seconds, so that the test's message is read whenever it arrives.
 extra HD_IMAP_IMPORT_EXISTING true
 extra HD_IMAP_POLL_SECONDS 2
 hd_compose up -d
@@ -265,9 +265,9 @@ for _ in $(seq 60); do
   fi
   sleep 1
 done
-[ -n "$sent" ] || fail "the test mail server took no mail: $(cat "$work/curl.txt")"
+[ -n "$sent" ] || fail "the test mail server took no message: $(cat "$work/curl.txt")"
 expect_log core "read new mail"
-ok "a mail sent to the test mail server's port reached the core"
+ok "a message sent to the test mail server's port reached the core"
 
 # Once the core answers, so that the Assistant's first question to it is answered: the
 # Assistant asks again only minutes later.
