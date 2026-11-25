@@ -9,7 +9,9 @@
 #      with the guard's message, and so is one with postgresql.mode=external; the release, the
 #      cluster and the row are as they were;
 #   3. an upgrade to this chart with postgresql.mode=cloudnativepg goes through: the new core is
-#      ready on the same cluster, and the row is there;
+#      ready on the same cluster, and the row is there; after `helm uninstall`, which leaves the
+#      cluster, an install with the default values is refused as the upgrade was, and one with
+#      postgresql.mode=cloudnativepg takes the cluster and the row back;
 #   4. this chart installs with its default values, standalone, beside it; an upgrade with
 #      postgresql.mode=cloudnativepg or external is refused with the guard's message, and the
 #      release, the database and its row are as they were;
@@ -156,17 +158,18 @@ release_is() {
   ok "the release hd is deployed at revision $1 of the chart $2"
 }
 
-# refused MODE HELM_ARGUMENTS…: an upgrade to this chart with these arguments ends with an error
-# that is the guard's message, naming the mode asked for and the one to set.
+# refused VERB MODE HELM_ARGUMENTS…: an upgrade to this chart with these arguments, or an install
+# of it (VERB is upgrade or install), ends with an error that is the guard's message, naming the
+# mode asked for and the one to set.
 refused() {
-  local asked=$1 output
-  shift
-  if h upgrade hd "$chart" "$@" > "$work/refused.txt" 2>&1; then
-    fail "the upgrade went through: $(cat "$work/refused.txt")"
+  local verb=$1 asked=$2 output
+  shift 2
+  if h "$verb" hd "$chart" "$@" > "$work/refused.txt" 2>&1; then
+    fail "the $verb went through: $(cat "$work/refused.txt")"
   fi
   output=$(tr '\r\n' '  ' < "$work/refused.txt")
   grep -qF -- "$found" <<< "$output" \
-    || fail "the upgrade failed, but not with the guard's message '$found': $output"
+    || fail "the $verb failed, but not with the guard's message '$found': $output"
   grep -qF -- "and postgresql.mode is $asked: " <<< "$output" \
     || fail "the guard's message does not name the mode $asked: $output"
   grep -qF -- "$to_set" <<< "$output" \
@@ -304,12 +307,12 @@ expect_cluster_untouched() {
 step "2. Upgrade to this chart hd-$this_version with its default values: refused"
 found="the upgrade guard found the CloudNativePG cluster hd-db of this release in the namespace helpdesk"
 to_set="Set postgresql.mode=cloudnativepg to stay on the cluster"
-refused standalone
+refused upgrade standalone
 ok "UPGRADE REFUSED with the guard's message, for the default values (postgresql.mode=standalone)"
 expect_cluster_untouched
 
 step "2a. The same upgrade with postgresql.mode=external: refused as well"
-refused external --set postgresql.mode=external --set core.database.existingSecret=hd-database
+refused upgrade external --set postgresql.mode=external --set core.database.existingSecret=hd-database
 ok "UPGRADE REFUSED with the guard's message, for postgresql.mode=external"
 expect_cluster_untouched
 
@@ -336,6 +339,30 @@ migrations_after=$(cluster_sql "select count(*) from _sqlx_migrations")
 [ "$migrations_after" -ge "$migrations_before" ] \
   || fail "the cluster's database holds $migrations_after migrations, fewer than the $migrations_before before"
 ok "the new core found the $migrations_before migrations of the released one there, and the database now holds $migrations_after"
+expect_cluster_row
+
+# ---------------------------------------------------------------------------------------------
+step "3a. Uninstall the release, which leaves the cluster, and install this chart with its default values: refused"
+h uninstall hd --wait --timeout 300s
+[ -z "$(h list --filter '^hd$' -q)" ] || fail "the release is still there after helm uninstall"
+[ "$(cluster_uid)" = "$cluster_before" ] || fail "helm uninstall did not leave the cluster hd-db"
+ok "the release is gone, and the cluster hd-db is still there"
+refused install standalone "${image[@]}"
+ok "INSTALL REFUSED with the guard's message, for the default values beside the cluster that was left"
+[ -z "$(h list --filter '^hd$' -q)" ] || fail "the refused install left a release"
+[ -z "$(k get statefulsets,deployments,persistentvolumeclaims -o name | grep -F -e hd-postgresql -e hd-core || true)" ] \
+  || fail "the refused install made something"
+ok "the refused install left no release, no core and no PostgreSQL of the chart's own"
+expect_cluster_row
+
+step "3b. Install this chart with postgresql.mode=cloudnativepg: the cluster is taken back"
+h install hd "$chart" --set postgresql.mode=cloudnativepg "${image[@]}"
+k rollout status deployment/hd-core --timeout=600s
+release_is 1 "hd-$this_version"
+[ "$(cluster_uid)" = "$cluster_before" ] || fail "installing again replaced the cluster hd-db"
+[ "$(cluster_claim_uid)" = "$claim_before" ] || fail "installing again replaced the cluster's volume claim"
+ok "the core is ready on the cluster that was left, which is the one it was"
+health
 expect_cluster_row
 
 # ---------------------------------------------------------------------------------------------
@@ -387,18 +414,18 @@ found="the upgrade guard found the chart's own PostgreSQL of this release (the S
 to_set="Set postgresql.mode=standalone to stay on it"
 
 step "4a. Upgrade the standalone release with postgresql.mode=cloudnativepg: refused"
-refused cloudnativepg --set postgresql.mode=cloudnativepg "${image[@]}"
+refused upgrade cloudnativepg --set postgresql.mode=cloudnativepg "${image[@]}"
 ok "STANDALONE REFUSAL with the guard's message, for postgresql.mode=cloudnativepg"
 expect_standalone_untouched
 
 step "4b. Upgrade the standalone release with postgresql.mode=external: refused"
-refused external --set postgresql.mode=external --set core.database.existingSecret=hd-database \
-  "${image[@]}"
+refused upgrade external --set postgresql.mode=external \
+  --set core.database.existingSecret=hd-database "${image[@]}"
 ok "STANDALONE REFUSAL with the guard's message, for postgresql.mode=external"
 expect_standalone_untouched
 
 step "4c. A dry run that reads the cluster (--dry-run=server) is refused in the same way"
-refused external --dry-run=server --set postgresql.mode=external \
+refused upgrade external --dry-run=server --set postgresql.mode=external \
   --set core.database.existingSecret=hd-database "${image[@]}"
 expect_standalone_untouched
 

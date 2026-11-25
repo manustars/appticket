@@ -227,18 +227,31 @@ to stay on the cluster: …
 Nothing has changed when it appears: the release, the database and the core are as they were.
 Upgrade again with the mode it names.
 
-To leave a database for good, move its data to the new one first, then delete what the guard
-finds, and upgrade with the new mode: the chart refuses every other mode for as long as that
-object exists.
+The guard finds the cluster by its name, and cannot tell one the core runs on from one that
+was left behind: a release that moved to a database of its own under 0.3 still has the cluster
+the chart had made, and so has one that set `postgresql.enabled: true` beside
+`core.database.existingSecret`. There the mode in the message is not the one to set: the
+leftover cluster is to be deleted, as below.
 
-- The chart's own PostgreSQL: `kubectl -n helpdesk delete statefulset hd-postgresql` stops it
-  and leaves its volume and its password's Secret in place, to go back to or to delete later
-  ([Uninstalling](#uninstalling)).
-- The CloudNativePG cluster: `kubectl -n helpdesk delete cluster hd-db` deletes the cluster with
-  its data. Keep a dump or a backup of it until the new database has proved good.
+To leave a database for good, the chart has to stop finding it: the chart refuses every other
+mode for as long as that object exists. In this order:
+
+1. Stop the core (`kubectl -n helpdesk scale deploy/hd-core --replicas=0`) and take a
+   [database dump](#database-dumps), or for the CloudNativePG cluster a backup, that outlives the
+   database. With `postgresql.mode=cloudnativepg` the dumps run only with `dumps.enabled=true`.
+   A database of your own can be filled from the dump now; a database the chart makes, its own
+   PostgreSQL or a new CloudNativePG cluster, exists only after the upgrade.
+2. Delete what the guard finds:
+   - the chart's own PostgreSQL: `kubectl -n helpdesk delete statefulset hd-postgresql` stops it
+     and leaves its volume and its password's Secret in place, to go back to or to delete later
+     ([Uninstalling](#uninstalling));
+   - the CloudNativePG cluster: `kubectl -n helpdesk delete cluster hd-db` deletes the cluster
+     **with its data**: the dump or the backup of step 1 is then the only copy.
+3. Upgrade with the new mode, and restore the dump into the new database unless it holds the
+   data already ([Database dumps](#database-dumps)).
 
 If it finds both, it cannot tell which one holds the help desk's data, and refuses every mode
-until one of the two is deleted.
+until the one the core does not run on is deleted.
 
 **What the guard needs.** Helm must read the cluster while it renders the chart, as `helm
 install` and `helm upgrade` do, with the right to read StatefulSets in the release's namespace
@@ -895,7 +908,11 @@ another database, and an upgrade has to say which one the release has:
   it. The cluster, its data and its Secrets stay as they are.
 - **A release on a database of your own** (`postgresql.enabled: false` with
   `core.database.existingSecret`): set `postgresql.mode=external` and remove
-  `postgresql.enabled`.
+  `postgresql.enabled`. If the release ran on the chart's CloudNativePG cluster before that,
+  0.3 left the cluster in place (`kubectl -n helpdesk get cluster hd-db` shows it), and the
+  chart refuses `external` while it exists, with a message that names `cloudnativepg`: do not
+  set that, since the core has not run on that cluster since. Delete the cluster first
+  (`kubectl -n helpdesk delete cluster hd-db`), once nothing in it is needed.
 - **`postgresql.enabled: true` beside `core.database.existingSecret`**: the core used the
   Secret's database, and the chart made a CloudNativePG cluster beside it that nothing used. Set
   `postgresql.mode=external`, remove `postgresql.enabled`, and delete that cluster first
