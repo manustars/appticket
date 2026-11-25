@@ -86,10 +86,7 @@ values the chart refuses stop it with the same message whichever template render
 {{- fail "postgresql.external is for postgresql.mode=external, and postgresql.mode is standalone" }}
 {{- end }}
 {{- $tag := $pg.standalone.image.tag }}
-{{- /* A number would lose its form: YAML reads 18.10 as 18.1. */}}
-{{- if not (kindIs "string" $tag) }}
-{{- fail "postgresql.standalone.image.tag must be a string: quote it in a values file (\"18.8\"), or give it with --set-string" }}
-{{- end }}
+{{- include "hd.requireStringTag" (dict "name" "postgresql.standalone.image.tag" "tag" $tag) }}
 {{- if not (regexMatch "^18([.@-]|$)" $tag) }}
 {{- fail (printf "postgresql.standalone.image.tag is %q: the chart runs PostgreSQL 18, and a tag must be of that major version" $tag) }}
 {{- end }}
@@ -216,6 +213,16 @@ chart's own PostgreSQL, which has no other backup, and off in the other modes.
 {{- end }}
 {{- if or (eq $text "true") (and (eq $text "") (eq (include "hd.databaseSource" .) "standalone")) }}
 {{- "true" }}
+{{- end }}
+{{- end }}
+
+{{/*
+Refuses an image's tag that is not a string, named by its value (dict "name" "tag"): a number
+would lose its form, as YAML reads 18.10 as 18.1.
+*/}}
+{{- define "hd.requireStringTag" -}}
+{{- if not (kindIs "string" .tag) }}
+{{- fail (printf "%s must be a string: quote it in a values file (\"18.8\"), or give it with --set-string" .name) }}
 {{- end }}
 {{- end }}
 

@@ -691,9 +691,16 @@ refused "dumps with external and an unquoted tag in a values file: refused as we
   "dumps.image.tag $not_text" \
   "${url_form[@]}" --set dumps.enabled=true -f "$work/number-dumps-tag.yaml"
 
+refused "dumps with cloudnativepg and a tag that --set reads as a number: refused there too" \
+  "dumps.image.tag $not_text" \
+  "${cluster[@]}" --set dumps.enabled=true --set dumps.image.tag=18
+
+printf 'dumps:\n  image:\n    tag: "18.10"\n' > "$work/quoted-dumps-tag.yaml"
+render "${standalone[@]}" -f "$work/quoted-dumps-tag.yaml"
+expect_line dumps.yaml '              image: docker.io/library/postgres:18.10'
 render "${standalone[@]}" --set-string dumps.image.tag=18
 expect_line dumps.yaml '              image: docker.io/library/postgres:18'
-finish "dumps with a tag given with --set-string: used as it is written"
+finish "dumps with a quoted tag, or one given with --set-string: used as it is written"
 
 render "${cluster[@]}" --set dumps.image.tag=18
 expect_kind CronJob 0
