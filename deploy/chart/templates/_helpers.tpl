@@ -72,13 +72,25 @@ values the chart refuses stop it with the same message whichever template render
 {{- if not (has $mode (list "standalone" "cloudnativepg" "external")) }}
 {{- fail (printf "postgresql.mode is %q: it must be standalone, cloudnativepg or external" $mode) }}
 {{- end }}
-{{- if eq $mode "standalone" }}
-{{- fail "postgresql.mode=standalone is not available yet: set postgresql.mode to cloudnativepg or external" }}
-{{- end }}
 {{- $db := .Values.core.database }}
 {{- $external := $pg.external | default dict }}
 {{- $password := ($external.password | default dict).existingSecret }}
-{{- if eq $mode "cloudnativepg" }}
+{{- if eq $mode "standalone" }}
+{{- if $db.existingSecret }}
+{{- fail "core.database.existingSecret is for postgresql.mode=external: with postgresql.mode=standalone the core uses the chart's own PostgreSQL" }}
+{{- end }}
+{{- if or $db.sslMode $db.ca.existingSecret }}
+{{- fail "core.database.sslMode and core.database.ca are for postgresql.mode=external: the chart's own PostgreSQL is reached inside the cluster without TLS" }}
+{{- end }}
+{{- if or $external.host $external.name $external.user $password }}
+{{- fail "postgresql.external is for postgresql.mode=external, and postgresql.mode is standalone" }}
+{{- end }}
+{{- $tag := $pg.standalone.image.tag | toString }}
+{{- if not (regexMatch "^18([.@-]|$)" $tag) }}
+{{- fail (printf "postgresql.standalone.image.tag is %q: the chart runs PostgreSQL 18, and a tag must be of that major version" $tag) }}
+{{- end }}
+{{- $mode }}
+{{- else if eq $mode "cloudnativepg" }}
 {{- if $db.existingSecret }}
 {{- fail "core.database.existingSecret is for postgresql.mode=external: with postgresql.mode=cloudnativepg the core uses the Secret of the CloudNativePG cluster" }}
 {{- end }}
@@ -116,6 +128,56 @@ values the chart refuses stop it with the same message whichever template render
 {{- printf "%s-app" (include "hd.dbName" .) }}
 {{- else }}
 {{- .Values.core.database.existingSecret }}
+{{- end }}
+{{- end }}
+
+{{/* The chart's own PostgreSQL (postgresql.mode=standalone): its StatefulSet and its Service. */}}
+{{- define "hd.standaloneName" -}}
+{{- printf "%s-postgresql" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }}
+{{- end }}
+
+{{/* The Secret holding the password of the chart's own PostgreSQL: the one named, or the chart's. */}}
+{{- define "hd.standaloneSecret" -}}
+{{- .Values.postgresql.standalone.existingSecret | default (include "hd.standaloneName" .) }}
+{{- end }}
+
+{{/*
+The database as separate parameters, for the core and for pg_dump alike: host, port, name, user,
+and the Secret and key of the password, as YAML. Those of the chart's own PostgreSQL, or the
+values of an external database; empty when the database is a URL from a Secret.
+*/}}
+{{- define "hd.databaseParameters" -}}
+{{- $source := include "hd.databaseSource" . }}
+{{- if eq $source "standalone" }}
+host: {{ include "hd.standaloneName" . | quote }}
+port: 5432
+name: hd
+user: hd
+secret: {{ include "hd.standaloneSecret" . | quote }}
+key: {{ .Values.postgresql.standalone.secretKey | quote }}
+{{- else if eq $source "external-values" }}
+{{- $external := .Values.postgresql.external }}
+host: {{ $external.host | quote }}
+port: {{ $external.port }}
+name: {{ $external.name | quote }}
+user: {{ $external.user | quote }}
+secret: {{ $external.password.existingSecret | quote }}
+key: {{ $external.password.secretKey | quote }}
+{{- end }}
+{{- end }}
+
+{{/*
+Whether the database dumps run (dumps.enabled): "true" or empty. Left empty they are on with the
+chart's own PostgreSQL, which has no other backup, and off in the other modes.
+*/}}
+{{- define "hd.dumpsEnabled" -}}
+{{- $enabled := .Values.dumps.enabled }}
+{{- $text := ternary "" (toString $enabled) (kindIs "invalid" $enabled) }}
+{{- if not (has $text (list "" "true" "false")) }}
+{{- fail (printf "dumps.enabled is %q: it must be true, false, or empty for on with postgresql.mode=standalone and off otherwise" $text) }}
+{{- end }}
+{{- if or (eq $text "true") (and (eq $text "") (eq (include "hd.databaseSource" .) "standalone")) }}
+{{- "true" }}
 {{- end }}
 {{- end }}
 

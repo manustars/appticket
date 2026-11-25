@@ -22,6 +22,20 @@ The first agent gets the Administrator role and can add the others under Adminis
 
 The database is the CloudNativePG cluster {{ include "hd.dbName" . }} (postgresql.mode=cloudnativepg); the core
 verifies its certificate against the cluster's own authority.
+{{- else if eq $databaseSource "standalone" }}
+{{- $standalone := include "hd.standaloneName" . }}
+
+The database is the chart's own PostgreSQL {{ $standalone }} (postgresql.mode=standalone), one instance
+that the core reaches inside the cluster without TLS; the core's log says so at every start.
+`helm uninstall` leaves its volume (the claim data-{{ $standalone }}-0) in place, and installing
+again under the same release name takes it back.
+{{- if .Values.postgresql.standalone.existingSecret }}
+Its password is in the Secret {{ include "hd.standaloneSecret" . }}; PostgreSQL took it when it first created its data.
+{{- else }}
+Its password was generated into the Secret {{ $standalone }}, which upgrades keep and `helm uninstall`
+leaves beside the volume. A tool that renders the chart without reading the cluster, such as
+Argo CD, needs a Secret of your own instead: postgresql.standalone.existingSecret.
+{{- end }}
 {{- else }}
 
 The database is an external one (postgresql.mode=external), given as {{ ternary "a Secret holding its URL" "separate values" (eq $databaseSource "external-url") }}.
@@ -46,13 +60,13 @@ Staging mail: GreenMail runs next to the core and keeps all mail in {{ .Values.g
 Send test mail to it through svc/{{ printf "%s-greenmail" (include "hd.fullname" .) | trunc 63 | trimSuffix "-" }} port 3025.
 It keeps mail in memory: a restart of the core's pod empties the test mailbox.
 {{- end }}
-{{- if .Values.dumps.enabled }}
+{{- if include "hd.dumpsEnabled" . }}
 
 Database dumps run on "{{ .Values.dumps.schedule }}", keeping {{ .Values.dumps.keep }}. To take one now:
 
   kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ printf "%s-dumps" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }} {{ printf "%s-dump-now" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }}
 {{- $db := .Values.core.database }}
-{{- if and (ne $databaseSource "cloudnativepg") (not $db.ca.existingSecret) (has $db.sslMode (list "" "verify-full" "verify-ca")) }}
+{{- if and (hasPrefix "external" $databaseSource) (not $db.ca.existingSecret) (has $db.sslMode (list "" "verify-full" "verify-ca")) }}
 
 The dumps require TLS to the database but do not verify its certificate, which the core does: the
 dumps' image holds no public certificate authorities. Give the database's authority in
