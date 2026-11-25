@@ -1,9 +1,10 @@
 # The help desk on a single host, with Docker or Podman, from the published images (ADR 0009).
 # Copy .env.example to .env beside this file and set what it asks for. The passwords, mail URLs
 # and tokens are not in .env: each is a file in secrets/, which secrets/README.md describes with
-# the permissions they need. With the profile db, write the bundled PostgreSQL's password once,
-# before the first start, then start:
+# the permissions they need. Close the directory to other users of the host; with the profile
+# db, write the bundled PostgreSQL's password once, before the first start; then start:
 #
+#   chmod 700 secrets
 #   docker compose run --rm db-password
 #   docker compose up -d        (or podman compose …)
 #
