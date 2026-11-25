@@ -478,8 +478,10 @@ step "4d. With a CloudNativePG cluster hd-db beside the chart's own PostgreSQL: 
 sed 's/^  name: probe$/  name: hd-db/' "$work/probe.yaml" > "$work/beside.yaml"
 k apply -f "$work/beside.yaml"
 both="the upgrade guard found two databases of this release in the namespace helpdesk-standalone, the CloudNativePG cluster hd-db and the chart's own PostgreSQL (the StatefulSet hd-postgresql), and cannot tell which one holds the help desk's data"
-for mode in standalone cloudnativepg; do
-  if h upgrade hd "$chart" --set "postgresql.mode=$mode" "${image[@]}" > "$work/both.txt" 2>&1; then
+for mode in standalone cloudnativepg external; do
+  given=(--set "postgresql.mode=$mode")
+  [ "$mode" = external ] && given+=(--set core.database.existingSecret=hd-database)
+  if h upgrade hd "$chart" "${given[@]}" "${image[@]}" > "$work/both.txt" 2>&1; then
     fail "the upgrade with postgresql.mode=$mode went through beside both databases: $(cat "$work/both.txt")"
   fi
   output=$(tr '\r\n' '  ' < "$work/both.txt")
@@ -491,7 +493,7 @@ for mode in standalone cloudnativepg; do
   done
   ok "refused with postgresql.mode=$mode: $output"
 done
-ok "BOTH FOUND: refused with the guard's message, in the mode of either"
+ok "BOTH FOUND: refused with the guard's message, in every mode"
 k delete clusters.postgresql.cnpg.io hd-db --wait=true --timeout=120s
 expect_standalone_untouched
 
