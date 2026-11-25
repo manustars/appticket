@@ -111,8 +111,9 @@ jobs:
         env:
           SCAN_DENYLIST: none
 
-  # The deployment artifacts: the Helm chart lints and renders, and both images build (nothing is
-  # pushed; publishing happens in release.yml on version tags).
+  # The deployment artifacts: the Helm chart lints and renders, both images build (nothing is
+  # pushed; publishing happens in release.yml on version tags), and the chart installs with its
+  # own PostgreSQL and the core's image built here, in a kind cluster.
   deploy:
     runs-on: ubuntu-latest
     steps:
@@ -129,6 +130,9 @@ jobs:
           file: deploy/Dockerfile
           target: core
           push: false
+          # Into the runner's Docker, for the kind cluster below.
+          load: true
+          tags: hd-core:ci
           cache-from: type=gha,scope=hd
           cache-to: type=gha,scope=hd,mode=max
       - uses: docker/build-push-action@v7
@@ -138,6 +142,10 @@ jobs:
           target: assistant
           push: false
           cache-from: type=gha,scope=hd
+      # postgresql.mode=standalone in a kind cluster (the runner's own kind): install, upgrade to a
+      # later chart with the same password, uninstall with the volume kept, install again.
+      - name: Install, upgrade and uninstall the chart with its own PostgreSQL
+        run: bash scripts/test-standalone-install.sh hd-core:ci
 
   # Publishing the chart, without a release: the script that a release runs (release.yml) pushes
   # the chart to a throwaway registry, and what it pushed is pulled back and rendered.
