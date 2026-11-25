@@ -441,6 +441,11 @@ refused "postgresql.enabled=false: refused, naming postgresql.mode=external" \
   'postgresql.enabled is no longer a value: set postgresql.mode=external and remove postgresql.enabled' \
   --set postgresql.enabled=false --set core.database.existingSecret=hd-database
 
+# How an upgrade that reuses the old values takes postgresql.enabled out of them.
+render --set postgresql.enabled=null --set postgresql.mode=cloudnativepg
+expect_cluster_database
+finish "postgresql.enabled=null beside postgresql.mode: removed, not refused"
+
 echo
 if [ "$failures" -gt 0 ]; then
   echo "$failures of $cases cases failed"
