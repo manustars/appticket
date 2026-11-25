@@ -193,14 +193,12 @@ owned by the user `hd`.
   an external database and refused here. With `networkPolicy.enabled`, only the core and the
   dumps reach the database's port.
 - **Dumps.** The [database dumps](#database-dumps) are on unless `dumps.enabled=false`: the
-  chart's own PostgreSQL has no other backup.
-- **`helm install --wait`.** Helm's `--wait` (and `--atomic`, which implies it) waits for every
-  PersistentVolumeClaim of the release to be bound. With a StorageClass that binds a volume only
-  when a pod first uses it (`volumeBindingMode: WaitForFirstConsumer`), the claim of the dumps
-  stays pending until the first dump runs, and `--wait` runs into its timeout though the help
-  desk is up. Install without `--wait` and follow the core with `kubectl -n helpdesk rollout
-  status deployment/hd-core`, or give the dumps a claim that is already bound
-  (`dumps.storage.existingClaim`). The same holds in the other modes with `dumps.enabled=true`.
+  chart's own PostgreSQL has no other backup. The database's pod mounts the dumps' claim too,
+  unused, so that the claim is bound when the database starts and `helm install --wait` ends
+  even with a StorageClass that binds a volume only when a pod first uses it
+  (`volumeBindingMode: WaitForFirstConsumer`). The claim is ReadWriteOnce, used on one node at
+  a time, so the dumps run on the database's node. Turning the dumps on or off restarts the
+  database. A claim of your own (`dumps.storage.existingClaim`) is left to the dumps alone.
 
 ### The upgrade guard
 
@@ -399,6 +397,15 @@ works in every database mode; the volume (`dumps.storage.size`,
 `storageClass`, or `existingClaim`) is kept on `helm uninstall`. Keep the job's image
 (`dumps.image.tag`) at the database's major version or newer.
 
+With `cloudnativepg` or `external`, the claim the chart makes for the dumps is used only by the
+dumps. Helm's `--wait` (and `--atomic`, which implies it) waits for every PersistentVolumeClaim of
+the release to be bound: with a StorageClass that binds a volume only when a pod first uses it
+(`volumeBindingMode: WaitForFirstConsumer`), the claim stays pending until the first dump runs,
+and `--wait` runs into its timeout though the help desk is up. Install without `--wait` and follow
+the core with `kubectl -n helpdesk rollout status deployment/hd-core`, or give the dumps a claim
+that is already bound (`dumps.storage.existingClaim`). The chart's own PostgreSQL mounts the claim
+itself ([The chart's own PostgreSQL](#the-charts-own-postgresql)).
+
 `pg_dump` reaches the chart's own PostgreSQL as the core does: inside the cluster, without TLS,
 with the password from its Secret.
 
@@ -450,6 +457,17 @@ spec:
         app.kubernetes.io/component: dumps
     spec:
       restartPolicy: Never
+      # On the node of the chart's own PostgreSQL, which mounts the dumps' claim too: a
+      # ReadWriteOnce volume is used on one node at a time.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: hd
+                  app.kubernetes.io/instance: hd
+                  app.kubernetes.io/component: postgresql
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -515,7 +533,9 @@ version or newer: the image is the one of `dumps.image.tag`.
 With `networkPolicy.enabled`, only the pods of the core and of the dumps reach the chart's own
 PostgreSQL, which is why the Job's pod has the labels of the dumps (with another release name,
 `app.kubernetes.io/instance` is that name, and with `nameOverride`, `app.kubernetes.io/name` is
-that). With `postgresql.standalone.existingSecret` the password is in that Secret, and with
+that, in the affinity too). The affinity is for the chart's own PostgreSQL, which mounts the
+dumps' claim: leave it out with a claim of your own (`dumps.storage.existingClaim`) and where
+that PostgreSQL is not running, or the Job's pod waits for it. With `postgresql.standalone.existingSecret` the password is in that Secret, and with
 `dumps.storage.existingClaim` the dumps are on that claim. With `dumps.enabled=false` the policy admits no pod
 of the dumps at all: turn the dumps on, or the NetworkPolicies off, for the restore. For another
 database, the Job reaches it as the dumps do (above), with the variables of `pg_dump`; moving to a
@@ -612,6 +632,16 @@ from a private authority whose certificate is in `database-ca.crt`.
      template:
        spec:
          restartPolicy: Never
+         # Beside the chart's own PostgreSQL, still running, which mounts the dumps' claim too.
+         affinity:
+           podAffinity:
+             requiredDuringSchedulingIgnoredDuringExecution:
+               - topologyKey: kubernetes.io/hostname
+                 labelSelector:
+                   matchLabels:
+                     app.kubernetes.io/name: hd
+                     app.kubernetes.io/instance: hd
+                     app.kubernetes.io/component: postgresql
          securityContext:
            runAsNonRoot: true
            runAsUser: 10001
@@ -739,8 +769,9 @@ helm upgrade hd oci://ghcr.io/manustars/charts/hd --version <version> -n helpdes
 kubectl -n helpdesk wait --for=condition=Ready cluster/hd-db --timeout=600s
 ```
 
-Restore with the Job of [Restoring a dump](#restoring-a-dump), with the cluster's URL from its
-Secret in place of the variables `PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` and `PGSSLMODE`:
+Restore with the Job of [Restoring a dump](#restoring-a-dump), without its `affinity` (the chart's
+own PostgreSQL is stopped) and with the cluster's URL from its Secret in place of the variables
+`PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` and `PGSSLMODE`:
 
 ```yaml
             - name: DATABASE_URL

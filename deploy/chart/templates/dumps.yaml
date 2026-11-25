@@ -19,7 +19,7 @@ of core.database.ca, and without one requires TLS where the core verifies.
 {{- if eq $databaseSource "standalone" }}
 {{- $sslMode = "disable" }}
 {{- end }}
-{{- $name := printf "%s-dumps" (include "hd.fullname" .) | trunc 52 | trimSuffix "-" }}
+{{- $name := include "hd.dumpsName" . }}
 {{- $claim := $d.storage.existingClaim | default $name }}
 {{- if lt (int $d.keep) 1 }}
 {{- fail "dumps.keep must be 1 or more" }}
@@ -75,6 +75,16 @@ spec:
           {{- end }}
           securityContext:
             {{- include "hd.podSecurityContext" . | nindent 12 }}
+          {{- if include "hd.dumpsBesideDatabase" . }}
+          # On the node of the chart's own PostgreSQL, which mounts the same ReadWriteOnce claim.
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - topologyKey: kubernetes.io/hostname
+                  labelSelector:
+                    matchLabels:
+                      {{- include "hd.selectorLabels" (dict "root" . "component" "postgresql") | nindent 22 }}
+          {{- end }}
           containers:
             - name: pg-dump
               image: {{ printf "%s:%s" $d.image.repository $d.image.tag }}
