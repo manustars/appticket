@@ -6,9 +6,13 @@
 #      host, and the core waits for it to be healthy;
 #   2. with the profile db: the core starts on the bundled PostgreSQL, reached by its service
 #      name, and /api/health answers that the database is up;
-#   3. without it: the core starts on a PostgreSQL of the test's own, given to it through the
-#      HD_DATABASE_* parameters, with another database, user and password than the bundled
-#      one's, and /api/health answers that the database is up.
+#   3. the profiles assistant and greenmail added: the Assistant, registered on the core with
+#      `hd addon add` inside the core's container, reaches the core with its token, and a mail
+#      sent to the test mail server's port on the host is read by the core;
+#   4. without the profile db: the core starts on a PostgreSQL of the test's own, given to it
+#      through the HD_DATABASE_* parameters, with another database, user and password than the
+#      bundled one's; /api/health answers that the database is up, and the core's migrations are
+#      in that database.
 #
 # The install's settings are the shipped .env.example with the test's values put in, written to
 # a directory of the test's own and given with --env-file: nothing is written into the Compose
@@ -17,15 +21,18 @@
 # Usage:
 #   bash scripts/test-compose.sh VERSION
 #
-# VERSION is the tag of ghcr.io/manustars/hd-core that the local engine holds, as the release
-# names it (HD_VERSION), such as one built with
-#   docker build -f deploy/Dockerfile --target core -t ghcr.io/manustars/hd-core:VERSION .
-# The test never pulls it. Needs docker (or podman) with Compose, and curl. It prints a line per
-# step and exits with 1 at the first check that fails, after printing the containers' logs.
+# VERSION is the tag of ghcr.io/manustars/hd-core and ghcr.io/manustars/hd-assistant that the
+# local engine holds, as the install names it (HD_VERSION), such as images built with
+#   docker build -f deploy/Dockerfile --target core      -t ghcr.io/manustars/hd-core:VERSION .
+#   docker build -f deploy/Dockerfile --target assistant -t ghcr.io/manustars/hd-assistant:VERSION .
+# The test never pulls them; it pulls PostgreSQL, GreenMail and BusyBox. Needs docker (or podman)
+# with Compose, and curl. It prints a line per step and exits with 1 at the first check that
+# fails, after printing the containers' logs; it removes what it started either way.
 #
-# Environment: COMPOSE_DIR (the Compose directory, deploy/compose), CONTAINER_ENGINE (docker by
-# default; podman), COMPOSE (the Compose command, "$CONTAINER_ENGINE compose"), PROJECT (the
-# Compose project, hd-test-compose), PORT (a free local port for the core, 55479).
+# Environment: COMPOSE_DIR (the Compose directory, deploy/compose; such as an unpacked copy of
+# it), CONTAINER_ENGINE (docker by default; podman), COMPOSE (the Compose command,
+# "$CONTAINER_ENGINE compose"), PROJECT (the Compose project, hd-test-compose), PORT (a free
+# local port for the core, 55479; the two after it are the test mail server's).
 set -euo pipefail
 
 version=${1:?usage: test-compose.sh VERSION}
@@ -35,6 +42,9 @@ engine=${CONTAINER_ENGINE:-docker}
 read -r -a compose_command <<< "${COMPOSE:-$engine compose}"
 project=${PROJECT:-hd-test-compose}
 port=${PORT:-55479}
+# The test mail server's ports on the host, for sending it mail: the two after the core's.
+smtp_port=$((port + 1))
+imap_port=$((port + 2))
 
 # The environment would win over the test's settings: Compose takes a variable from it before
 # the file given with --env-file.
@@ -101,7 +111,8 @@ finish() {
     if [ "$status" -ne 0 ]; then
       diagnose
     fi
-    hd_compose --profile db down -v --remove-orphans > /dev/null 2>&1 || true
+    hd_compose --profile db --profile assistant --profile greenmail down -v --remove-orphans \
+      > /dev/null 2>&1 || true
   fi
   if [ -n "$external_started" ]; then
     if [ "$status" -ne 0 ]; then
@@ -134,6 +145,23 @@ setting() {
   mv "$work/.env.new" "$work/.env"
 }
 
+# Adds KEY=VALUE to the test's settings, for what an install does not usually set.
+extra() {
+  echo "$1=$2" >> "$work/.env"
+}
+
+# Waits up to a minute for the log of SERVICE to hold TEXT.
+expect_log() {
+  local service=$1 text=$2
+  for _ in $(seq 60); do
+    if hd_compose logs --no-color "$service" 2> /dev/null | grep -qF "$text"; then
+      return 0
+    fi
+    sleep 1
+  done
+  fail "the log of $service does not say '$text'"
+}
+
 # The settings both modes share, from the shipped example.
 settings() {
   cp "$compose_dir/.env.example" "$work/.env"
@@ -155,8 +183,8 @@ service() {
 # Reads /api/health from the core's published port, and expects it to answer that the database
 # is up: the core runs a query for it, with the password.
 health() {
-  local status="" attempt
-  for attempt in $(seq 120); do
+  local status=""
+  for _ in $(seq 120); do
     if status=$(curl -sS -o "$work/health.json" -w '%{http_code}' \
       "http://127.0.0.1:$port/api/health" 2> "$work/curl.txt") && [ "$status" = 200 ]; then
       break
@@ -173,15 +201,17 @@ health() {
 step "Tools"
 "${compose_command[@]}" version
 curl --version | head -n 1
-"$engine" image inspect "ghcr.io/manustars/hd-core:$version" > /dev/null \
-  || fail "the engine holds no ghcr.io/manustars/hd-core:$version: build it first (see the usage)"
-ok "the engine holds ghcr.io/manustars/hd-core:$version"
+for image in hd-core hd-assistant; do
+  "$engine" image inspect "ghcr.io/manustars/$image:$version" > /dev/null \
+    || fail "the engine holds no ghcr.io/manustars/$image:$version: build it first (see the usage)"
+  ok "the engine holds ghcr.io/manustars/$image:$version"
+done
 
 # ---------------------------------------------------------------------------------------------
 step "1. The configuration, every profile on"
 settings
 setting HD_DATABASE_PASSWORD "$(password)"
-hd_compose --profile db config > "$work/config.yaml"
+hd_compose --profile db --profile assistant --profile greenmail config > "$work/config.yaml"
 service db < "$work/config.yaml" > "$work/db.yaml"
 service core < "$work/config.yaml" > "$work/core.yaml"
 [ -s "$work/db.yaml" ] || fail "the configuration has no service db: $(cat "$work/config.yaml")"
@@ -203,11 +233,52 @@ settings
 setting HD_DATABASE_PASSWORD "$(password)"
 hd_compose up -d
 health
+
+# ---------------------------------------------------------------------------------------------
+step "3. Add the profiles assistant and greenmail beside db"
+hd_compose exec -T core hd addon add assistant --url http://assistant:8090 \
+  --event message.received --event ticket.opened \
+  --scope directory:read --scope tickets:read --scope proposals:write > "$work/addon.txt"
+token=$(sed -n 's/^token: //p' "$work/addon.txt")
+event_secret=$(sed -n 's/^event secret: //p' "$work/addon.txt")
+[ -n "$token" ] && [ -n "$event_secret" ] \
+  || fail "hd addon add printed no token and event secret: $(cat "$work/addon.txt")"
+ok "the Assistant is registered on the core"
+setting COMPOSE_PROFILES db,assistant,greenmail
+setting HD_ASSISTANT_TOKEN "$token"
+setting HD_ASSISTANT_EVENT_SECRET "$event_secret"
+# A model service on the Assistant's own machine that takes no key: the test sends it nothing.
+setting HD_ASSISTANT_MODEL_PROVIDER ollama
+setting HD_ASSISTANT_MODEL test-model
+setting HD_IMAP_URL "imap://helpdesk:helpdesk@127.0.0.1:3143/INBOX"
+setting HD_SMTP_URL "smtp://127.0.0.1:3025"
+setting HD_MAIL_FROM helpdesk@helpdesk.test
+setting HD_GREENMAIL_SMTP_PORT "$smtp_port"
+setting HD_GREENMAIL_IMAP_PORT "$imap_port"
+# Not settings of an install: the mail already in the mailbox is read too, every two seconds,
+# so that the test's mail becomes a ticket whenever it arrives.
+extra HD_IMAP_IMPORT_EXISTING true
+extra HD_IMAP_POLL_SECONDS 2
+hd_compose up -d
+health
+expect_log assistant "connected to the core"
+ok "the Assistant reached the core with its token"
+cat > "$work/message.eml" <<'MAIL'
+From: Ada Lindqvist <ada@customer.example.com>
+To: helpdesk@helpdesk.test
+Subject: The printer on the second floor jams
+
+It has jammed since this morning.
+MAIL
+curl -sS "smtp://127.0.0.1:$smtp_port" --mail-from ada@customer.example.com \
+  --mail-rcpt helpdesk@helpdesk.test -T "$work/message.eml"
+expect_log core "read new mail"
+ok "a mail sent to the test mail server's port reached the core"
 hd_compose down -v
 ok "stopped, with its volume removed"
 
 # ---------------------------------------------------------------------------------------------
-step "3. Start without the profile db: the core on a PostgreSQL of the test's own"
+step "4. Start without the profile db: the core on a PostgreSQL of the test's own"
 admin_password=$(password)
 owner_password=$(password)
 external_started=yes

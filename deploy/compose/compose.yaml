@@ -8,6 +8,8 @@
 #   db          the bundled PostgreSQL, its data on the volume db-data; without it the core uses
 #               the existing database that the HD_DATABASE_* settings name
 #               (docs/external-database.md)
+#   assistant   the Assistant add-on, once registered on the core (docs/deploy.md)
+#   greenmail   a test mail server, to try the help desk; not for production
 #
 # This is the install's file; the compose.yaml at the root of the repository is for development.
 name: hd
@@ -28,6 +30,22 @@ services:
       - HD_DATABASE_PASSWORD
       - HD_DATABASE_SSLMODE
       - HD_PUBLIC_URL
+      - HD_IMAP_URL
+      - HD_SMTP_URL
+      - HD_MAIL_FROM
+      - HD_MAIL_FROM_NAME
+      - HD_IMAP_POLL_SECONDS
+      - HD_IMAP_IMPORT_EXISTING
+      - HD_SIGN_IN_FAILURES
+      - HD_SIGN_IN_WINDOW_SECONDS
+      - HD_TRUSTED_PROXIES
+      - HD_OIDC_ISSUER
+      - HD_OIDC_CLIENT_ID
+      - HD_OIDC_CLIENT_SECRET
+      - HD_OIDC_LABEL
+      - HD_OIDC_SESSION_HOURS
+      - HD_OIDC_AUTHORIZED_GROUP
+      - HD_OIDC_GROUP_CLAIM
       - HD_LOG
     # Published on the host for the reverse proxy in front of it, which does HTTPS: on the
     # host's loopback address unless HD_HTTP_ADDRESS says otherwise.
@@ -69,6 +87,74 @@ services:
       timeout: 5s
       retries: 60
     stop_grace_period: 60s
+
+  # The Assistant, which the core sends its events to at http://assistant:8090. It needs the
+  # token and event secret that registering it on the core prints, so it is started after that:
+  #
+  #   docker compose exec core hd addon add assistant --url http://assistant:8090 \
+  #     --event message.received --event ticket.opened \
+  #     --scope directory:read --scope tickets:read --scope proposals:write
+  #
+  # Its settings are in addons/assistant/README.md.
+  assistant:
+    profiles: [assistant]
+    image: ghcr.io/manustars/hd-assistant:${HD_VERSION:?set HD_VERSION in .env, such as 1.2.3}
+    restart: unless-stopped
+    # The first two set here; the others, as for the core, passed only when set.
+    environment:
+      - HD_ASSISTANT_LISTEN=0.0.0.0:8090
+      - HD_ASSISTANT_CORE_URL=http://core:8080
+      - HD_ASSISTANT_TOKEN
+      - HD_ASSISTANT_EVENT_SECRET
+      - HD_ASSISTANT_API_KEY
+      - HD_ASSISTANT_MODEL_PROVIDER
+      - HD_ASSISTANT_MODEL
+      - HD_ASSISTANT_MODEL_URL
+      - HD_ASSISTANT_MODEL_EFFORT
+      - HD_ASSISTANT_MODEL_CONCURRENCY
+      - HD_ASSISTANT_THINKING
+      - HD_ASSISTANT_AZURE_API_VERSION
+      - HD_ASSISTANT_LOG
+    depends_on: [core]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  # A test mail server that accepts any mail and keeps it in memory, in the mailbox
+  # helpdesk@helpdesk.test (login helpdesk, password helpdesk); nothing leaves it. Its SMTP and
+  # IMAP ports are published on the host's loopback address, for sending it mail and reading
+  # the replies. Not for production.
+  greenmail:
+    profiles: [greenmail]
+    image: docker.io/greenmail/standalone:2.1.8
+    restart: unless-stopped
+    environment:
+      GREENMAIL_OPTS: >-
+        -Dgreenmail.setup.test.smtp -Dgreenmail.setup.test.imap
+        -Dgreenmail.hostname=0.0.0.0
+        -Dgreenmail.users=helpdesk:helpdesk@helpdesk.test
+        -Dgreenmail.users.login=local_part
+    ports:
+      - "127.0.0.1:${HD_GREENMAIL_SMTP_PORT:-3025}:3025"
+      - "127.0.0.1:${HD_GREENMAIL_IMAP_PORT:-3143}:3143"
+
+  # The test mail server on the core's own loopback address, where the core accepts mail
+  # without TLS (imap://127.0.0.1:3143, smtp://127.0.0.1:3025): it shares the core's network and
+  # passes each connection on to greenmail, with BusyBox's nc.
+  greenmail-relay:
+    profiles: [greenmail]
+    image: docker.io/library/busybox:1.37.0
+    restart: unless-stopped
+    network_mode: service:core
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        nc -lk -s 127.0.0.1 -p 3025 -e nc greenmail 3025 &
+        exec nc -lk -s 127.0.0.1 -p 3143 -e nc greenmail 3143
+    depends_on: [core, greenmail]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
 volumes:
   db-data:
