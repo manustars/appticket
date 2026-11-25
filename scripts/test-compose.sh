@@ -20,7 +20,19 @@
 #   4. without the profile db: the core starts on a PostgreSQL of the test's own, given to it
 #      through the HD_DATABASE_* parameters and secrets/db_password, with another database,
 #      user and password than the bundled one's; /api/health answers that the database is up,
-#      the core's migrations are in that database, and no one is shown that password.
+#      the core's migrations are in that database, and no one is shown that password;
+#   5. the dumps, with the profile db: `up` starts the schedule and not the one-shot dumps,
+#      and the schedule takes a dump at the time .env gives; after a customer is added through
+#      the core's API, `docker compose run --rm dumps` leaves complete dumps on the volume,
+#      the latest HD_DUMPS_KEEP of them and no temporary file, which hold the customers and come
+#      out of the volume unchanged; no one is shown the database's password;
+#   6. a fresh install, its volumes removed and a new password written, restored from the last
+#      of those dumps with the command that deploy/compose/dumps.md gives: the agent signs in
+#      with the password of before and reads the customer back through the API;
+#   7. the dumps without the profile db: the schedule starts only once the profile dumps is
+#      added, and `docker compose run --rm dumps` dumps the test's own PostgreSQL of step 4,
+#      over TLS, required but not verified, when .env gives no HD_DATABASE_SSLMODE; no one is
+#      shown that database's password.
 #
 # The install the test runs is a copy of the Compose directory in a directory of the test's own,
 # where it writes the secrets as secrets/README.md says, with the permissions it gives. Its
@@ -524,6 +536,250 @@ migrations=$(external_sql helpdesk helpdesk "SELECT count(*) FROM _sqlx_migratio
 ok "the core applied its $migrations migrations to the test's own PostgreSQL, as the user" \
   "whose password is secrets/db_password"
 no_secret_shown "$owner_password"
+hd_compose down -v
+ok "stopped"
+
+# ---------------------------------------------------------------------------------------------
+# What steps 5 to 7 share: the dumps, and the core's API.
+
+# The name of a dump, as the dumps give it.
+dump_name='hd-[0-9]{8}T[0-9]{6}Z\.dump'
+
+# Takes a dump now, with the command that deploy/compose/dumps.md gives, and prints the name of
+# the dump it says it took.
+dump_now() {
+  hd_compose run --rm dumps > "$work/dump.txt" 2>&1 \
+    || fail "docker compose run --rm dumps failed: $(cat "$work/dump.txt")"
+  local name
+  name=$(tr -d '\r' < "$work/dump.txt" | sed -nE "s/^dumped ($dump_name); kept:$/\1/p")
+  [ -n "$name" ] || fail "docker compose run --rm dumps named no dump: $(cat "$work/dump.txt")"
+  echo "$name"
+}
+
+# Runs COMMAND in a container of the dumps that starts nothing else, its output on standard
+# output, as the documentation lists and copies the dumps.
+in_dumps() {
+  hd_compose run --rm --no-deps -T dumps "$@"
+}
+
+# The files on the dumps' volume, hidden ones included, separated by spaces, in order.
+dumps_on_volume() {
+  in_dumps ls -1A /dumps | tr -d '\r' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'
+}
+
+# Expects the dump NAME on the volume to be complete, pg_restore reading it to its end, and to
+# hold TEXT in its list of contents.
+dump_holds() {
+  local name=$1 text=$2
+  in_dumps pg_restore --file=/dev/null "/dumps/$name" > "$work/read.txt" 2>&1 \
+    || fail "pg_restore cannot read $name to its end: $(cat "$work/read.txt")"
+  in_dumps pg_restore --list "/dumps/$name" > "$work/list.txt" 2>&1 \
+    || fail "pg_restore cannot list $name: $(cat "$work/list.txt")"
+  grep -qF -- "$text" "$work/list.txt" \
+    || fail "$name does not hold '$text': $(cat "$work/list.txt")"
+}
+
+# Expects the running service SERVICE to have been started, or with "not" not to have been.
+started() {
+  local service=$1 expected=${2:-}
+  local found
+  found=$(hd_compose ps -q "$service" 2> /dev/null || true)
+  if [ "$expected" = not ]; then
+    [ -z "$found" ] || fail "$service was started"
+  else
+    [ -n "$found" ] || fail "$service was not started: $(hd_compose ps -a)"
+  fi
+}
+
+# Signs in to the core's API as EMAIL with PASSWORD and prints the session's token. The cookie
+# that carries it is Secure, which curl does not send back over http, so it is read from the
+# headers and sent as one.
+sign_in() {
+  local email=$1 password=$2 status
+  status=$(curl -sS -o "$work/answer.json" -D "$work/headers.txt" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    --data "{\"email\":\"$email\",\"password\":\"$password\"}" \
+    "http://127.0.0.1:$port/api/session") || fail "signing in as $email failed"
+  [ "$status" = 204 ] || fail "signing in as $email answered $status: $(cat "$work/answer.json")"
+  tr -d '\r' < "$work/headers.txt" | sed -n 's/^[Ss]et-[Cc]ookie: hd_session=\([^;]*\).*/\1/p'
+}
+
+# Calls the core's API with METHOD on PATH, with the JSON BODY when given, signed in with the
+# token TOKEN; the answer is in $work/answer.json. Expects the status EXPECTED.
+api() {
+  local token=$1 method=$2 path=$3 expected=$4 body=${5:-} status
+  local arguments=(-sS -o "$work/answer.json" -w '%{http_code}' -X "$method"
+    -H "Cookie: hd_session=$token")
+  if [ -n "$body" ]; then
+    arguments+=(-H 'Content-Type: application/json' --data "$body")
+  fi
+  status=$(curl "${arguments[@]}" "http://127.0.0.1:$port$path") || fail "$method $path failed"
+  [ "$status" = "$expected" ] \
+    || fail "$method $path answered $status, not $expected: $(cat "$work/answer.json")"
+}
+
+# A fresh install's secrets/, with nothing but what it ships.
+fresh_secrets() {
+  find "$secrets" -mindepth 1 ! -name README.md ! -name .gitignore -delete
+}
+
+# ---------------------------------------------------------------------------------------------
+step "5. The dumps with the profile db: on a schedule, and one now with run --rm dumps"
+rm -f "$work/external.yaml"
+fresh_secrets
+settings
+setting HD_DUMPS_KEEP 2
+db_password_command "secrets/db_password written"
+db_password=$(cat "$secrets/db_password")
+# The schedule's time, a minute or two from now by the engine's clock, which may not be the
+# test's (a virtual machine's): time for the install to start before the schedule's first dump.
+dump_time=$(in_dumps date -u -d '+100 sec' +%H:%M | tr -d '\r')
+[[ $dump_time =~ ^[0-9]{2}:[0-9]{2}$ ]] || fail "the engine's clock said '$dump_time'"
+setting HD_DUMPS_TIME "$dump_time"
+hd_compose up -d
+health
+started dumps-schedule
+started dumps not
+expect_log dumps-schedule "next dump at "
+hd_compose logs --no-color dumps-schedule | grep -qE "next dump at [0-9-]{10}T$dump_time:00Z" \
+  || fail "the schedule is not at $dump_time: $(hd_compose logs --no-color dumps-schedule)"
+ok "up started the schedule, its next dump at $dump_time UTC, and not the one-shot dumps"
+
+# What a help desk writes: an agent added with the core's command, a customer through the API.
+hd_compose exec -T core hd agent add ada.agent@example.com --name "Ada Agent" > "$work/agent.txt"
+agent_password=$(sed -n 's/^password: //p' "$work/agent.txt" | tr -d '\r')
+[ -n "$agent_password" ] || fail "hd agent add printed no password: $(cat "$work/agent.txt")"
+session=$(sign_in ada.agent@example.com "$agent_password")
+[ -n "$session" ] || fail "signing in set no session cookie: $(cat "$work/headers.txt")"
+api "$session" POST /api/customers/all 201 \
+  '{"name":"Brightfield Lighting","domains":["brightfield.example.com"]}'
+customer=$(sed -n 's/.*"id":"\([0-9a-f-]*\)".*/\1/p' "$work/answer.json")
+[ -n "$customer" ] || fail "the new customer has no id: $(cat "$work/answer.json")"
+api "$session" GET "/api/customers/$customer" 200
+grep -qF '"name":"Brightfield Lighting"' "$work/answer.json" \
+  || fail "the customer reads back as $(cat "$work/answer.json")"
+ok "the customer Brightfield Lighting added through the API, by the agent added with hd agent add"
+
+scheduled=""
+for _ in $(seq 240); do
+  if hd_compose logs --no-color dumps-schedule 2> /dev/null | grep -qE "^.*dumped $dump_name"; then
+    scheduled=yes
+    break
+  fi
+  sleep 1
+done
+[ -n "$scheduled" ] \
+  || fail "the schedule took no dump at $dump_time: $(hd_compose logs --no-color dumps-schedule)"
+ok "the schedule took a dump at $dump_time UTC"
+
+first=$(dump_now)
+second=$(dump_now)
+third=$(dump_now)
+[ "$first" != "$second" ] && [ "$second" != "$third" ] \
+  || fail "two dumps have the same name: $first $second $third"
+holds_now=$(dumps_on_volume)
+[ "$holds_now" = "$second $third" ] \
+  || fail "the volume holds '$holds_now', not the latest two dumps '$second $third'"
+ok "three dumps now, $first, $second and $third: the volume holds the latest two and nothing else"
+dump_holds "$third" "TABLE DATA public customers"
+ok "$third is complete, and holds the customers"
+in_dumps cat "/dumps/$third" > "$work/$third"
+inside=$(in_dumps sha256sum "/dumps/$third" | tr -d '\r' | cut -d ' ' -f 1)
+outside=$(sha256sum "$work/$third" | cut -d ' ' -f 1)
+[ "$inside" = "$outside" ] || fail "$third copied out of the volume is not the same: $outside, $inside"
+ok "$third copied out of the volume as it is ($(wc -c < "$work/$third") bytes)"
+no_secret_shown "$db_password"
+# The one-shot dumps' container, which `run --rm` removes when it ends, kept once to be inspected:
+# it is the schedule's, but for its command.
+kept="$project-dumps-kept"
+hd_compose run --name "$kept" --no-deps dumps true > "$work/kept.txt" 2>&1 \
+  || fail "docker compose run dumps true failed: $(cat "$work/kept.txt")"
+"$engine" inspect "$kept" > "$work/kept.txt"
+"$engine" rm -f "$kept" > /dev/null
+if grep -qF -- "$db_password" "$work/kept.txt"; then
+  fail "inspect of the container of docker compose run dumps shows the database's password"
+fi
+grep -qF /run/secrets/db_password "$work/kept.txt" \
+  || fail "the container of docker compose run dumps does not mount secrets/db_password"
+ok "inspect of the container of docker compose run dumps does not show the database's password"
+
+# ---------------------------------------------------------------------------------------------
+step "6. A fresh install restored from that dump: the same help desk"
+hd_compose down -v
+left=$("$engine" volume ls -q --filter "label=com.docker.compose.project=$project")
+[ -z "$left" ] || fail "down -v left the volumes $left"
+fresh_secrets
+db_password_command "secrets/db_password written"
+[ "$(cat "$secrets/db_password")" != "$db_password" ] || fail "the fresh install has the same password"
+ok "a fresh install: no volume, and a new secrets/db_password"
+# The command of deploy/compose/dumps.md, run in the install's directory with the dump there.
+hd_compose run --rm -T dumps restore < "$work/$third" > "$work/restore.txt" 2>&1 \
+  || fail "the restore failed: $(cat "$work/restore.txt")"
+grep -qF "restored" "$work/restore.txt" || fail "the restore said: $(cat "$work/restore.txt")"
+started core not
+ok "restored from $third, before the core's first start"
+hd_compose up -d
+health
+session=$(sign_in ada.agent@example.com "$agent_password")
+[ -n "$session" ] || fail "signing in set no session cookie: $(cat "$work/headers.txt")"
+api "$session" GET "/api/customers/$customer" 200
+grep -qF '"name":"Brightfield Lighting"' "$work/answer.json" \
+  || fail "after the restore the customer reads back as $(cat "$work/answer.json")"
+ok "the agent signs in with the password of before and reads Brightfield Lighting back"
+hd_compose down -v
+ok "stopped, with its volumes removed"
+
+# ---------------------------------------------------------------------------------------------
+step "7. The dumps without the profile db: of the test's own PostgreSQL, once turned on"
+cat > "$work/external.yaml" <<YAML
+services:
+  core:
+    networks: [default, external]
+  dumps:
+    networks: [default, external]
+  dumps-schedule:
+    networks: [default, external]
+networks:
+  external:
+    name: $external_network
+    external: true
+YAML
+fresh_secrets
+secret db_password "$owner_password"
+settings
+setting COMPOSE_PROFILES ""
+setting HD_DATABASE_HOST "$external_db"
+setting HD_DATABASE_PORT 5432
+setting HD_DATABASE_NAME helpdesk
+setting HD_DATABASE_USER helpdesk
+setting HD_DATABASE_SSLMODE disable
+hd_compose up -d
+health
+started dumps-schedule not
+ok "without the profiles db and dumps, up starts no schedule"
+setting COMPOSE_PROFILES dumps
+core_before=$(hd_compose ps -q core)
+hd_compose up -d
+[ "$(hd_compose ps -q core)" = "$core_before" ] || fail "turning the dumps on recreated the core"
+started dumps-schedule
+started db not
+expect_log dumps-schedule "next dump at "
+ok "with the profile dumps, up starts the schedule, and not the bundled PostgreSQL"
+existing=$(dump_now)
+dump_holds "$existing" "TABLE public _sqlx_migrations"
+ok "$existing is a complete dump of the test's own PostgreSQL, with the core's migrations"
+no_secret_shown "$owner_password"
+# Without HD_DATABASE_SSLMODE, TLS is required: the test's PostgreSQL, which serves none, is
+# refused, where verify-full would have stopped first for want of an authority.
+sed -i '/^HD_DATABASE_SSLMODE=/d' "$work/.env"
+if hd_compose run --rm dumps > "$work/dump.txt" 2>&1; then
+  fail "a dump without HD_DATABASE_SSLMODE reached a server without TLS: $(cat "$work/dump.txt")"
+fi
+grep -qF "SSL was required" "$work/dump.txt" \
+  || fail "a dump without HD_DATABASE_SSLMODE did not fail for TLS: $(cat "$work/dump.txt")"
+grep -qF "the server's certificate is not verified" "$work/dump.txt" \
+  || fail "the dumps did not warn that the certificate is not verified: $(cat "$work/dump.txt")"
+ok "without HD_DATABASE_SSLMODE the dumps require TLS, and warn that they do not verify it"
 hd_compose down -v
 ok "stopped"
 

@@ -36,7 +36,7 @@ chmod 644 secrets/*
 A clone or an unpacked archive gives the directory the usual mode (`755`): `chmod 700` it before
 writing the first secret. The files must be readable by everyone because the containers read
 them as users of their own, not as the user that runs Compose: the core and the Assistant as
-10001, PostgreSQL as 999 (as root first). Compose mounts each file on its own, so a container
+10001, PostgreSQL as 999 (as root first), the dumps as root without any capability. Compose mounts each file on its own, so a container
 never goes through the directory, and no other user of the host can.
 
 A file written with the usual `umask` (`022`) is `644` already:
