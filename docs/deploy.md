@@ -23,13 +23,20 @@ be built.
 - **On Kubernetes**, with the Helm chart: [Installing on Kubernetes](kubernetes.md) gives the
   prerequisites, the three database modes and how to choose one, the Secrets, the install itself,
   backups, upgrades, and moving from one database mode to another.
+- **On a single host**, with Docker Compose or Podman: [Installing with Compose](compose.md) gives
+  the install from the release's archive, with its own PostgreSQL or an existing one, HTTPS,
+  backups, upgrades, a restore, and moving to Kubernetes.
 - **On a PostgreSQL database of your own**, whatever the install:
   [Running on a PostgreSQL database of your own](external-database.md) says what the DBA creates,
   how the core connects and protects the connection, and how secrets are read from files.
 
 The sections below are the same wherever the help desk runs. Their commands are shown for the
 Kubernetes install, with the release `hd` in the namespace `helpdesk`, where `hd` runs inside the
-core's pod (`kubectl -n helpdesk exec deploy/hd-core -- hd …`).
+core's pod (`kubectl -n helpdesk exec deploy/hd-core -- hd …`), and their settings as values of
+the chart beside the environment variables they set. With Compose, `hd` runs inside the core's
+container, `docker compose exec core hd …` in the install's directory (`exec -T` where `kubectl`
+has `exec -i`), the environment variables are set in `.env` and the secrets are files of
+`secrets/` ([First steps](compose.md#first-steps)).
 
 ## Behind a reverse proxy
 

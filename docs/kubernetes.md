@@ -5,7 +5,8 @@ The help desk installs on Kubernetes with its Helm chart, `oci://ghcr.io/manusta
 help desk runs: the first agent, roles, signing in through an identity provider, importing
 customers, the Assistant. What is the same for every install, a PostgreSQL database of your own,
 TLS to it and secrets read from files, is in
-[Running on a PostgreSQL database of your own](external-database.md).
+[Running on a PostgreSQL database of your own](external-database.md). A help desk installed with
+Compose moves here with a dump ([Moving to Kubernetes](compose.md#moving-to-kubernetes)).
 
 The examples on this page use the release name `hd` and the namespace `helpdesk`: the chart
 names its objects after the release (`hd-core`, `hd-assistant`, `hd-db`, `hd-postgresql`), and a
@@ -547,6 +548,78 @@ mode](#moving-to-another-database-mode)).
 
 A dump is as old as its schedule: anything after the last dump is lost on restore. Copy the
 dumps off the cluster too if the cluster's storage is the only place they live.
+
+#### Restoring a dump from elsewhere
+
+A dump that is not on the dumps' volume, such as one of a
+[Compose install that moves to Kubernetes](compose.md#moving-to-kubernetes) or one copied off the
+cluster, is given to `pg_restore` on its standard input, through a pod that reaches the database
+as the Job above does, while the core is stopped. For the chart's own PostgreSQL, save this as
+`hd-restore-pod.yaml`:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hd-restore
+  labels:
+    # The labels of the dumps: with networkPolicy.enabled, only the core and the dumps reach the
+    # chart's own PostgreSQL.
+    app.kubernetes.io/name: hd
+    app.kubernetes.io/instance: hd
+    app.kubernetes.io/component: dumps
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: pg-restore
+      # The image of the dumps (dumps.image), at the dump's major version or newer.
+      image: docker.io/library/postgres:18.7-trixie
+      env:
+        - name: PGHOST
+          value: hd-postgresql
+        - name: PGDATABASE
+          value: hd
+        - name: PGUSER
+          value: hd
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: hd-postgresql
+              key: password
+        - name: PGSSLMODE
+          value: disable
+      # Waits for the dump, which kubectl exec gives pg_restore below.
+      command: ["sleep", "infinity"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+```
+
+Then, on the machine that holds the dump, `hd-20261125T023000Z.dump` here:
+
+```sh
+kubectl -n helpdesk apply -f hd-restore-pod.yaml
+kubectl -n helpdesk wait --for=condition=Ready pod/hd-restore --timeout=300s
+kubectl -n helpdesk exec -i hd-restore -- sh -c 'pg_restore --clean --if-exists --no-owner \
+  --no-privileges --single-transaction --dbname="$PGDATABASE" && echo restored' \
+  < hd-20261125T023000Z.dump
+kubectl -n helpdesk delete pod hd-restore
+```
+
+It ends with `restored`, and replaces what the dump holds as the Job does, in one transaction. The
+pod mounts no volume, so it needs no affinity. For another database, give the pod the variables
+the Job gets for it: those of [To a database of your own](#to-a-database-of-your-own), with the
+authority's volume, or the cluster's URL of
+[To a CloudNativePG cluster](#to-a-cloudnativepg-cluster) in `DATABASE_URL`, with
+`--dbname="$DATABASE_URL"`. Only the chart's own PostgreSQL has been restored into this way.
 
 ### CloudNativePG backups
 
