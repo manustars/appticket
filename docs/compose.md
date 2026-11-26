@@ -62,7 +62,9 @@ of them. Set at least:
   in front of it, `127.0.0.1:8080` unless set.
 - The mail servers: `HD_SECRET_IMAP_URL`, `HD_SECRET_SMTP_URL` and `HD_MAIL_FROM`, with the URLs
   in files of `secrets/` ([Secrets of the Compose install](../deploy/compose/secrets/README.md)).
-  Without them the core reads and sends no mail.
+  Without them the core reads and sends no mail. For servers whose certificates come from an
+  authority of your own, that authority's certificate in `secrets/mail_ca.crt`, named by
+  `HD_MAIL_CA`.
 
 Nothing secret goes in `.env`: the passwords, the mail servers' URLs and the tokens are files in
 `secrets/`, which [its README](../deploy/compose/secrets/README.md) lists with the permissions
@@ -113,9 +115,19 @@ printf '%s\n' 'Lantern@river/72:quiet' > secrets/db_password
 docker compose up -d
 ```
 
-The Compose install gives no `HD_DATABASE_CA_FILE` yet: the certificate of a database on another
-host must come from a public authority, or `HD_DATABASE_SSLMODE` be set to a weaker mode, which
-the core logs at every start.
+For a database whose certificate comes from an authority of your own, put that authority's
+certificate, in PEM, in `secrets/database_ca.crt` and name it in `.env`:
+
+```sh
+HD_DATABASE_CA=./secrets/database_ca.crt
+```
+
+The core trusts it besides the public authorities ([A private
+authority](external-database.md#a-private-authority)), and the dumps verify the database's
+certificate against it ([How the dumps reach the
+database](../deploy/compose/dumps.md#how-the-dumps-reach-the-database)). Without it, the
+certificate must come from a public authority, which the dumps do not verify, or
+`HD_DATABASE_SSLMODE` be set to a weaker mode, which the core logs at every start.
 
 ## HTTPS
 
@@ -191,9 +203,10 @@ first. From the directory that holds the old version, `1.2.3` here, with the new
    ```
 
    The archive holds no `.env` and no secret, so it replaces only the files it ships. `secrets/`
-   holds the certificate and key of `files` as well; a file that `.env` names elsewhere in the
-   old directory is to be copied too. `diff` shows the settings that came or changed, to set in
-   `.env` if need be, beside the addresses of the repository's pages, which name the version.
+   holds the certificate and key of `files` and the authorities' certificates as well; a file
+   that `.env` names elsewhere in the old directory is to be copied too. `diff` shows the
+   settings that came or changed, to set in `.env` if need be, beside the addresses of the
+   repository's pages, which name the version.
 
 2. Download the new version's images, while the old version still runs:
 
@@ -322,6 +335,9 @@ comes along: it is all in the database. In this order:
      --from-file=client-secret=secrets/oidc_client_secret
    kubectl -n helpdesk create secret tls hd-tls \
      --cert=secrets/tls_certificate --key=secrets/tls_key
+   kubectl -n helpdesk create secret generic hd-mail-ca --from-file=ca.crt=secrets/mail_ca.crt
+   kubectl -n helpdesk create secret generic hd-database-ca \
+     --from-file=ca.crt=secrets/database_ca.crt
    ```
 
    The core removes the whitespace around a secret, such as a file's final newline, from a
@@ -363,6 +379,8 @@ comes along: it is all in the database. In this order:
    | `HD_LOG` | `core.log` |
    | `HD_DUMPS_TIME`, `HD_DUMPS_KEEP`, `HD_DUMPS_IMAGE_TAG` | `dumps.schedule`, a cron expression in the cluster's time zone (`"30 2 * * *"` for 02:30), `dumps.keep`, `dumps.image.tag` |
    | `HD_DATABASE_HOST`, `HD_DATABASE_PORT`, `HD_DATABASE_NAME`, `HD_DATABASE_USER`, `HD_DATABASE_SSLMODE` | with `external` only: `postgresql.external.host`, `port`, `name`, `user`, and `core.database.sslMode` |
+   | `HD_DATABASE_CA` | with `external` only: `core.database.ca.existingSecret`, the Secret `hd-database-ca` above |
+   | `HD_MAIL_CA` | `core.mail.ca.existingSecret`, the Secret `hd-mail-ca` above |
 
    The others are the Compose install's own and have no value in the chart: `HD_VERSION`, whose
    place `--version` takes, `COMPOSE_*`,

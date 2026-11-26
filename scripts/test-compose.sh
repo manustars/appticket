@@ -6,7 +6,9 @@
 #      ships with no secret; the bundled PostgreSQL publishes no port on the host, and the core
 #      waits for it to be healthy; every secret reaches the services as a file named by its
 #      _FILE variable (POSTGRES_PASSWORD_FILE for PostgreSQL), none as a variable, even one set
-#      in .env, and an optional secret that .env does not name reaches no service;
+#      in .env, and an optional secret that .env does not name reaches no service; the
+#      certificates of private authorities that .env names reach the core and the dumps as files
+#      named by HD_DATABASE_CA_FILE and HD_MAIL_CA_FILE, and none reaches them when it names none;
 #   2. with the profile db and no password in .env: `docker compose run --rm db-password`
 #      writes a password to secrets/db_password, a file the core and PostgreSQL can read, and
 #      the core starts on the bundled PostgreSQL, reached by its service name, with that file
@@ -37,7 +39,14 @@
 #      and a stop ends the schedule at once; no one is shown that database's password. Without
 #      HD_DATABASE_SSLMODE the dumps require TLS, which that PostgreSQL does not serve, and warn
 #      that they would not verify the server's certificate;
-#   8. without the profile https, behind nginx started by the test on the host's network, as a
+#   8. without the profile db, the test's own PostgreSQL of step 4 serving TLS with a certificate
+#      from an authority of the test's own, for the name the core dials, and HD_DATABASE_SSLMODE
+#      not set (verify-full): the core refuses the certificate (UnknownIssuer) until .env names
+#      the authority's certificate, a file of secrets/; then /api/health answers that the
+#      database is up, every connection of the core is over TLS, and `docker compose run --rm
+#      dumps` dumps the database without warning that it does not verify it, and fails with
+#      another authority's certificate in that file;
+#   9. without the profile https, behind nginx started by the test on the host's network, as a
 #      proxy on the host is, with the configuration of examples/nginx.conf (its ports changed)
 #      and a certificate of the test's own for the host name and at the paths it names. The
 #      install's network is HD_SUBNET, or its default without it, and the core trusts it as its
@@ -48,13 +57,13 @@
 #      the address nginx saw it from, not the one the client made up, also with
 #      HD_TRUSTED_PROXIES set to the gateway in .env, and under nginx's address with it set
 #      empty. Caddy is not started;
-#   9. with the profile https and the certificate internal: Caddy's root certificate is read as
+#  10. with the profile https and the certificate internal: Caddy's root certificate is read as
 #      reverse-proxy.md gives it, /api/health answers over HTTPS through Caddy verified against
 #      it, plain HTTP is sent to HTTPS, and an agent signs in through Caddy, a failed sign-in
 #      counting under the address Caddy saw it from, the gateway;
-#  10. with the certificate files: a certificate the test makes, in secrets/, is the one Caddy
+#  11. with the certificate files: a certificate the test makes, in secrets/, is the one Caddy
 #      serves;
-#  11. with the certificate acme: Caddy turns the install's Caddyfile into a configuration that
+#  12. with the certificate acme: Caddy turns the install's Caddyfile into a configuration that
 #      asks Let's Encrypt for the host of HD_PUBLIC_URL, without starting (`caddy adapt`), so
 #      that Let's Encrypt is never asked.
 #
@@ -365,6 +374,37 @@ no_secret_shown() {
   ok "no secret's value is shown by compose config or by inspect (secrets: $#, containers: $count)"
 }
 
+# The certificates the test makes for itself: an authority of its own, and a certificate it signs
+# for each host name, in $work/tls.
+tls="$work/tls"
+
+# Makes the authority NAME (authority unless given), once: $tls/NAME.pem. The certificates below
+# are signed by the one named authority.
+authority() {
+  local name=${1:-authority}
+  [ -f "$tls/$name.pem" ] && return 0
+  mkdir -p "$tls"
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 \
+    -subj "/CN=The test $name of the help desk" \
+    -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign \
+    -keyout "$tls/$name.key" -out "$tls/$name.pem" 2> "$tls/openssl.txt" \
+    || fail "openssl made no $name: $(cat "$tls/openssl.txt")"
+}
+
+# Makes a certificate for the host NAME, signed by the authority: $tls/NAME.pem and NAME.key.
+certificate() {
+  local name=$1
+  authority
+  printf '%s\n' "subjectAltName=DNS:$name" "basicConstraints=CA:FALSE" \
+    "keyUsage=critical,digitalSignature" "extendedKeyUsage=serverAuth" > "$tls/$name.ext"
+  openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -subj "/CN=$name" \
+    -keyout "$tls/$name.key" -out "$tls/$name.csr" 2> "$tls/openssl.txt" \
+    || fail "openssl made no key for $name: $(cat "$tls/openssl.txt")"
+  openssl x509 -req -in "$tls/$name.csr" -CA "$tls/authority.pem" -CAkey "$tls/authority.key" \
+    -CAcreateserial -days 1 -extfile "$tls/$name.ext" -out "$tls/$name.pem" \
+    2> "$tls/openssl.txt" || fail "openssl made no certificate for $name: $(cat "$tls/openssl.txt")"
+}
+
 # ---------------------------------------------------------------------------------------------
 step "Tools"
 "${compose_command[@]}" version
@@ -392,6 +432,8 @@ setting COMPOSE_PROFILES db,greenmail,assistant,https
 for variable in $optional_secrets; do
   name_secret "$variable"
 done
+setting HD_DATABASE_CA ./secrets/database_ca.crt
+setting HD_MAIL_CA ./secrets/mail_ca.crt
 # The secrets as variables, as .env set them before they were files: none may be passed on.
 secret_variables="HD_DATABASE_URL HD_DATABASE_PASSWORD $optional_secrets HD_ASSISTANT_TOKEN"
 secret_variables="$secret_variables HD_ASSISTANT_EVENT_SECRET POSTGRES_PASSWORD"
@@ -402,10 +444,13 @@ hd_compose config > "$work/config.yaml"
 service db < "$work/config.yaml" > "$work/db.yaml"
 service core < "$work/config.yaml" > "$work/core.yaml"
 service assistant < "$work/config.yaml" > "$work/assistant.yaml"
+service dumps-schedule < "$work/config.yaml" > "$work/dumps-schedule.yaml"
 [ -s "$work/db.yaml" ] || fail "the configuration has no service db: $(cat "$work/config.yaml")"
 [ -s "$work/core.yaml" ] || fail "the configuration has no service core: $(cat "$work/config.yaml")"
 [ -s "$work/assistant.yaml" ] \
   || fail "the configuration has no service assistant: $(cat "$work/config.yaml")"
+[ -s "$work/dumps-schedule.yaml" ] \
+  || fail "the configuration has no service dumps-schedule: $(cat "$work/config.yaml")"
 for image in core assistant; do
   grep -qxF "    image: ghcr.io/manustars/hd-$image:$version" "$work/$image.yaml" \
     || fail "the install runs $(sed -n 's/^    image: //p' "$work/$image.yaml")," \
@@ -436,6 +481,10 @@ given assistant.yaml HD_ASSISTANT_TOKEN_FILE /run/secrets/assistant_token
 given assistant.yaml HD_ASSISTANT_EVENT_SECRET_FILE /run/secrets/assistant_event_secret
 given assistant.yaml HD_ASSISTANT_API_KEY_FILE /run/secrets/assistant_api_key
 ok "every secret is given to its services as a file, through its _FILE variable"
+given core.yaml HD_DATABASE_CA_FILE /run/secrets/database_ca
+given core.yaml HD_MAIL_CA_FILE /run/secrets/mail_ca
+given dumps-schedule.yaml HD_DATABASE_CA_FILE /run/secrets/database_ca
+ok "the authorities' certificates that .env names are given to the core and the dumps as files"
 for variable in $secret_variables; do
   if grep -qE "^      $variable:" "$work/config.yaml"; then
     fail "a service is given $variable as a variable"
@@ -451,6 +500,10 @@ if grep -E "^      (${optional_secrets// /|})_FILE:" "$work/config.yaml"; then
   fail "an optional secret that .env does not name is given"
 fi
 ok "an optional secret that .env does not name is given to no service"
+if grep -E "^      HD_(DATABASE|MAIL)_CA_FILE:" "$work/config.yaml"; then
+  fail "an authority's certificate that .env does not name is given"
+fi
+ok "without an authority's certificate named in .env, no service is given one"
 
 # ---------------------------------------------------------------------------------------------
 step "2. Start with the profile db and no password in .env: one is written to secrets/"
@@ -932,36 +985,92 @@ hd_compose down -v
 ok "stopped"
 
 # ---------------------------------------------------------------------------------------------
-# Behind a reverse proxy (deploy/compose/reverse-proxy.md): steps 8 to 11.
+step "8. Without the profile db, over TLS: the test's own PostgreSQL, from an authority of its own"
+# The test's own PostgreSQL serves TLS from now on, with a certificate from the test's authority
+# for the name the core dials, given to the server as scripts/tls-test-database.sh gives it: the
+# key through standard input, so that no bind mount hands it to the server's user.
+certificate "$external_db"
+"$engine" exec "$external_db" mkdir -p /etc/hd-tls
+for file in pem key; do
+  "$engine" exec -i "$external_db" sh -c "cat > /etc/hd-tls/server.$file" \
+    < "$tls/$external_db.$file"
+done
+"$engine" exec "$external_db" sh -c \
+  'chown postgres:postgres /etc/hd-tls/server.* && chmod 0600 /etc/hd-tls/server.key'
+external_sql postgres postgres "ALTER SYSTEM SET ssl_cert_file = '/etc/hd-tls/server.pem'" \
+  > /dev/null
+external_sql postgres postgres "ALTER SYSTEM SET ssl_key_file = '/etc/hd-tls/server.key'" \
+  > /dev/null
+external_sql postgres postgres "ALTER SYSTEM SET ssl = on" > /dev/null
+external_sql postgres postgres "SELECT pg_reload_conf()" > /dev/null
+# A reload that cannot read the key leaves TLS off: a connection must get it.
+tls_on=""
+for _ in $(seq 10); do
+  if [ "$("$engine" exec "$external_db" psql -tA \
+    "host=127.0.0.1 user=postgres dbname=postgres sslmode=require" \
+    -c "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()" 2> /dev/null | tr -d '\r')" \
+    = t ]; then
+    tls_on=yes
+    break
+  fi
+  sleep 1
+done
+[ -n "$tls_on" ] || fail "the test's own PostgreSQL does not serve TLS"
+ok "the test's own PostgreSQL serves TLS, with a certificate from the test's authority for" \
+  "$external_db"
 
-# The certificates the test makes for itself: an authority of its own, and a certificate it signs
-# for each host name, in $work/tls.
-tls="$work/tls"
+# The settings of step 7, without HD_DATABASE_SSLMODE: verify-full, the default for a database
+# on another host.
+fresh_secrets
+secret db_password "$owner_password"
+settings
+setting COMPOSE_PROFILES ""
+setting HD_DATABASE_HOST "$external_db"
+setting HD_DATABASE_PORT 5432
+setting HD_DATABASE_NAME helpdesk
+setting HD_DATABASE_USER helpdesk
+grep -v '^HD_DATABASE_SSLMODE=' "$work/.env" > "$work/.env.new"
+mv "$work/.env.new" "$work/.env"
+hd_compose up -d
+expect_log core "UnknownIssuer"
+ok "without the authority's certificate, the core refuses the database's (UnknownIssuer)"
 
-# Makes the authority, once: $tls/authority.pem.
-authority() {
-  [ -f "$tls/authority.pem" ] && return 0
-  mkdir -p "$tls"
-  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 \
-    -subj "/CN=The test authority of the help desk" \
-    -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign \
-    -keyout "$tls/authority.key" -out "$tls/authority.pem" 2> "$tls/openssl.txt" \
-    || fail "openssl made no authority: $(cat "$tls/openssl.txt")"
-}
+# The authority's certificate in a file of secrets/, named in .env, as .env.example shows.
+cp "$tls/authority.pem" "$secrets/database_ca.crt"
+chmod 644 "$secrets/database_ca.crt"
+setting HD_DATABASE_CA ./secrets/database_ca.crt
+hd_compose up -d
+health
+connections=$(external_sql postgres postgres "SELECT count(*) FILTER (WHERE s.ssl) || ' ' ||
+  count(*) FROM pg_stat_activity a JOIN pg_stat_ssl s USING (pid) WHERE a.usename = 'helpdesk'" \
+  | tr -d '\r')
+read -r encrypted all <<< "$connections"
+[ "$all" -gt 0 ] && [ "$encrypted" = "$all" ] \
+  || fail "of the core's $all connections to the database, $encrypted are over TLS"
+ok "with the authority's certificate named in .env, the core verifies the database's" \
+  "(verify-full): its $all connections are over TLS"
 
-# Makes a certificate for the host NAME, signed by the authority: $tls/NAME.pem and NAME.key.
-certificate() {
-  local name=$1
-  authority
-  printf '%s\n' "subjectAltName=DNS:$name" "basicConstraints=CA:FALSE" \
-    "keyUsage=critical,digitalSignature" "extendedKeyUsage=serverAuth" > "$tls/$name.ext"
-  openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -subj "/CN=$name" \
-    -keyout "$tls/$name.key" -out "$tls/$name.csr" 2> "$tls/openssl.txt" \
-    || fail "openssl made no key for $name: $(cat "$tls/openssl.txt")"
-  openssl x509 -req -in "$tls/$name.csr" -CA "$tls/authority.pem" -CAkey "$tls/authority.key" \
-    -CAcreateserial -days 1 -extfile "$tls/$name.ext" -out "$tls/$name.pem" \
-    2> "$tls/openssl.txt" || fail "openssl made no certificate for $name: $(cat "$tls/openssl.txt")"
-}
+existing=$(dump_now)
+if grep -qF "not verified" "$work/dump.txt"; then
+  fail "the dumps did not verify the database's certificate: $(cat "$work/dump.txt")"
+fi
+dump_holds "$existing" "TABLE public _sqlx_migrations"
+ok "run --rm dumps verified the database's certificate against that authority and took $existing"
+# Another authority's certificate in its place: the dumps refuse the database's.
+authority other-authority
+cp "$tls/other-authority.pem" "$secrets/database_ca.crt"
+if hd_compose run --rm dumps > "$work/dump.txt" 2>&1; then
+  fail "a dump trusting another authority reached the database: $(cat "$work/dump.txt")"
+fi
+grep -qF "certificate verify failed" "$work/dump.txt" \
+  || fail "a dump trusting another authority did not fail for it: $(cat "$work/dump.txt")"
+ok "with another authority's certificate in that file, the dumps refuse the database's"
+no_secret_shown "$owner_password"
+hd_compose down -v
+ok "stopped"
+
+# ---------------------------------------------------------------------------------------------
+# Behind a reverse proxy (deploy/compose/reverse-proxy.md): steps 9 to 12.
 
 # The SHA-256 fingerprint of the certificate on standard input.
 fingerprint() {
@@ -1051,8 +1160,8 @@ sign_in_through() {
 proxy="$project-proxy"
 
 # ---------------------------------------------------------------------------------------------
-step "8. Without the profile https: an agent signs in through nginx, a proxy on the host"
-# The addition to the install's file for the test's own PostgreSQL (steps 4 and 7) is not
+step "9. Without the profile https: an agent signs in through nginx, a proxy on the host"
+# The addition to the install's file for the test's own PostgreSQL (steps 4, 7 and 8) is not
 # wanted any more.
 rm -f "$work/external.yaml"
 fresh_secrets
@@ -1214,7 +1323,7 @@ health_through_caddy() {
 }
 
 # ---------------------------------------------------------------------------------------------
-step "9. The profile https with the certificate internal: Caddy's own authority"
+step "10. The profile https with the certificate internal: Caddy's own authority"
 fresh_secrets
 db_password_command "secrets/db_password written"
 https_settings internal helpdesk.test
@@ -1256,7 +1365,7 @@ ok "a failed sign-in through Caddy counts under the address Caddy saw it from ($
   "not under Caddy's ($caddy_address) nor the one the client made up"
 
 # ---------------------------------------------------------------------------------------------
-step "10. The same install with the certificate files: one of the test's own, in secrets/"
+step "11. The same install with the certificate files: one of the test's own, in secrets/"
 certificate helpdesk.test
 secret tls_certificate "$(cat "$tls/helpdesk.test.pem")"
 secret tls_key "$(cat "$tls/helpdesk.test.key")"
@@ -1276,7 +1385,7 @@ hd_compose down -v
 ok "stopped, with its volumes removed"
 
 # ---------------------------------------------------------------------------------------------
-step "11. The certificate acme, read by Caddy without starting it: Let's Encrypt is not asked"
+step "12. The certificate acme, read by Caddy without starting it: Let's Encrypt is not asked"
 settings
 setting COMPOSE_PROFILES https
 setting HD_PUBLIC_URL https://helpdesk.example.com
