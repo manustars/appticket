@@ -404,7 +404,8 @@ service assistant < "$work/config.yaml" > "$work/assistant.yaml"
   || fail "the configuration has no service assistant: $(cat "$work/config.yaml")"
 for image in core assistant; do
   grep -qxF "    image: ghcr.io/manustars/hd-$image:$version" "$work/$image.yaml" \
-    || fail "the install runs $(sed -n 's/^    image: //p' "$work/$image.yaml"), not hd-$image:$version"
+    || fail "the install runs $(sed -n 's/^    image: //p' "$work/$image.yaml")," \
+      "not hd-$image:$version"
 done
 if grep -q HD_VERSION "$install/compose.yaml"; then
   ok "the install runs the images of $version, which HD_VERSION names"
