@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Starts the Compose install (deploy/compose) on this machine and checks it in both of its
-# database modes (ADR 0009):
+# Starts the Compose install (deploy/compose, or a release's archive of it unpacked) on this
+# machine and checks it in both of its database modes (ADR 0009):
 #
-#   1. the configuration, every profile on: secrets/ ships with no secret; the bundled
-#      PostgreSQL publishes no port on the host, and the core waits for it to be healthy; every
-#      secret reaches the services as a file named by its _FILE variable (POSTGRES_PASSWORD_FILE
-#      for PostgreSQL), none as a variable, even one set in .env, and an optional secret that
-#      .env does not name reaches no service;
+#   1. the configuration, every profile on: the install runs the images of VERSION; secrets/
+#      ships with no secret; the bundled PostgreSQL publishes no port on the host, and the core
+#      waits for it to be healthy; every secret reaches the services as a file named by its
+#      _FILE variable (POSTGRES_PASSWORD_FILE for PostgreSQL), none as a variable, even one set
+#      in .env, and an optional secret that .env does not name reaches no service;
 #   2. with the profile db and no password in .env: `docker compose run --rm db-password`
 #      writes a password to secrets/db_password, a file the core and PostgreSQL can read, and
 #      the core starts on the bundled PostgreSQL, reached by its service name, with that file
@@ -68,16 +68,23 @@
 #   bash scripts/test-compose.sh VERSION
 #
 # VERSION is the tag of ghcr.io/manustars/hd-core and ghcr.io/manustars/hd-assistant that the
-# local engine holds, as the install names it (HD_VERSION), such as images built with
+# local engine holds, such as images built with
 #   docker build -f deploy/Dockerfile --target core      -t ghcr.io/manustars/hd-core:VERSION .
 #   docker build -f deploy/Dockerfile --target assistant -t ghcr.io/manustars/hd-assistant:VERSION .
+# The repository's compose.yaml reads it from .env (HD_VERSION), where the test sets it. A
+# release's archive names its own version in its compose.yaml and reads none: the test sets none,
+# and VERSION must be the archive's, as CI tests it with
+#   bash scripts/package-compose.sh VERSION DIR
+#   tar -xzf DIR/hd-compose-VERSION.tar.gz -C UNPACKED
+#   COMPOSE_DIR=UNPACKED/hd-compose-VERSION bash scripts/test-compose.sh VERSION
 # The test never pulls them; it pulls PostgreSQL, GreenMail, BusyBox, nginx and Caddy. Needs
 # docker (or podman) with Compose, curl, openssl, and GNU find and stat (as on Linux and in Git
-# Bash); its sed takes only what POSIX sed does. It prints a line per step and exits with 1 at the first check that fails, after printing
-# the containers' logs; it removes what it started either way.
+# Bash); its sed takes only what POSIX sed does. It prints a line per step and exits with 1 at
+# the first check that fails, after printing the containers' logs; it removes what it started
+# either way. Of the repository it reads only the Compose directory.
 #
-# Environment: COMPOSE_DIR (the Compose directory, deploy/compose; such as an unpacked copy of
-# it), CONTAINER_ENGINE (docker by default; podman), COMPOSE (the Compose command,
+# Environment: COMPOSE_DIR (the Compose directory, deploy/compose; such as an unpacked release
+# archive), CONTAINER_ENGINE (docker by default; podman), COMPOSE (the Compose command,
 # "$CONTAINER_ENGINE compose"), PROJECT (the Compose project, hd-test-compose), PORT (a free
 # local port for the core, 55479; the two after it are the test mail server's), PROXY_PORT (the
 # first of four free local ports, the three after PORT's by default: nginx's HTTP and HTTPS, then
@@ -299,7 +306,11 @@ expect_log() {
 # The settings both modes share, from the shipped example.
 settings() {
   cp "$install/.env.example" "$work/.env"
-  setting HD_VERSION "$version"
+  # The repository's compose.yaml reads the images' version from .env; a release's archive
+  # names its own and reads none, so the test sets none (step 1 checks the images).
+  if grep -q HD_VERSION "$install/compose.yaml"; then
+    setting HD_VERSION "$version"
+  fi
   setting HD_PUBLIC_URL "http://127.0.0.1:$port"
   setting HD_HTTP_PORT "$port"
   setting HD_SUBNET "$subnet"
@@ -391,6 +402,15 @@ service assistant < "$work/config.yaml" > "$work/assistant.yaml"
 [ -s "$work/core.yaml" ] || fail "the configuration has no service core: $(cat "$work/config.yaml")"
 [ -s "$work/assistant.yaml" ] \
   || fail "the configuration has no service assistant: $(cat "$work/config.yaml")"
+for image in core assistant; do
+  grep -qxF "    image: ghcr.io/manustars/hd-$image:$version" "$work/$image.yaml" \
+    || fail "the install runs $(sed -n 's/^    image: //p' "$work/$image.yaml"), not hd-$image:$version"
+done
+if grep -q HD_VERSION "$install/compose.yaml"; then
+  ok "the install runs the images of $version, which HD_VERSION names"
+else
+  ok "the install runs the images of $version, which its compose.yaml names without HD_VERSION"
+fi
 # The same reading finds the core's port, so that finding none for the database means something.
 grep -qE "^ +published: \"?$port\"?$" "$work/core.yaml" \
   || fail "the core is not published on the port $port: $(cat "$work/core.yaml")"
@@ -1196,17 +1216,17 @@ https_settings internal helpdesk.test
 hd_compose up -d
 health
 # As reverse-proxy.md gives it, once Caddy has made its authority.
-root=""
+caddy_root=""
 for _ in $(seq 30); do
   if hd_compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt \
     > "$work/caddy-root.crt" 2> /dev/null \
     && grep -q 'BEGIN CERTIFICATE' "$work/caddy-root.crt"; then
-    root=yes
+    caddy_root=yes
     break
   fi
   sleep 1
 done
-[ -n "$root" ] || fail "Caddy's root certificate could not be read"
+[ -n "$caddy_root" ] || fail "Caddy's root certificate could not be read"
 ok "Caddy's root certificate read from its container"
 base="https://helpdesk.test:$caddy_https_port"
 health_through_caddy helpdesk.test "$work/caddy-root.crt"

@@ -155,19 +155,27 @@ jobs:
       - name: Upgrade from the released chart, and the guard's refusals
         run: bash scripts/test-upgrade-guard.sh hd-core:ci
 
-  # The Compose install (deploy/compose) with both images built here, under the names the install
-  # gives them: docker compose starts it with its own PostgreSQL (the profile db), then with the
+  # The Compose install as a release ships it: the release archive that release.yml attaches to
+  # a GitHub release, built by the same script (scripts/package-compose.sh) under a test
+  # version, which that script's own test checks first, and unpacked into a directory outside
+  # the checkout. From there, with both images built here under that version, as the archive
+  # names them: docker compose starts it with its own PostgreSQL (the profile db), then with the
   # Assistant and the test mail server beside it, and then without the profile db on a
   # PostgreSQL that the script starts itself and gives through HD_DATABASE_*; it dumps both
   # databases and restores a dump into a fresh install; and then it runs behind proxies: an
   # nginx that the script starts on the host's network with the documented example, and Caddy of
-  # the profile https with each of its three certificates. The images build
-  # from the cache that the deploy job wrote on earlier runs: both jobs run at once, so a change
-  # to the Dockerfile or the code builds here without it.
+  # the profile https with each of its three certificates. The images build from the cache that
+  # the deploy job wrote on earlier runs: both jobs run at once, so a change to the Dockerfile or
+  # the code builds here without it.
   compose:
     runs-on: ubuntu-latest
+    env:
+      # Not a version a release can have: a release's tag agrees with the chart's version.
+      TEST_VERSION: 0.0.0-ci
     steps:
       - uses: actions/checkout@v5
+      - name: The release archive's script, tested
+        run: bash scripts/test-package-compose.sh
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
@@ -177,7 +185,7 @@ jobs:
           push: false
           # Into the runner's Docker, where Compose finds it and pulls nothing.
           load: true
-          tags: ghcr.io/manustars/hd-core:ci
+          tags: ghcr.io/manustars/hd-core:${{ env.TEST_VERSION }}
           cache-from: type=gha,scope=hd
       - uses: docker/build-push-action@v7
         with:
@@ -186,10 +194,18 @@ jobs:
           target: assistant
           push: false
           load: true
-          tags: ghcr.io/manustars/hd-assistant:ci
+          tags: ghcr.io/manustars/hd-assistant:${{ env.TEST_VERSION }}
           cache-from: type=gha,scope=hd
-      - name: Install with Compose, with its own PostgreSQL and with an existing one
-        run: bash scripts/test-compose.sh ci
+      - name: Build the release archive and unpack it outside the checkout
+        run: |
+          bash scripts/package-compose.sh "$TEST_VERSION" "$RUNNER_TEMP/dist"
+          mkdir "$RUNNER_TEMP/unpacked"
+          tar -xzf "$RUNNER_TEMP/dist/hd-compose-$TEST_VERSION.tar.gz" -C "$RUNNER_TEMP/unpacked"
+          echo "COMPOSE_DIR=$RUNNER_TEMP/unpacked/hd-compose-$TEST_VERSION" >> "$GITHUB_ENV"
+          echo "Unpacked into $RUNNER_TEMP/unpacked/hd-compose-$TEST_VERSION:"
+          ls -la "$RUNNER_TEMP/unpacked/hd-compose-$TEST_VERSION"
+      - name: Install with Compose from the archive, with its own PostgreSQL and with an existing one
+        run: bash scripts/test-compose.sh "$TEST_VERSION"
 
   # Publishing the chart, without a release: the script that a release runs (release.yml) pushes
   # the chart to a throwaway registry, and what it pushed is pulled back and rendered.

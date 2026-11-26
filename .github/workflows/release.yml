@@ -3,11 +3,15 @@ name: Release
 # A version tag (v1.2.3) builds both images and publishes them to the GitHub Container Registry
 # as ghcr.io/manustars/hd-core and ghcr.io/manustars/hd-assistant, tagged with the version and,
 # for a final (not pre-release) version, `latest`; then it publishes the Helm chart with the same
-# version as oci://ghcr.io/manustars/charts/hd.
+# version as oci://ghcr.io/manustars/charts/hd; and last it creates the tag's GitHub release, a
+# pre-release for a pre-release version, with the Compose install's archive attached,
+# hd-compose-1.2.3.tar.gz and its SHA-256 checksum, whose compose.yaml names the images of the
+# version (scripts/package-compose.sh, whose archive CI tests and installs on every pull request).
 #
 # Nothing is published unless the tag agrees with the chart's version in deploy/chart/Chart.yaml:
 # v1.2.3 needs 1.2.3 there, and a pre-release such as v1.2.3-rc.1 needs 1.2.3-rc.1 or 1.2.3
-# (scripts/publish-chart.sh, which CI runs against a throwaway registry on every pull request).
+# (scripts/publish-chart.sh, which CI runs against a throwaway registry on every pull request),
+# and unless the Compose archive is built.
 on:
   push:
     tags: ["v*"]
@@ -26,8 +30,23 @@ jobs:
       - name: The tag agrees with the chart's version
         run: bash scripts/publish-chart.sh --check "${GITHUB_REF_NAME#v}"
 
+  # Built before anything is published, and kept for the release, which is created last.
+  compose-archive:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the Compose install's archive
+        run: bash scripts/package-compose.sh "${GITHUB_REF_NAME#v}" dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: compose-archive
+          path: dist/
+          if-no-files-found: error
+
   images:
-    needs: tag-agrees-with-chart
+    needs: [tag-agrees-with-chart, compose-archive]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -92,3 +111,25 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish the chart
         run: bash scripts/publish-chart.sh "${GITHUB_REF_NAME#v}" oci://ghcr.io/manustars/charts
+
+  # Last, once the images and the chart are published: the GitHub release of the tag, with the
+  # Compose archive. A pre-release version (1.2.3-rc.1) is a pre-release here too, as it has no
+  # `latest` image.
+  release:
+    needs: [compose-archive, chart]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: compose-archive
+          path: dist
+      - name: Create the GitHub release
+        run: |
+          prerelease=()
+          case "${GITHUB_REF_NAME#v}" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$GITHUB_REF_NAME" --generate-notes "${prerelease[@]}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
