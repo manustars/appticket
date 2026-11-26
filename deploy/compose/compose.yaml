@@ -9,6 +9,9 @@
 #   docker compose run --rm db-password        (or podman compose run --rm db-password)
 #   docker compose up -d                       (or podman compose up -d)
 #
+# The guide to this install, from the download of a release's archive to its upgrades, a restore
+# and the move to Kubernetes, is docs/compose.md.
+#
 # The profiles in COMPOSE_PROFILES (.env) choose what runs beside the core:
 #
 #   db          the bundled PostgreSQL, its data on the volume db-data, with its dumps on the

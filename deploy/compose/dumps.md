@@ -7,7 +7,8 @@ with the profile `db`, whose database has no other backup, and turned on beside 
 database by adding the profile `dumps` to `COMPOSE_PROFILES`. The format, the names and the
 temporary name are those of the chart's dumps
 ([docs/kubernetes.md](../../docs/kubernetes.md#database-dumps)), whose schedule is a cron
-expression instead.
+expression instead. [Installing with Compose](../../docs/compose.md) says when to take one, in an
+upgrade and before moving to Kubernetes.
 
 Each dump is named after the time it was taken, in UTC, such as `hd-20261125T023000Z.dump`. It is
 written under a temporary name (`.partial`) and renamed when complete, so an interrupted dump
@@ -84,6 +85,7 @@ that fails changes nothing, and says why. The objects restored belong to `HD_DAT
 (`--no-owner --no-privileges`), so the old install's user may have had another name. If the core
 of the new install has already started, start over with its database removed before restoring,
 and its dumps kept: `docker compose down`, then `docker volume rm hd_db-data` (the volume of the
-database, named after the project `hd`), then the last two commands. `docker compose down -v`
+database, named after the project `hd`, or the `COMPOSE_PROJECT_NAME` of `.env`), then the last
+two commands. `docker compose down -v`
 would remove the volume `dumps` too, and on the host of the old install, whose project is `hd`
 as well, the old install's dumps with it.
