@@ -1066,7 +1066,7 @@ hd_compose up -d
 health
 cp "$work/compose.yaml" "$install/compose.yaml"
 # Not what reverse-proxy.md says, only noted: whether `up -d` alone, which makes the network
-# anew, gives the containers back their service names on it (Podman gives them none).
+# anew, gives the containers back their service names on it (Docker and Podman give them none).
 hd_compose up -d
 named=$(hd_compose exec -T db getent hosts db 2> /dev/null | awk '{ print $1 }') || true
 if [ "${named%.*}" = "${gateway%.*}" ]; then
