@@ -7,8 +7,9 @@
 #      waits for it to be healthy; every secret reaches the services as a file named by its
 #      _FILE variable (POSTGRES_PASSWORD_FILE for PostgreSQL), none as a variable, even one set
 #      in .env, and an optional secret that .env does not name reaches no service; the
-#      certificates of private authorities that .env names reach the core and the dumps as files
-#      named by HD_DATABASE_CA_FILE and HD_MAIL_CA_FILE, and none reaches them when it names none;
+#      certificates of private authorities that .env names reach the core as files named by
+#      HD_DATABASE_CA_FILE and HD_MAIL_CA_FILE, the database's the dumps too, and when .env names
+#      neither, no service is given either variable;
 #   2. with the profile db and no password in .env: `docker compose run --rm db-password`
 #      writes a password to secrets/db_password, a file the core and PostgreSQL can read, and
 #      the core starts on the bundled PostgreSQL, reached by its service name, with that file
@@ -239,6 +240,12 @@ setting() {
   mv "$work/.env.new" "$work/.env"
 }
 
+# Removes the line that sets KEY from the test's settings, as an install that does not set it.
+unsetting() {
+  grep -v "^$1=" "$work/.env" > "$work/.env.new" || true
+  mv "$work/.env.new" "$work/.env"
+}
+
 # Adds KEY=VALUE to the test's settings, for what an install does not usually set.
 extra() {
   echo "$1=$2" >> "$work/.env"
@@ -378,14 +385,14 @@ no_secret_shown() {
 # for each host name, in $work/tls.
 tls="$work/tls"
 
-# Makes the authority NAME (authority unless given), once: $tls/NAME.pem. The certificates below
-# are signed by the one named authority.
+# Makes the authority NAME, with the CN SUBJECT, once: $tls/NAME.pem. Without them, the test's
+# authority, which signs the certificates below.
 authority() {
-  local name=${1:-authority}
+  local name=${1:-authority} subject=${2:-The test authority of the help desk}
   [ -f "$tls/$name.pem" ] && return 0
   mkdir -p "$tls"
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 \
-    -subj "/CN=The test $name of the help desk" \
+    -subj "/CN=$subject" \
     -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign \
     -keyout "$tls/$name.key" -out "$tls/$name.pem" 2> "$tls/openssl.txt" \
     || fail "openssl made no $name: $(cat "$tls/openssl.txt")"
@@ -432,8 +439,8 @@ setting COMPOSE_PROFILES db,greenmail,assistant,https
 for variable in $optional_secrets; do
   name_secret "$variable"
 done
-setting HD_DATABASE_CA ./secrets/database_ca.crt
-setting HD_MAIL_CA ./secrets/mail_ca.crt
+setting HD_DATABASE_CA ./secrets/database_ca
+setting HD_MAIL_CA ./secrets/mail_ca
 # The secrets as variables, as .env set them before they were files: none may be passed on.
 secret_variables="HD_DATABASE_URL HD_DATABASE_PASSWORD $optional_secrets HD_ASSISTANT_TOKEN"
 secret_variables="$secret_variables HD_ASSISTANT_EVENT_SECRET POSTGRES_PASSWORD"
@@ -971,8 +978,7 @@ hd_compose stop dumps-schedule > /dev/null 2>&1
 ok "the schedule stopped at once, in $((SECONDS - stop_start)) s, not after its grace period"
 # Without HD_DATABASE_SSLMODE, TLS is required: the test's PostgreSQL, which serves none, is
 # refused, where verify-full would have stopped first for want of an authority.
-grep -v '^HD_DATABASE_SSLMODE=' "$work/.env" > "$work/.env.new"
-mv "$work/.env.new" "$work/.env"
+unsetting HD_DATABASE_SSLMODE
 if hd_compose run --rm dumps > "$work/dump.txt" 2>&1; then
   fail "a dump without HD_DATABASE_SSLMODE reached a server without TLS: $(cat "$work/dump.txt")"
 fi
@@ -1029,16 +1035,15 @@ setting HD_DATABASE_HOST "$external_db"
 setting HD_DATABASE_PORT 5432
 setting HD_DATABASE_NAME helpdesk
 setting HD_DATABASE_USER helpdesk
-grep -v '^HD_DATABASE_SSLMODE=' "$work/.env" > "$work/.env.new"
-mv "$work/.env.new" "$work/.env"
+unsetting HD_DATABASE_SSLMODE
 hd_compose up -d
 expect_log core "UnknownIssuer"
 ok "without the authority's certificate, the core refuses the database's (UnknownIssuer)"
 
 # The authority's certificate in a file of secrets/, named in .env, as .env.example shows.
-cp "$tls/authority.pem" "$secrets/database_ca.crt"
-chmod 644 "$secrets/database_ca.crt"
-setting HD_DATABASE_CA ./secrets/database_ca.crt
+cp "$tls/authority.pem" "$secrets/database_ca"
+chmod 644 "$secrets/database_ca"
+setting HD_DATABASE_CA ./secrets/database_ca
 hd_compose up -d
 health
 connections=$(external_sql postgres postgres "SELECT count(*) FILTER (WHERE s.ssl) || ' ' ||
@@ -1057,8 +1062,8 @@ fi
 dump_holds "$existing" "TABLE public _sqlx_migrations"
 ok "run --rm dumps verified the database's certificate against that authority and took $existing"
 # Another authority's certificate in its place: the dumps refuse the database's.
-authority other-authority
-cp "$tls/other-authority.pem" "$secrets/database_ca.crt"
+authority stranger "An authority the help desk's test does not sign with"
+cp "$tls/stranger.pem" "$secrets/database_ca"
 if hd_compose run --rm dumps > "$work/dump.txt" 2>&1; then
   fail "a dump trusting another authority reached the database: $(cat "$work/dump.txt")"
 fi
@@ -1176,8 +1181,7 @@ grep -qE "^ +- subnet: $subnet$" "$work/config.yaml" \
 ok "the install's network is HD_SUBNET ($subnet), and the core trusts it as its proxies"
 # The same without HD_SUBNET, as the shipped settings leave it: the network's default subnet and
 # the core's default trusted proxies are one.
-grep -v '^HD_SUBNET=' "$work/.env" > "$work/.env.new"
-mv "$work/.env.new" "$work/.env"
+unsetting HD_SUBNET
 hd_compose config > "$work/config.yaml"
 default_subnet=$(sed -n 's/^ *- subnet: //p' "$work/config.yaml")
 service core < "$work/config.yaml" > "$work/core.yaml"

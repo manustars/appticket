@@ -62,9 +62,9 @@ of them. Set at least:
   in front of it, `127.0.0.1:8080` unless set.
 - The mail servers: `HD_SECRET_IMAP_URL`, `HD_SECRET_SMTP_URL` and `HD_MAIL_FROM`, with the URLs
   in files of `secrets/` ([Secrets of the Compose install](../deploy/compose/secrets/README.md)).
-  Without them the core reads and sends no mail. For servers whose certificates come from an
-  authority of your own, that authority's certificate in `secrets/mail_ca.crt`, named by
-  `HD_MAIL_CA`.
+  Without them the core reads and sends no mail. Servers whose certificates come from an
+  authority of your own need that authority's certificate too, in `secrets/mail_ca`, which
+  `HD_MAIL_CA` names.
 
 Nothing secret goes in `.env`: the passwords, the mail servers' URLs and the tokens are files in
 `secrets/`, which [its README](../deploy/compose/secrets/README.md) lists with the permissions
@@ -116,18 +116,19 @@ docker compose up -d
 ```
 
 For a database whose certificate comes from an authority of your own, put that authority's
-certificate, in PEM, in `secrets/database_ca.crt` and name it in `.env`:
+certificate, in PEM, in `secrets/database_ca` and name it in `.env`:
 
 ```sh
-HD_DATABASE_CA=./secrets/database_ca.crt
+HD_DATABASE_CA=./secrets/database_ca
 ```
 
 The core trusts it besides the public authorities ([A private
 authority](external-database.md#a-private-authority)), and the dumps verify the database's
 certificate against it ([How the dumps reach the
 database](../deploy/compose/dumps.md#how-the-dumps-reach-the-database)). Without it, the
-certificate must come from a public authority, which the dumps do not verify, or
-`HD_DATABASE_SSLMODE` be set to a weaker mode, which the core logs at every start.
+certificate must come from a public authority, which the core verifies it against while the dumps
+require TLS without verifying it, unless `HD_DATABASE_SSLMODE` sets a weaker mode, which the core
+logs at every start.
 
 ## HTTPS
 
@@ -335,9 +336,9 @@ comes along: it is all in the database. In this order:
      --from-file=client-secret=secrets/oidc_client_secret
    kubectl -n helpdesk create secret tls hd-tls \
      --cert=secrets/tls_certificate --key=secrets/tls_key
-   kubectl -n helpdesk create secret generic hd-mail-ca --from-file=ca.crt=secrets/mail_ca.crt
+   kubectl -n helpdesk create secret generic hd-mail-ca --from-file=ca.crt=secrets/mail_ca
    kubectl -n helpdesk create secret generic hd-database-ca \
-     --from-file=ca.crt=secrets/database_ca.crt
+     --from-file=ca.crt=secrets/database_ca
    ```
 
    The core removes the whitespace around a secret, such as a file's final newline, from a

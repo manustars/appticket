@@ -131,12 +131,11 @@ UnknownIssuer` for an authority it does not trust.
 ### A private authority
 
 For a certificate from an authority of your own, point `HD_DATABASE_CA_FILE` at a PEM file of
-that authority's certificate; it is trusted besides the public web PKI's authorities. The Compose
-install mounts it from `secrets/` ([With an existing
-database](compose.md#with-an-existing-database)), and the chart from a Secret
-([TLS to the database](kubernetes.md#tls-to-the-database)). The core
-reads the file at startup and stops, naming it, when it cannot. It also stops when the file is
-given:
+that authority's certificate; it is trusted besides the public web PKI's authorities. The
+Compose install mounts it from `secrets/` ([With an existing
+database](compose.md#with-an-existing-database)), the chart from a Secret ([TLS to the
+database](kubernetes.md#tls-to-the-database)). The core reads the file at startup and stops,
+naming it, when it cannot. It also stops when the file is given:
 
 - with a mode that does not verify the certificate (`require`, `prefer`, `disable`, `allow`).
   That includes a database on the core's own host without `HD_DATABASE_SSLMODE`, even with
