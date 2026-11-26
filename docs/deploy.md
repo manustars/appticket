@@ -33,10 +33,8 @@ be built.
 The sections below are the same wherever the help desk runs. Their commands are shown for the
 Kubernetes install, with the release `hd` in the namespace `helpdesk`, where `hd` runs inside the
 core's pod (`kubectl -n helpdesk exec deploy/hd-core -- hd …`), and their settings as values of
-the chart beside the environment variables they set. With Compose, `hd` runs inside the core's
-container, `docker compose exec core hd …` in the install's directory (`exec -T` where `kubectl`
-has `exec -i`), the environment variables are set in `.env` and the secrets are files of
-`secrets/` ([First steps](compose.md#first-steps)).
+the chart beside the environment variables they set. How they read with Compose is in
+[First steps](compose.md#first-steps) of the Compose guide.
 
 ## Behind a reverse proxy
 
