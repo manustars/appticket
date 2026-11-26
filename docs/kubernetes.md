@@ -127,9 +127,9 @@ helm install hd oci://ghcr.io/manustars/charts/hd --version <version> \
 
 `<version>` is a release of the help desk, without the `v` of its tag. Helm 3.8 or later reads
 the chart from the registry, so that no clone of the repository is needed. The chart is published
-from 0.4.0 on: for 0.3.1 and earlier, or to try a change to the chart,
-install from a clone of the repository instead, with `deploy/chart` in place of the `oci://…`
-address and without `--version`.
+from 0.4.0 on: for 0.3.1 and earlier, or to try a change to the chart, install from a clone of
+the repository instead, with `deploy/chart` in place of the `oci://…` address and without
+`--version`.
 
 The chart runs the images of its `appVersion`, which for a published chart is its version, unless
 `core.image.tag` and `assistant.image.tag` say otherwise; from a clone, a release must have been
