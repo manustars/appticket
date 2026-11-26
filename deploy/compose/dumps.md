@@ -86,6 +86,5 @@ that fails changes nothing, and says why. The objects restored belong to `HD_DAT
 of the new install has already started, start over with its database removed before restoring,
 and its dumps kept: `docker compose down`, then `docker volume rm hd_db-data` (the volume of the
 database, named after the project `hd`, or the `COMPOSE_PROJECT_NAME` of `.env`), then the last
-two commands. `docker compose down -v`
-would remove the volume `dumps` too, and on the host of the old install, whose project is `hd`
-as well, the old install's dumps with it.
+two commands. `docker compose down -v` would remove the volume `dumps` too, and on the host of
+the old install, whose project is `hd` as well, the old install's dumps with it.

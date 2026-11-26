@@ -202,17 +202,20 @@ first. From the directory that holds the old version, `1.2.3` here, with the new
    docker compose pull
    ```
 
-3. Stop the old version's core, take a dump, which is the one to go back to, and stop the old
-   version:
+3. Stop the old version's core, take a dump, which is the one to go back to, copy it into the
+   old directory, with the name the dump says it took in place of `hd-20261125T023000Z.dump`,
+   and stop the old version:
 
    ```sh
    cd "../hd-compose-$old"
    docker compose stop core
    docker compose run --rm dumps
+   docker compose run --rm -T dumps cat /dumps/hd-20261125T023000Z.dump > hd-20261125T023000Z.dump
    docker compose down
    ```
 
-   `down` keeps the volumes: the database and the dumps.
+   `down` keeps the volumes: the database and the dumps. The copy outlives the dumps' volume,
+   which keeps only the latest `HD_DUMPS_KEEP`.
 
 4. Start the new version:
 
@@ -225,26 +228,47 @@ first. From the directory that holds the old version, `1.2.3` here, with the new
    The core applies the new version's migrations before it serves. Mail waits in the mailbox
    meanwhile, and is read when the core starts.
 
-Keep the old directory until the new version has proved good. To go back to the old version,
-restore the dump of step 3 in the old directory ([Restore](#restore)) rather than start it on the
-database as the new version left it, with the new version's migrations applied. A version that
-moves the install's PostgreSQL to a new major version says so in its notes, with the dump and the
-restore it takes.
+Keep the old directory, and the dump copied into it, until the new version has proved good. To
+go back to the old version, restore that dump in the old directory rather than start the old
+version on the database as the new one left it, with the new version's migrations applied:
+whatever the help desk did after step 3 is lost. Stop the new version, remove the database's
+volume, `hd_db-data` (named after the project, the `COMPOSE_PROJECT_NAME` of `.env` when it sets
+one), restore and start, from the directory that holds both versions:
+
+```sh
+cd "hd-compose-$version"
+docker compose down
+cd "../hd-compose-$old"
+docker volume rm hd_db-data
+docker compose run --rm -T dumps restore < hd-20261125T023000Z.dump
+docker compose up -d
+```
+
+The restore starts the database alone, which creates it anew with the password of
+`secrets/db_password`, and ends with `restored`
+([Restoring into a fresh install](../deploy/compose/dumps.md#restoring-into-a-fresh-install)).
+A version that moves the install's PostgreSQL to a new major version says so in its notes, with
+the dump and the restore it takes.
 
 ## Restore
 
 A dump restores into a database before the core first starts on it, with the version of the help
 desk that took the dump or a newer one.
 
-- **Into a fresh install**, on this host or another one: copy the dump off the old host
-  ([dumps.md](../deploy/compose/dumps.md#listing-them-and-copying-them-off-the-host)),
+- **Into a fresh install**, on another host or on this one: copy the dump out of the dumps'
+  volume ([dumps.md](../deploy/compose/dumps.md#listing-them-and-copying-them-off-the-host)),
   then [install](#install) with the profile `db` as far as the settings in `.env`, copy the dump
   into the install's directory, and restore it with the commands of
   [Restoring into a fresh install](../deploy/compose/dumps.md#restoring-into-a-fresh-install),
   which write the database's password, restore and start. The agents sign in with the passwords
-  they had.
-- **Into the install it came from**, such as to go back to the dump of an upgrade: the same page
-  says how to start over with the database's volume removed and the dumps kept, then restore.
+  they had. On the same host, the fresh install would find the old one's volumes, named after
+  the project, with a database that the new password does not open: give it a
+  `COMPOSE_PROJECT_NAME` of its own, with its own `HD_HTTP_PORT` and `HD_SUBNET`
+  ([The settings](#the-settings)), or remove the old install first, once its dumps are copied
+  off, with `docker compose down -v` in its directory.
+- **Into the install it came from**, such as to go back to the dump of an upgrade: stop it, remove
+  the database's volume, and restore the dump copied into its directory, as
+  [Upgrades](#upgrades) does to go back.
 
 ## Podman
 
@@ -301,7 +325,9 @@ comes along: it is all in the database. In this order:
    ```
 
    The core removes the whitespace around a secret, such as a file's final newline, from a
-   Secret as from a file. Name the Secrets in `my-values.yaml`:
+   Secret as from a file. Name the Secrets in `my-values.yaml`, with the Ingress at the host of
+   `HD_PUBLIC_URL` serving the certificate of `files` ([HTTPS](kubernetes.md#https) has the
+   other ways):
 
    ```yaml
    core:
@@ -313,17 +339,37 @@ comes along: it is all in the database. In this order:
      oidc:
        existingSecret: hd-oidc
    ingress:
+     enabled: true
+     host: helpdesk.example.com
      tls:
        secretName: hd-tls
    ```
 
-   `secrets/db_password` stays behind: the chart generates the password of its own PostgreSQL,
-   and CloudNativePG that of its cluster. The settings of `.env` are values of the chart:
-   `HD_PUBLIC_URL` is `core.publicUrl`, `HD_MAIL_FROM` and `HD_MAIL_FROM_NAME` are
-   `core.mail.from` and `fromName`, `HD_OIDC_*` are `core.oidc.*` and `HD_SIGN_IN_*` are
-   `core.signIn.*` ([`values.yaml`](../deploy/chart/values.yaml) documents each).
-   `HD_TRUSTED_PROXIES` does not carry over: in the cluster the proxy is the ingress controller
-   ([Failed sign-ins](kubernetes.md#failed-sign-ins)).
+   `secrets/db_password` is the password of the Compose install's database. The chart generates
+   that of its own PostgreSQL, and CloudNativePG that of its cluster; with `external`, the
+   password of the database the chart is given goes in the database password Secret of
+   [Secrets to create](kubernetes.md#secrets-to-create), which is that file when the Compose
+   install already ran on that database. The other settings of `.env` become these values
+   ([`values.yaml`](../deploy/chart/values.yaml) documents each):
+
+   | `.env` | `my-values.yaml` |
+   |---|---|
+   | `HD_PUBLIC_URL` | `core.publicUrl`, or nothing when it is `https://` and `ingress.host` |
+   | `HD_MAIL_FROM`, `HD_MAIL_FROM_NAME` | `core.mail.from`, `core.mail.fromName` |
+   | `HD_IMAP_POLL_SECONDS`, `HD_IMAP_IMPORT_EXISTING` | `core.mail.pollSeconds`, `core.mail.importExisting` |
+   | `HD_SIGN_IN_FAILURES`, `HD_SIGN_IN_WINDOW_SECONDS` | `core.signIn.failures`, `core.signIn.windowSeconds` |
+   | `HD_TRUSTED_PROXIES` | `core.signIn.trustedProxies`, with the addresses of the ingress controller's pods rather than `HD_SUBNET` ([Failed sign-ins](kubernetes.md#failed-sign-ins)) |
+   | `HD_OIDC_ISSUER`, `HD_OIDC_CLIENT_ID`, `HD_OIDC_LABEL`, `HD_OIDC_SESSION_HOURS`, `HD_OIDC_AUTHORIZED_GROUP`, `HD_OIDC_GROUP_CLAIM` | `core.oidc.issuer`, `clientId`, `label`, `sessionHours`, `authorizedGroup`, `groupClaim` |
+   | `HD_LOG` | `core.log` |
+   | `HD_DUMPS_TIME`, `HD_DUMPS_KEEP`, `HD_DUMPS_IMAGE_TAG` | `dumps.schedule`, a cron expression in the cluster's time zone (`"30 2 * * *"` for 02:30), `dumps.keep`, `dumps.image.tag` |
+   | `HD_DATABASE_HOST`, `HD_DATABASE_PORT`, `HD_DATABASE_NAME`, `HD_DATABASE_USER`, `HD_DATABASE_SSLMODE` | with `external` only: `postgresql.external.host`, `port`, `name`, `user`, and `core.database.sslMode` |
+
+   The others are the Compose install's own and have no value in the chart: `HD_VERSION`, whose
+   place `--version` takes, `COMPOSE_*`,
+   `HD_HTTP_ADDRESS`, `HD_HTTP_PORT`, `HD_SUBNET`, the Caddy settings (`HD_HTTPS_CERTIFICATE`,
+   `HD_CADDY_*`), whose place the Ingress takes, `HD_GREENMAIL_*` (the chart's test mail server is
+   `greenmail.enabled`), the `HD_SECRET_*` lines, whose files the Secrets above hold, and the
+   Assistant's, which does not move (below).
 
 2. On the Compose host, stop the core, take a dump and copy it off the volume, with the name the
    dump says it took in place of `hd-20261125T023000Z.dump`:
@@ -355,7 +401,8 @@ comes along: it is all in the database. In this order:
 5. Start the core:
 
    ```sh
-   helm upgrade hd oci://ghcr.io/manustars/charts/hd --version <version> -n helpdesk -f my-values.yaml
+   helm upgrade hd oci://ghcr.io/manustars/charts/hd --version <version> -n helpdesk \
+     -f my-values.yaml
    kubectl -n helpdesk rollout status deployment/hd-core --timeout=300s
    ```
 

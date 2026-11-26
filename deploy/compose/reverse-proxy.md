@@ -14,9 +14,9 @@ A proxy on the host passes requests on to `http://127.0.0.1:8080`, but the core 
 connect from `127.0.0.1`: Docker and Podman pass the connection on from the gateway of the
 install's network, its first address. Caddy, and a proxy in a container that joins the network
 `hd_default` (named after the project, `COMPOSE_PROJECT_NAME` when `.env` sets it), connect from
-another address of that network. The network is `HD_SUBNET`
-(`172.16.0.0/24` by default), and `HD_TRUSTED_PROXIES` is `HD_SUBNET` unless `.env` sets it: a
-proxy on the host or Caddy needs nothing set.
+another address of that network. The network is `HD_SUBNET` (`172.16.0.0/24` by default), and
+`HD_TRUSTED_PROXIES` is `HD_SUBNET` unless `.env` sets it: a proxy on the host or Caddy needs
+nothing set.
 
 Trusting the subnet trusts every container of the install, and every process of the host that
 connects to the core's published port, since they all arrive from an address of it. Any of them
