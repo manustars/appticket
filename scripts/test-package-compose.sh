@@ -80,7 +80,8 @@ refused_with() {
   shift 2
   output=$("$@" 2>&1) || status=$?
   [ "$status" -eq 1 ] || fail "not refused (status $status): $* said: $output"
-  grep -Fq -- "$message" <<< "$output" || fail "refused without saying \"$message\": $* said: $output"
+  grep -Fq -- "$message" <<< "$output" \
+    || fail "refused without saying \"$message\": $* said: $output"
   if [ -e "$out" ] && [ -n "$(files_of "$out")" ]; then
     fail "refused, but wrote $(files_of "$out") into $out"
   fi
@@ -93,7 +94,8 @@ top="hd-compose-$version"
 build "$version" "$work/release"
 listed=$(tar -tzf "$work/release/$top.tar.gz" | LC_ALL=C sort)
 [ "$listed" = "$(expected_files "$version")" ] \
-  || fail "the archive holds other files than expected: $(diff <(expected_files "$version") - <<< "$listed")"
+  || fail "the archive holds other files than expected:" \
+    "$(diff <(expected_files "$version") - <<< "$listed")"
 unpacked="$work/release/unpacked"
 [ "$(files_of "$unpacked")" = "$top" ] || fail "the archive does not unpack into $top/ alone"
 [ "$(files_of "$unpacked/$top/secrets")" = ".gitignore README.md" ] \
@@ -116,7 +118,8 @@ echo "# planted" > "$copy/deploy/compose/examples/untracked.conf"
 build_from "$copy" "$version" "$work/planted"
 listed=$(tar -tzf "$work/planted/$top.tar.gz" | LC_ALL=C sort)
 [ "$listed" = "$(expected_files "$version")" ] \
-  || fail "the archive holds what git does not track: $(diff <(expected_files "$version") - <<< "$listed")"
+  || fail "the archive holds what git does not track:" \
+    "$(diff <(expected_files "$version") - <<< "$listed")"
 ! grep -rq planted "$work/planted/unpacked" || fail "the archive holds a planted file's content"
 echo "ok 2 - a .env, secrets and a file that git does not track are left out of the archive"
 
@@ -150,7 +153,8 @@ while read -r md target; do
     "#"*) continue ;;
   esac
   path=${target%%#*}
-  [ -f "$install/$(dirname "$md")/$path" ] || fail "$md links to $target, which is not in the archive"
+  [ -f "$install/$(dirname "$md")/$path" ] \
+    || fail "$md links to $target, which is not in the archive"
   local_links=$((local_links + 1))
 done < "$work/links"
 # Every address of the repository's files is at the tag and names a file the repository tracks.

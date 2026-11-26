@@ -204,7 +204,7 @@ jobs:
           echo "COMPOSE_DIR=$RUNNER_TEMP/unpacked/hd-compose-$TEST_VERSION" >> "$GITHUB_ENV"
           echo "Unpacked into $RUNNER_TEMP/unpacked/hd-compose-$TEST_VERSION:"
           ls -la "$RUNNER_TEMP/unpacked/hd-compose-$TEST_VERSION"
-      - name: Install with Compose from the archive, with its own PostgreSQL and with an existing one
+      - name: Install from the archive, with its own PostgreSQL and with an existing one
         run: bash scripts/test-compose.sh "$TEST_VERSION"
 
   # Publishing the chart, without a release: the script that a release runs (release.yml) pushes
