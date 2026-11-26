@@ -19,9 +19,16 @@ secret.
 | `assistant_api_key` | `HD_ASSISTANT_API_KEY`, the model service's key. | For a provider that takes one, with `HD_SECRET_ASSISTANT_API_KEY` in `.env`. |
 | `tls_certificate` | The certificate Caddy serves, followed by its chain, in PEM. | With the profile `https` and the certificate `files`, with `HD_SECRET_TLS_CERTIFICATE` in `.env` ([reverse-proxy.md](../reverse-proxy.md)). |
 | `tls_key` | Its private key, in PEM. | The same, with `HD_SECRET_TLS_KEY` in `.env`. |
+| `database_ca.crt` | The certificate of the authority that issued the database's, in PEM. | For an existing database whose certificate comes from an authority of one's own, with `HD_DATABASE_CA` in `.env`. |
+| `mail_ca.crt` | The certificate of the authority that issued the mail servers', in PEM. | For mail servers whose certificates come from an authority of one's own, with `HD_MAIL_CA` in `.env`. |
+
+The two certificates of authorities are not secrets, but are kept and mounted as the secrets are,
+the core told of each in `HD_DATABASE_CA_FILE` and `HD_MAIL_CA_FILE`
+([A private authority](../../../docs/external-database.md#a-private-authority)).
 
 A file holds the value alone; the surrounding whitespace, such as a final newline, is removed. The
-optional files are used only when `.env` names them (the `HD_SECRET_*` lines of `.env.example`):
+optional files are used only when `.env` names them (the `HD_SECRET_*` lines of `.env.example`,
+and `HD_DATABASE_CA` and `HD_MAIL_CA`):
 Compose cannot start a container whose secret's file is missing, so for a secret `.env` does
 not name `compose.yaml` mounts `/dev/null` instead and gives the service no `_FILE` variable.
 

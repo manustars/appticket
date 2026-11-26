@@ -49,11 +49,13 @@ container's environment. With the profile `db`, that is the bundled PostgreSQL, 
 
 An existing database is reached with `HD_DATABASE_SSLMODE`, `verify-full` when not set
 ([TLS](../../docs/external-database.md#tls)). The dumps' image holds no certificate authority,
-though, while the core trusts the public ones: for `verify-full` and `verify-ca`, the dumps
-require TLS without verifying the server's certificate (`sslmode=require`), and say so in a
-warning at each dump. A weaker mode is used as it is. The Compose install gives no
-`HD_DATABASE_CA_FILE` yet; once it does, the dumps verify the certificate against that authority
-as the core does.
+though, while the core trusts the public ones. With the certificate of the database's authority
+named in `.env` (`HD_DATABASE_CA`, as
+[docs/compose.md](../../docs/compose.md#with-an-existing-database) gives it), the dumps verify
+the server's certificate against that authority alone, as the mode says. Without it, for
+`verify-full` and `verify-ca`, the dumps require TLS without verifying the server's certificate
+(`sslmode=require`), and say so in a warning at each dump; to have them verify a certificate from
+a public authority, name that authority's certificate. A weaker mode is used as it is.
 
 `pg_dump` must be at least as new as the server: the image is PostgreSQL 18, that of the profile
 `db`. For an existing database of a later major version, set `HD_DUMPS_IMAGE_TAG` in `.env` to a

@@ -45,12 +45,17 @@ services:
       - HD_DATABASE_USER
       - HD_DATABASE_PASSWORD_FILE=/run/secrets/db_password
       - HD_DATABASE_SSLMODE
+      # The certificate of a private authority that issued the database's certificate, passed,
+      # as the optional secrets below are, only when .env names its file (HD_DATABASE_CA).
+      - HD_DATABASE_CA_${HD_DATABASE_CA:+FILE=/run/secrets/database_ca}
       - HD_PUBLIC_URL
       # The optional secrets: each _FILE variable is passed only when .env names the secret's
       # file (HD_SECRET_*). Otherwise the line is a name with nothing after HD_IMAP_URL_, which no
       # one sets, so Compose passes nothing: the core refuses an empty _FILE variable.
       - HD_IMAP_URL_${HD_SECRET_IMAP_URL:+FILE=/run/secrets/imap_url}
       - HD_SMTP_URL_${HD_SECRET_SMTP_URL:+FILE=/run/secrets/smtp_url}
+      # The same for the mail servers' private authority (HD_MAIL_CA).
+      - HD_MAIL_CA_${HD_MAIL_CA:+FILE=/run/secrets/mail_ca}
       - HD_MAIL_FROM
       - HD_MAIL_FROM_NAME
       - HD_IMAP_POLL_SECONDS
@@ -68,7 +73,7 @@ services:
       - HD_OIDC_AUTHORIZED_GROUP
       - HD_OIDC_GROUP_CLAIM
       - HD_LOG
-    secrets: [db_password, imap_url, smtp_url, oidc_client_secret]
+    secrets: [db_password, imap_url, smtp_url, oidc_client_secret, database_ca, mail_ca]
     # Published on the host for the reverse proxy in front of it, which does HTTPS: on the
     # host's loopback address unless HD_HTTP_ADDRESS says otherwise (reverse-proxy.md).
     ports:
@@ -178,9 +183,10 @@ services:
       - HD_DATABASE_NAME
       - HD_DATABASE_USER
       - HD_DATABASE_SSLMODE
+      - HD_DATABASE_CA_${HD_DATABASE_CA:+FILE=/run/secrets/database_ca}
       - HD_DUMPS_KEEP
       - HD_DUMPS_TIME
-    secrets: [db_password]
+    secrets: [db_password, database_ca]
     volumes:
       - dumps:/dumps
     depends_on:
@@ -209,9 +215,9 @@ services:
         dumps=/dumps
 
         # The database, reached as the core reaches it (docs/external-database.md): TLS verified
-        # unless HD_DATABASE_SSLMODE says otherwise. The image holds no certificate authority, so
-        # without one given in HD_DATABASE_CA_FILE, which the core trusts besides the public
-        # ones, TLS is required but the server's certificate is not verified.
+        # unless HD_DATABASE_SSLMODE says otherwise. The image holds no certificate authority:
+        # the server's certificate is verified against the authority whose file .env names
+        # (HD_DATABASE_CA), and without one TLS is required but the certificate not verified.
         connect() {
           if [ -z "$${HD_DATABASE_HOST:-}" ] || [ -z "$${HD_DATABASE_NAME:-}" ] \
             || [ -z "$${HD_DATABASE_USER:-}" ]; then
@@ -432,7 +438,8 @@ services:
 # secrets/README.md says what each holds. Those of the core, the Assistant and Caddy that an
 # install may go without are files only when .env names them (HD_SECRET_*): Compose refuses to
 # create a container whose secret's file is missing, so an unused one is /dev/null, which the
-# service is not told about.
+# service is not told about. The certificates of private authorities, which are not secrets, are
+# mounted the same way, from the files that HD_DATABASE_CA and HD_MAIL_CA name.
 secrets:
   db_password:
     file: ./secrets/db_password
@@ -452,6 +459,10 @@ secrets:
     file: ${HD_SECRET_TLS_CERTIFICATE:-/dev/null}
   tls_key:
     file: ${HD_SECRET_TLS_KEY:-/dev/null}
+  database_ca:
+    file: ${HD_DATABASE_CA:-/dev/null}
+  mail_ca:
+    file: ${HD_MAIL_CA:-/dev/null}
 
 volumes:
   db-data:
