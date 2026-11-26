@@ -43,9 +43,9 @@ docker compose down
 docker compose up -d
 ```
 
-`up -d` alone also makes the network anew, but Podman then puts the containers back on it without
-their service names, and the core no longer finds the database. The data stays on its volume
-either way, and the trusted proxies follow `HD_SUBNET`.
+`up -d` alone also makes the network anew, but Docker and Podman then put the containers back on
+it without their service names, and the core no longer finds the database. The data stays on its
+volume either way, and the trusted proxies follow `HD_SUBNET`.
 
 ## Examples
 
