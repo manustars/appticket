@@ -306,9 +306,7 @@ expect_log() {
 # The settings both modes share, from the shipped example.
 settings() {
   cp "$install/.env.example" "$work/.env"
-  # The repository's compose.yaml reads the images' version from .env; a release's archive
-  # names its own and reads none, so the test sets none (step 1 checks the images).
-  if grep -q HD_VERSION "$install/compose.yaml"; then
+  if [ -n "$version_from_env" ]; then
     setting HD_VERSION "$version"
   fi
   setting HD_PUBLIC_URL "http://127.0.0.1:$port"
@@ -383,6 +381,12 @@ holds "$compose_dir/secrets" "the shipped secrets/" ".gitignore README.md"
 ok "secrets/ ships with its README and .gitignore alone"
 cp -R "$compose_dir/." "$install"
 chmod 700 "$secrets"
+# The repository's compose.yaml reads the images' version from .env (HD_VERSION), which the
+# test then sets; a release's archive names its own and reads none, so the test sets none.
+version_from_env=
+if grep -q HD_VERSION "$install/compose.yaml"; then
+  version_from_env=yes
+fi
 settings
 setting COMPOSE_PROFILES db,greenmail,assistant,https
 for variable in $optional_secrets; do
@@ -407,7 +411,7 @@ for image in core assistant; do
     || fail "the install runs $(sed -n 's/^    image: //p' "$work/$image.yaml")," \
       "not hd-$image:$version"
 done
-if grep -q HD_VERSION "$install/compose.yaml"; then
+if [ -n "$version_from_env" ]; then
   ok "the install runs the images of $version, which HD_VERSION names"
 else
   ok "the install runs the images of $version, which its compose.yaml names without HD_VERSION"

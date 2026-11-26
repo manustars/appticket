@@ -8,7 +8,8 @@
 # Usage:
 #   bash scripts/test-package-compose.sh
 #
-# Needs git, GNU tar, gzip and sha256sum (as on Linux and in Git Bash).
+# Needs what the script it tests needs, and GNU find (for -printf) and GNU sed, as on Linux and
+# in Git Bash.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -101,7 +102,9 @@ unpacked="$work/release/unpacked"
 [ "$(files_of "$unpacked/$top/secrets")" = ".gitignore README.md" ] \
   || fail "the archive's secrets/ holds $(files_of "$unpacked/$top/secrets")"
 # The mode as the archive holds it, which tar gives the directory on Linux.
-secrets_mode=$(tar -tvzf "$work/release/$top.tar.gz" | grep -E " $top/secrets/\$" | cut -c1-10)
+secrets_mode=$(tar -tvzf "$work/release/$top.tar.gz" | { grep -E " $top/secrets/\$" || true; } \
+  | cut -c1-10)
+[ -n "$secrets_mode" ] || fail "the archive lists no directory $top/secrets/"
 [ "$secrets_mode" = drwx------ ] || fail "the archive's secrets/ has the mode $secrets_mode"
 echo "ok 1 - the archive of $version is $top.tar.gz, with its checksum, and unpacks into $top/" \
   "with the tracked files of deploy/compose, secrets/ holding README.md and .gitignore alone"
@@ -127,7 +130,7 @@ echo "ok 2 - a .env, secrets and a file that git does not track are left out of 
 # no HD_VERSION, so that the files of the next release run the next version with the same .env.
 # The untouched .env.example shows the version, commented out.
 install="$unpacked/$top"
-images=$(grep -E '^ +image: ghcr\.io/manustars/' "$install/compose.yaml")
+images=$(grep -E '^ +image: ghcr\.io/manustars/' "$install/compose.yaml" || true)
 expected_images="    image: ghcr.io/manustars/hd-core:$version
     image: ghcr.io/manustars/hd-assistant:$version"
 [ "$images" = "$expected_images" ] || fail "the archive's compose.yaml names the images $images"
@@ -141,9 +144,10 @@ echo "ok 3 - the archive's compose.yaml names the images of $version and reads n
 # 4. The links work outside the repository: a link to a file of the archive leads to it, and
 # what the repository holds beside deploy/compose is linked and named at the release's tag.
 blob="https://github.com/manustars/appticket/blob/v$version"
-# What the archive links to among its own files, as FILE TARGET lines.
+# What the archive's pages link to, as FILE TARGET lines; a page may link to nothing.
 while IFS= read -r -d '' md; do
-  grep -oE '\]\([^)]*\)' "$md" | sed -E 's/^\]\(//; s/\)$//' | sed "s|^|${md#"$install/"} |"
+  { grep -oE '\]\([^)]*\)' "$md" || true; } | sed -E 's/^\]\(//; s/\)$//' \
+    | sed "s|^|${md#"$install/"} |"
 done < <(find "$install" -name '*.md' -print0) > "$work/links"
 [ -s "$work/links" ] || fail "the archive's pages link to nothing: the check would find nothing"
 local_links=0
@@ -171,7 +175,7 @@ while read -r url; do
 done < "$work/urls"
 # No path of the repository is left beside them, in a comment or in a page's text, other than as
 # the text of a link to its address.
-top_dirs=$(git -C "$root" ls-files | sed -n 's|^\([^./][^/]*\)/.*|\1|p' | sort -u | paste -sd '|')
+top_dirs=$(git -C "$root" ls-files | sed -n 's|^\([^./][^/]*\)/.*|\1|p' | sort -u | paste -sd '|' -)
 sed -E 's/\[[^]]*\]\(https:[^)]*\)//g; s#https://[^ )>`"]*##g' "$install"/.env.example \
   "$install"/*.yaml "$install"/*.md "$install"/Caddyfile "$install"/examples/* \
   "$install"/secrets/README.md > "$work/text"
@@ -230,5 +234,28 @@ for arguments in "" "$version" "$version $work/a $work/b"; do
   [ "$status" -eq 2 ] || fail "the arguments '$arguments' give the status $status, not 2"
 done
 echo "ok 7 - no version, no output directory or a third argument is a mistake (status 2)"
+
+# 8. A page giving a path of the repository as code becomes a link to it at the tag, but given
+# with arguments it is a command, which no address can stand for: refused, rather than left to
+# name a file the archive does not hold.
+spans() {
+  repo_copy "$work/$1"
+  mkdir -p "$work/$1/scripts"
+  echo "#!/bin/sh" > "$work/$1/scripts/run.sh"
+  git -C "$work/$1" -c core.autocrlf=false add -- scripts/run.sh
+  echo "$2" >> "$work/$1/deploy/compose/dumps.md"
+}
+# shellcheck disable=SC2016 # the backquotes are Markdown's
+spans span-path 'Run `scripts/run.sh` first.'
+build_from "$work/span-path" "$version" "$work/out-span-path"
+page="$work/out-span-path/unpacked/$top/dumps.md"
+grep -qxF "Run [\`scripts/run.sh\`]($blob/scripts/run.sh) first." "$page" \
+  || fail "the path given as code is not a link: $(tail -n 1 "$page")"
+# shellcheck disable=SC2016
+spans span-command 'Run `scripts/run.sh VERSION` first.'
+REPO="$work/span-command" SOURCE_DATE_EPOCH=1700000000 refused_with \
+  "dumps.md gives a path of the repository as code with arguments" "$work/out-span-command" \
+  bash "$package" "$version" "$work/out-span-command"
+echo "ok 8 - a path given as code becomes a link at v$version, and given with arguments is refused"
 
 echo "all cases passed"

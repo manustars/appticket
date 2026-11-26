@@ -197,14 +197,18 @@ jobs:
           tags: ghcr.io/manustars/hd-assistant:${{ env.TEST_VERSION }}
           cache-from: type=gha,scope=hd
       - name: Build the release archive and unpack it outside the checkout
+        id: archive
         run: |
           bash scripts/package-compose.sh "$TEST_VERSION" "$RUNNER_TEMP/dist"
           mkdir "$RUNNER_TEMP/unpacked"
           tar -xzf "$RUNNER_TEMP/dist/hd-compose-$TEST_VERSION.tar.gz" -C "$RUNNER_TEMP/unpacked"
-          echo "COMPOSE_DIR=$RUNNER_TEMP/unpacked/hd-compose-$TEST_VERSION" >> "$GITHUB_ENV"
-          echo "Unpacked into $RUNNER_TEMP/unpacked/hd-compose-$TEST_VERSION:"
-          ls -la "$RUNNER_TEMP/unpacked/hd-compose-$TEST_VERSION"
+          unpacked="$RUNNER_TEMP/unpacked/hd-compose-$TEST_VERSION"
+          echo "Unpacked into $unpacked:"
+          ls -la "$unpacked"
+          echo "dir=$unpacked" >> "$GITHUB_OUTPUT"
       - name: Install from the archive, with its own PostgreSQL and with an existing one
+        env:
+          COMPOSE_DIR: ${{ steps.archive.outputs.dir }}
         run: bash scripts/test-compose.sh "$TEST_VERSION"
 
   # Publishing the chart, without a release: the script that a release runs (release.yml) pushes
