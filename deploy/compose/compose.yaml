@@ -25,6 +25,8 @@ name: hd
 
 services:
   core:
+    # A release's archive names the release's version here and in the Assistant's image
+    # (.env.example).
     image: ghcr.io/manustars/hd-core:${HD_VERSION:?set HD_VERSION in .env, such as 1.2.3}
     restart: unless-stopped
     # The core's settings, each passed only when .env (or the environment) sets it, so that the

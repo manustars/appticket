@@ -1,19 +1,22 @@
 # Deploying the help desk
 
-The help desk ships as two container images and a Helm chart:
+The help desk ships as two container images, a Helm chart and an archive for Compose:
 
 | | |
 |---|---|
 | `ghcr.io/manustars/hd-core` | The core: API, the agents' UI (served by the core itself), mail reading and sending, add-on events. Runs `hd serve`; any other `hd` command runs the same way. |
 | `ghcr.io/manustars/hd-assistant` | The Assistant add-on (optional). |
 | `oci://ghcr.io/manustars/charts/hd` | The Helm chart `hd` (its source is `deploy/chart`): both components, the database in one of three modes (a PostgreSQL the chart runs itself, a PostgreSQL cluster through CloudNativePG, or one of your own), backups, an optional test mail server for staging. |
+| `hd-compose-1.2.3.tar.gz` | The Compose install for a single host (its source is `deploy/compose`), attached to the GitHub release of each version with its SHA-256 checksum (`hd-compose-1.2.3.tar.gz.sha256`): it unpacks into `hd-compose-1.2.3/`, whose `compose.yaml` runs the images of that version. |
 
 The images are published by `.github/workflows/release.yml` when a version tag (`v1.2.3`) is
 pushed: tagged with the version and, for a final version, `latest`. Both are built from
 `deploy/Dockerfile` (`--target core` / `--target assistant`), run as the non-root user 10001 and
 stop cleanly on SIGTERM. The same workflow then publishes the chart with the tag's version
-(`1.2.3`, or `1.2.3-rc.1` for a pre-release), and publishes nothing when the tag disagrees with
-the version in `deploy/chart/Chart.yaml`.
+(`1.2.3`, or `1.2.3-rc.1` for a pre-release), and last creates the tag's GitHub release, a
+pre-release for a pre-release version, with the Compose archive attached. It publishes nothing
+when the tag disagrees with the version in `deploy/chart/Chart.yaml`, or when the archive cannot
+be built.
 
 ## Where to install
 
