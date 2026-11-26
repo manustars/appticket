@@ -114,7 +114,10 @@ jobs:
 
   # Last, once the images and the chart are published: the GitHub release of the tag, with the
   # Compose archive. A pre-release version (1.2.3-rc.1) is a pre-release here too, as it has no
-  # `latest` image.
+  # `latest` image; GitHub marks a new final release Latest, as the images are tagged `latest`.
+  # When the release is already there, from an earlier run of this job or made by hand, the
+  # archive is uploaded to it again, replacing the one of the same name, and the release is left
+  # as it is: a re-run succeeds.
   release:
     needs: [compose-archive, chart]
     runs-on: ubuntu-latest
@@ -125,8 +128,12 @@ jobs:
         with:
           name: compose-archive
           path: dist
-      - name: Create the GitHub release
+      - name: Create the GitHub release, or upload the archive to it
         run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            exit 0
+          fi
           prerelease=()
           case "${GITHUB_REF_NAME#v}" in *-*) prerelease=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \

@@ -13,6 +13,9 @@
 #
 # Environment: REPO (the git work tree whose deploy/compose is packaged, the one holding this
 # script), SOURCE_DATE_EPOCH (the time given to the archive's files, the last commit's).
+#
+# Needs git, GNU tar (for --owner, --mtime, --mode, --no-recursion, -T and -r), GNU sed (for
+# -i), find, gzip, paste and sha256sum, as on Linux and in Git Bash.
 set -euo pipefail
 
 usage() {
@@ -78,7 +81,7 @@ sed -i "s/^#HD_VERSION=.*/#HD_VERSION=$version/" "$env_example"
 # of the pages that go up out of deploy/compose, the paths the pages give as code and those the
 # other files name in their comments. Links between the archive's own files stay as they are.
 blob="https://github.com/manustars/appticket/blob/v$version"
-top_dirs=$(git -C "$repo" ls-files | sed -n 's|^\([^./][^/]*\)/.*|\1|p' | sort -u | paste -sd '|')
+top_dirs=$(git -C "$repo" ls-files | sed -n 's|^\([^./][^/]*\)/.*|\1|p' | sort -u | paste -sd '|' -)
 for file in "${files[@]}"; do
   path="$dir/$file"
   # How many ../ lead from the file's directory to deploy/compose, to deploy and to the root.
@@ -88,10 +91,14 @@ for file in "${files[@]}"; do
     *.md)
       ! grep -nF "](../../$up../" "$path" \
         || refuse "$file links to a file outside the repository"
+      # A path given as code with arguments is a command, which no address stands for.
+      ! grep -nE "\`($top_dirs)/[^\` ]* [^\`]*\`" "$path" \
+        || refuse "$file gives a path of the repository as code with arguments: give the path" \
+          "alone as code, which becomes a link"
       sed -E -i \
         -e "s@\\]\\(\\.\\./\\.\\./$up_pattern@](${blob}/@g" \
         -e "s@\\]\\(\\.\\./$up_pattern@](${blob}/deploy/@g" \
-        -e "s@(^|[^[])\`(($top_dirs)/[^\`]*)\`@\\1[\`\\2\`](${blob}/\\2)@g" \
+        -e "s@(^|[^[])\`(($top_dirs)/[^\` ]*)\`@\\1[\`\\2\`](${blob}/\\2)@g" \
         "$path"
       ;;
     *)
