@@ -260,7 +260,7 @@ fn outcome(matched: &Matched<'_>) -> String {
     };
     format!(
         "a ticket opened with priority {}{service}; on recovery, {recovery}; once an agent \
-         resolves the ticket, {close}",
+         resolves or closes the ticket, {close}",
         priority.as_str()
     )
 }
@@ -342,8 +342,8 @@ close_in_zabbix = true
              \"scope\" and \"service=mail\".\n\
              Rule 2 (\"Mail\") matches: a ticket opened with priority high, linking the service \
              \"Hosted mail\" when the customer uses it; on recovery, a note, and the ticket left \
-             unresolved; once an agent resolves the ticket, the problem closed in Zabbix, when \
-             its trigger allows it.\n"
+             unresolved; once an agent resolves or closes the ticket, the problem closed in \
+             Zabbix, when its trigger allows it.\n"
         );
 
         let backup = Alert {
@@ -410,8 +410,8 @@ close_in_zabbix = true
             printed.ends_with(
                 "\nRule 1 would match once the host is imported, an asset of a customer: a \
                  ticket opened with priority low; on recovery, a note, and the ticket resolved \
-                 only when no agent has worked on it; once an agent resolves the ticket, the \
-                 problem left open in Zabbix.\n"
+                 only when no agent has worked on it; once an agent resolves or closes the \
+                 ticket, the problem left open in Zabbix.\n"
             ),
             "{printed}"
         );
@@ -431,7 +431,7 @@ close_in_zabbix = true
                 "Rule 2 (\"High\") of the default list, the configuration having no rules, \
                  matches: a ticket opened with priority high; on recovery, a note, and the \
                  ticket resolved only when no agent has worked on it; once an agent resolves \
-                 the ticket, the problem left open in Zabbix.\n"
+                 or closes the ticket, the problem left open in Zabbix.\n"
             ),
             "{printed}"
         );

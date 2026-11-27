@@ -17,6 +17,10 @@ use crate::rules::Rules;
 pub struct Config {
     /// The core's base URL, such as `https://helpdesk.example.com`.
     pub core_url: String,
+    /// The base URL of the help desk's UI as agents' browsers reach it, for the address of a
+    /// ticket's page that Zabbix's event menu opens; `core_url` unless the configuration gives
+    /// another.
+    pub ui_url: String,
     /// The add-on's token, printed by `hd addon add`.
     pub core_token: String,
     /// The base URL of Zabbix's frontend, such as `https://zabbix.example.com`; the API is
@@ -53,6 +57,7 @@ impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")
             .field("core_url", &self.core_url)
+            .field("ui_url", &self.ui_url)
             .field("zabbix_url", &self.zabbix_url)
             .field("zabbix_timeout", &self.zabbix_timeout)
             .field("system", &self.system)
@@ -95,7 +100,13 @@ const WEBHOOK_SECRET_MIN: usize = 16;
 #[serde(deny_unknown_fields)]
 struct CoreSection {
     url: String,
+    #[serde(default)]
+    ui_url: Option<String>,
 }
+
+/// The most characters of `core.ui_url`: a ticket's address, `<ui_url>/#/tickets/<number>`,
+/// then fits in the 255 of a tag's value in Zabbix.
+const UI_URL_MAX: usize = 200;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -231,8 +242,21 @@ impl Config {
             Some(webhook) => Some(webhook_secret(&webhook.secret_file)?),
             None => None,
         };
+        let core_url = checked_url("core.url", &file.core.url)?;
+        let ui_url = match &file.core.ui_url {
+            Some(url) => checked_url("core.ui_url", url)?,
+            None => core_url.clone(),
+        };
+        let characters = ui_url.chars().count();
+        if characters > UI_URL_MAX {
+            bail!(
+                "core.ui_url is {ui_url:?}, of {characters} characters: give one of {UI_URL_MAX} \
+                 or fewer, so that a ticket's address fits in a tag of Zabbix"
+            );
+        }
         Ok(Config {
-            core_url: checked_url("core.url", &file.core.url)?,
+            core_url,
+            ui_url,
             core_token: secret("HD_ZABBIX_TOKEN")?,
             zabbix_url,
             zabbix_token: secret("HD_ZABBIX_API_TOKEN")?,
@@ -455,6 +479,36 @@ default_kind = "Server"
         assert!(config.kinds.mappings.is_empty());
         assert_eq!(config.frontend_url, "http://127.0.0.1:8180");
         assert_eq!(config.listen.to_string(), "127.0.0.1:8091");
+    }
+
+    #[test]
+    fn the_ui_s_address_is_the_core_s_unless_given_and_fits_in_a_tag_of_zabbix() {
+        assert_eq!(parse(SMALLEST).unwrap().ui_url, "http://127.0.0.1:8080");
+        let given = SMALLEST.replace(
+            "[zabbix]",
+            "ui_url = \"https://helpdesk.example.com/\"\n\n[zabbix]",
+        );
+        assert_eq!(
+            parse(&given).unwrap().ui_url,
+            "https://helpdesk.example.com"
+        );
+        let long = format!("https://helpdesk.example.com/{}", "x".repeat(200));
+        let too_long = SMALLEST.replace("[zabbix]", &format!("ui_url = \"{long}\"\n\n[zabbix]"));
+        assert_eq!(
+            error(&too_long),
+            format!(
+                "core.ui_url is {long:?}, of 229 characters: give one of 200 or fewer, so that a \
+                 ticket's address fits in a tag of Zabbix"
+            )
+        );
+        let ftp = SMALLEST.replace(
+            "[zabbix]",
+            "ui_url = \"ftp://helpdesk.example.com\"\n\n[zabbix]",
+        );
+        assert_eq!(
+            error(&ftp),
+            "core.ui_url is \"ftp://helpdesk.example.com\": it must use http or https"
+        );
     }
 
     #[test]

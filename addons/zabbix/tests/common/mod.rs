@@ -146,6 +146,8 @@ impl Core {
             "tickets:read",
             "--scope",
             "tickets:write",
+            "--event",
+            "ticket.state_changed",
         ]);
         let token = added
             .lines()
@@ -348,6 +350,34 @@ impl Core {
         assert_eq!(status, StatusCode::CREATED, "POST {path}: {json}");
     }
 
+    /// The administrator moves the ticket to `state`, such as `resolved` or `closed`.
+    pub async fn set_state(&self, number: i64, state: &str) {
+        let path = format!("/api/tickets/{number}/state");
+        let (status, json) = self.call("PUT", &path, Some(json!({"state": state}))).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "PUT {path}: {json}");
+    }
+
+    /// Waits until the core has delivered every event to the add-on, none of them failing.
+    pub async fn wait_for_deliveries(&self) {
+        let started = Instant::now();
+        loop {
+            let state = self.state().await;
+            assert!(
+                state["failing"] == 0,
+                "the add-on failed an event: {}",
+                state["last_error"]
+            );
+            if state["pending"] == 0 {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "events still wait for the add-on: {state}"
+            );
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+
     /// The add-on's state, as those who manage add-ons read it.
     pub async fn state(&self) -> Value {
         let addons = self.get("/api/admin/addons").await;
@@ -422,6 +452,7 @@ pub struct TestZabbix {
     actions: Vec<String>,
     media_types: Vec<String>,
     global_macros: Vec<String>,
+    roles: Vec<String>,
 }
 
 impl TestZabbix {
@@ -474,6 +505,7 @@ impl TestZabbix {
             actions: vec![],
             media_types: vec![],
             global_macros: vec![],
+            roles: vec![],
         }
     }
 
@@ -587,6 +619,13 @@ impl TestZabbix {
             let _: Value = self
                 .admin
                 .call("user.delete", json!(self.users))
+                .await
+                .unwrap();
+        }
+        if !self.roles.is_empty() {
+            let _: Value = self
+                .admin
+                .call("role.delete", json!(self.roles))
                 .await
                 .unwrap();
         }
@@ -905,6 +944,49 @@ impl TestZabbix {
             .collect()
     }
 
+    /// The updates of the problem of `event` by users, oldest first, as `(username, action,
+    /// message)`: `action` is `event.acknowledge`'s bits, such as 6 for an acknowledgement with a
+    /// message and 7 when it also closed the problem.
+    pub async fn acknowledges(&self, event: &str) -> Vec<(String, u32, String)> {
+        let events: Vec<Value> = self
+            .admin
+            .call(
+                "event.get",
+                json!({"eventids": [event], "output": ["eventid"],
+                       "selectAcknowledges": ["username", "action", "message", "clock"]}),
+            )
+            .await
+            .unwrap();
+        let mut made: Vec<(i64, String, u32, String)> = events[0]["acknowledges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| {
+                (
+                    a["clock"].as_str().unwrap().parse().unwrap(),
+                    a["username"].as_str().unwrap().to_owned(),
+                    a["action"].as_str().unwrap().parse().unwrap(),
+                    a["message"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        made.sort_by_key(|a| a.0);
+        made.into_iter().map(|(_, u, a, m)| (u, a, m)).collect()
+    }
+
+    /// Whether the problem of `event` is still open in Zabbix.
+    pub async fn is_open(&self, event: &str) -> bool {
+        let events: Vec<Value> = self
+            .admin
+            .call(
+                "event.get",
+                json!({"eventids": [event], "output": ["r_eventid"]}),
+            )
+            .await
+            .unwrap();
+        events[0]["r_eventid"] == "0"
+    }
+
     /// A Zabbix user of the test's own, a Super admin, named `username` after the prefix, with
     /// the fields given, such as `name`, `surname` and `medias`; answers its username.
     pub async fn user(&mut self, username: &str, fields: Value) -> String {
@@ -928,6 +1010,48 @@ impl TestZabbix {
         self.users
             .push(created["userids"][0].as_str().unwrap().to_owned());
         username
+    }
+
+    /// A user role named `name` after the prefix, of the Super admin type, with these `rules`
+    /// (such as actions it does not allow); answers its id, for a user's `roleid`.
+    pub async fn role(&mut self, name: &str, rules: Value) -> String {
+        let created: Value = self
+            .admin
+            .call(
+                "role.create",
+                json!({"name": self.name(name), "type": 3, "rules": rules}),
+            )
+            .await
+            .unwrap();
+        let id = created["roleids"][0].as_str().unwrap().to_owned();
+        self.roles.push(id.clone());
+        id
+    }
+
+    /// An API token of a user the test made, removed with the user.
+    pub async fn token_of(&self, username: &str) -> String {
+        let users: Vec<Value> = self
+            .admin
+            .call(
+                "user.get",
+                json!({"output": ["userid"], "filter": {"username": [username]}}),
+            )
+            .await
+            .unwrap();
+        let created: Value = self
+            .admin
+            .call(
+                "token.create",
+                json!({"name": self.name(username), "userid": users[0]["userid"]}),
+            )
+            .await
+            .unwrap();
+        let generated: Vec<Value> = self
+            .admin
+            .call("token.generate", json!([created["tokenids"][0]]))
+            .await
+            .unwrap();
+        generated[0]["token"].as_str().unwrap().to_owned()
     }
 
     /// Zabbix's API as a user the test made.
@@ -1158,6 +1282,20 @@ pub fn serve_webhook(
     secret: &str,
 ) {
     let app = hd_zabbix::webhook::router(std::sync::Arc::new(alerts), secret.to_owned());
+    tokio::spawn(async move { axum::serve(listener, app).await });
+}
+
+/// Serves the add-on's webhook, with `secret`, and the core's events to it, signed with
+/// `event_secret`, on `listener`, as the add-on does.
+pub fn serve_alerts(
+    listener: tokio::net::TcpListener,
+    alerts: std::sync::Arc<hd_zabbix::webhook::Alerts>,
+    secret: &str,
+    event_secret: &str,
+) {
+    let app = hd_zabbix::webhook::router(alerts.clone(), secret.to_owned()).merge(
+        hd_zabbix::webhook::back::router(alerts, hd_addon_sdk::Verifier::new(event_secret)),
+    );
     tokio::spawn(async move { axum::serve(listener, app).await });
 }
 
