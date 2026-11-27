@@ -6,18 +6,20 @@
 use hd_addon_sdk::api::Priority;
 use serde::Deserialize;
 
-/// A problem as the rules see it, already resolved from Zabbix and the core.
+use crate::text::{has_tag, list, same};
+
+/// An alert as the rules see it, already resolved from Zabbix and the core.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Problem {
+pub struct Alert {
     pub severity: Severity,
     /// The customer the host is an asset of, by name; none when no customer covers the host, or
     /// two do.
     pub customer: Option<String>,
     /// The names of the host's groups, such as `Brightfield/Offices`.
     pub host_groups: Vec<String>,
-    /// The event's tags, as name and value.
+    /// The alert's tags, as name and value.
     pub tags: Vec<(String, String)>,
-    /// The trigger's name, with its macros resolved, as the event has it.
+    /// The trigger's name, with its macros resolved, as Zabbix's event has it.
     pub trigger: String,
 }
 
@@ -62,9 +64,31 @@ impl Severity {
 
     /// The severity of this name, ignoring case and surrounding whitespace.
     pub fn from_name(name: &str) -> Option<Severity> {
-        let name = name.trim().to_lowercase();
-        Severity::ALL.into_iter().find(|s| s.name() == name)
+        Severity::ALL.into_iter().find(|s| same(s.name(), name))
     }
+
+    /// Every name, as a sentence offers them: `not classified, information, ... or disaster`.
+    pub fn names() -> String {
+        list(&Severity::ALL.map(Severity::name), "or")
+    }
+}
+
+/// The priorities of a ticket, from the lowest.
+const PRIORITIES: [Priority; 4] = [
+    Priority::Low,
+    Priority::Normal,
+    Priority::High,
+    Priority::Urgent,
+];
+
+/// The priority of this name, ignoring case and surrounding whitespace.
+fn priority_from_name(name: &str) -> Option<Priority> {
+    PRIORITIES.into_iter().find(|p| same(p.as_str(), name))
+}
+
+/// Every priority's name, as a sentence offers them: `low, normal, high or urgent`.
+fn priority_names() -> String {
+    list(&PRIORITIES.map(Priority::as_str), "or")
 }
 
 impl std::fmt::Display for Severity {
@@ -82,7 +106,7 @@ pub enum Scope {
     HostGroup(String),
 }
 
-/// An event tag a rule asks for, by name, with the value when one is given; compared ignoring
+/// A tag of the alert a rule asks for, by name, with the value when one is given; compared ignoring
 /// case.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagCondition {
@@ -90,19 +114,19 @@ pub struct TagCondition {
     pub value: Option<String>,
 }
 
-/// What must hold of a problem for a rule to match: all of them; one left out matches anything.
+/// What must hold of an alert for a rule to match: all of them; one left out matches anything.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Conditions {
-    /// The problem's severity is this one or higher.
+    /// The alert's severity is this one or higher.
     pub min_severity: Option<Severity>,
     pub scope: Option<Scope>,
-    /// Each of them is among the event's tags.
+    /// Each of them is among the alert's tags.
     pub tags: Vec<TagCondition>,
     /// The trigger's name contains this text, ignoring case.
     pub trigger_contains: Option<String>,
 }
 
-/// What the add-on does when a problem recovers, on the ticket its rule opened.
+/// What the add-on does when the problem of an alert recovers, on the ticket its rule opened.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Recovery {
     /// A note, and resolving the ticket only when no agent has worked on it.
@@ -152,7 +176,7 @@ pub enum Outcome {
 /// A rule of the list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rule {
-    /// The name the configuration gives it, for those who read the logs and `check`.
+    /// The name the configuration gives it, which `check` and the sentences about it show.
     pub name: Option<String>,
     pub conditions: Conditions,
     pub outcome: Outcome,
@@ -166,15 +190,13 @@ pub struct Rules {
     default: bool,
 }
 
-/// The rule that decides a problem.
+/// The rule that decides an alert.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Matched<'a> {
     /// Its position in the list, from 1.
     pub position: usize,
     pub rule: &'a Rule,
 }
-
-static IGNORE: Outcome = Outcome::Ignore;
 
 impl Rules {
     /// The list of the configuration in its order; the default list when it is empty.
@@ -222,54 +244,56 @@ impl Rules {
         &self.rules
     }
 
-    /// The first rule whose conditions all hold of `problem`; none when no rule matches, and the
+    /// The first rule whose conditions all hold of `alert`; none when no rule matches, and the
     /// alert is then ignored.
-    pub fn decide(&self, problem: &Problem) -> Option<Matched<'_>> {
+    pub fn decide(&self, alert: &Alert) -> Option<Matched<'_>> {
         self.rules
             .iter()
             .enumerate()
-            .find(|(_, rule)| rule.conditions.hold(problem))
+            .find(|(_, rule)| rule.conditions.hold(alert))
             .map(|(i, rule)| Matched {
                 position: i + 1,
                 rule,
             })
     }
+}
 
-    /// What the alert of `problem` does: the outcome of the rule that decides it, else ignored.
-    pub fn outcome(&self, problem: &Problem) -> &Outcome {
-        self.decide(problem).map_or(&IGNORE, |m| &m.rule.outcome)
+/// A rule as sentences name it: `rule 2`, or `rule 2 ("Mail")` when it has a name.
+pub fn label(position: usize, name: Option<&str>) -> String {
+    match name {
+        Some(name) => format!("rule {position} ({name:?})"),
+        None => format!("rule {position}"),
     }
 }
 
-/// The same text, ignoring case and surrounding whitespace.
-fn same(a: &str, b: &str) -> bool {
-    a.trim().to_lowercase() == b.trim().to_lowercase()
+impl Matched<'_> {
+    /// The rule as sentences name it.
+    pub fn label(&self) -> String {
+        label(self.position, self.rule.name.as_deref())
+    }
 }
 
 impl Conditions {
-    fn hold(&self, problem: &Problem) -> bool {
-        let severity = self.min_severity.is_none_or(|min| problem.severity >= min);
+    fn hold(&self, alert: &Alert) -> bool {
+        let severity = self.min_severity.is_none_or(|min| alert.severity >= min);
         let scope = match &self.scope {
             None => true,
-            Some(Scope::Customer(name)) => {
-                problem.customer.as_deref().is_some_and(|c| same(c, name))
-            }
+            Some(Scope::Customer(name)) => alert.customer.as_deref().is_some_and(|c| same(c, name)),
             Some(Scope::HostGroup(name)) => {
                 let name = name.trim().to_lowercase();
                 let nested = format!("{name}/");
-                problem.host_groups.iter().any(|group| {
+                alert.host_groups.iter().any(|group| {
                     let group = group.trim().to_lowercase();
                     group == name || group.starts_with(&nested)
                 })
             }
         };
-        let tags = self.tags.iter().all(|wanted| {
-            problem.tags.iter().any(|(tag, value)| {
-                same(tag, &wanted.tag) && wanted.value.as_deref().is_none_or(|v| same(value, v))
-            })
-        });
+        let tags = self
+            .tags
+            .iter()
+            .all(|wanted| has_tag(&alert.tags, &wanted.tag, wanted.value.as_deref()));
         let trigger = self.trigger_contains.as_deref().is_none_or(|text| {
-            problem
+            alert
                 .trigger
                 .to_lowercase()
                 .contains(&text.trim().to_lowercase())
@@ -313,15 +337,6 @@ struct RawTag {
     value: Option<String>,
 }
 
-/// The names of `values`, as a sentence lists them: `a, b or c`.
-fn one_of(values: &[&str]) -> String {
-    match values {
-        [] => String::new(),
-        [one] => (*one).to_owned(),
-        [init @ .., last] => format!("{} or {last}", init.join(", ")),
-    }
-}
-
 impl Rules {
     /// The rules as the configuration file writes them, each a table of `[[alerts.rules]]`; the
     /// default list when there are none. A rule that does not fit is refused with a sentence
@@ -337,14 +352,11 @@ impl Rules {
                 .map(str::trim)
                 .filter(|n| !n.is_empty())
                 .map(str::to_owned);
-            let label = match &named {
-                Some(name) => format!("rule {position} ({name:?})"),
-                None => format!("rule {position}"),
-            };
+            let label = label(position, named.as_deref());
             let rule = RawRule::deserialize(value)
                 .map_err(|e| e.message().trim().to_owned())
                 .and_then(Rule::try_from)
-                .map_err(|problem| format!("alerts.rules: {label}: {problem}"))?;
+                .map_err(|reason| format!("alerts.rules: {label}: {reason}"))?;
             if let Some(name) = &rule.name {
                 if let Some((other, _)) = names.iter().find(|(_, n)| same(n, name)) {
                     return Err(format!(
@@ -372,10 +384,9 @@ impl TryFrom<RawRule> for Rule {
         let min_severity = match filled(raw.min_severity, "min_severity")? {
             None => None,
             Some(written) => Some(Severity::from_name(&written).ok_or_else(|| {
-                let names: Vec<&str> = Severity::ALL.iter().map(|s| s.name()).collect();
                 format!(
                     "min_severity is {written:?}, not a severity of Zabbix: give {}",
-                    one_of(&names)
+                    Severity::names()
                 )
             })?),
         };
@@ -426,17 +437,20 @@ impl TryFrom<RawRule> for Rule {
                     return Err(format!(
                         "it ignores the alert, so {} {verb} nothing: remove {pronoun}, or open a \
                          ticket",
-                        one_of(&given).replace(" or ", " and ")
+                        list(&given, "and")
                     ));
                 }
                 Outcome::Ignore
             }
             "open" => {
-                let priority = priority.ok_or(
-                    "it opens a ticket without a priority: give one of low, normal, high or urgent",
-                )?;
-                let priority = parse_priority(&priority).ok_or_else(|| {
-                    format!("priority is {priority:?}: give low, normal, high or urgent")
+                let priority = priority.ok_or_else(|| {
+                    format!(
+                        "it opens a ticket without a priority: give one of {}",
+                        priority_names()
+                    )
+                })?;
+                let priority = priority_from_name(&priority).ok_or_else(|| {
+                    format!("priority is {priority:?}: give {}", priority_names())
                 })?;
                 let on_recovery = match on_recovery {
                     None => Recovery::default(),
@@ -444,8 +458,8 @@ impl TryFrom<RawRule> for Rule {
                         .into_iter()
                         .find(|r| same(r.name(), &written))
                         .ok_or_else(|| {
-                            let names: Vec<&str> = Recovery::ALL.iter().map(|r| r.name()).collect();
-                            format!("on_recovery is {written:?}: give {}", one_of(&names))
+                            let names = Recovery::ALL.map(Recovery::name);
+                            format!("on_recovery is {written:?}: give {}", list(&names, "or"))
                         })?,
                 };
                 Outcome::Open(OpenTicket {
@@ -470,17 +484,6 @@ impl TryFrom<RawRule> for Rule {
     }
 }
 
-fn parse_priority(written: &str) -> Option<Priority> {
-    [
-        Priority::Low,
-        Priority::Normal,
-        Priority::High,
-        Priority::Urgent,
-    ]
-    .into_iter()
-    .find(|p| same(p.as_str(), written))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,9 +501,9 @@ mod tests {
         }
     }
 
-    /// A problem of this severity, of no customer, without groups or tags, named `trigger`.
-    fn problem(severity: Severity, trigger: &str) -> Problem {
-        Problem {
+    /// An alert of this severity, of no customer, without groups or tags, named `trigger`.
+    fn alert(severity: Severity, trigger: &str) -> Alert {
+        Alert {
             severity,
             customer: None,
             host_groups: vec![],
@@ -509,9 +512,16 @@ mod tests {
         }
     }
 
-    /// The position of the rule that decides `problem`, from 1.
-    fn decided(rules: &Rules, problem: &Problem) -> Option<usize> {
-        rules.decide(problem).map(|m| m.position)
+    /// What `alert` does: the outcome of the rule that decides it, else ignored.
+    fn outcome(rules: &Rules, alert: &Alert) -> Outcome {
+        rules
+            .decide(alert)
+            .map_or(Outcome::Ignore, |m| m.rule.outcome.clone())
+    }
+
+    /// The position of the rule that decides `alert`, from 1.
+    fn decided(rules: &Rules, alert: &Alert) -> Option<usize> {
+        rules.decide(alert).map(|m| m.position)
     }
 
     #[test]
@@ -535,37 +545,37 @@ priority = "normal"
         );
         // Both the first and the second hold: the first decides.
         assert_eq!(
-            decided(&rules, &problem(Severity::Disaster, "Backup failed")),
+            decided(&rules, &alert(Severity::Disaster, "Backup failed")),
             Some(1)
         );
         assert_eq!(
-            decided(&rules, &problem(Severity::High, "Disk is full")),
+            decided(&rules, &alert(Severity::High, "Disk is full")),
             Some(2)
         );
         assert_eq!(
-            decided(&rules, &problem(Severity::Warning, "Disk is full")),
+            decided(&rules, &alert(Severity::Warning, "Disk is full")),
             Some(3)
         );
         assert_eq!(
-            decided(&rules, &problem(Severity::Information, "Disk is full")),
+            decided(&rules, &alert(Severity::Information, "Disk is full")),
             None
         );
         assert_eq!(
-            rules.outcome(&problem(Severity::Information, "x")),
-            &Outcome::Ignore
+            outcome(&rules, &alert(Severity::Information, "x")),
+            Outcome::Ignore
         );
     }
 
-    /// Whether the one rule written in `toml` matches `problem`.
-    fn matches(toml: &str, problem: &Problem) -> bool {
+    /// Whether the one rule written in `toml` matches `alert`.
+    fn matches(toml: &str, alert: &Alert) -> bool {
         let rules = rules(&format!("[[rules]]\noutcome = \"ignore\"\n{toml}"));
-        decided(&rules, problem).is_some()
+        decided(&rules, alert).is_some()
     }
 
     #[test]
-    fn a_rule_without_conditions_matches_any_problem() {
+    fn a_rule_without_conditions_matches_any_alert() {
         for severity in Severity::ALL {
-            assert!(matches("", &problem(severity, "")), "{severity}");
+            assert!(matches("", &alert(severity, "")), "{severity}");
         }
     }
 
@@ -574,7 +584,7 @@ priority = "normal"
         let at_least = |min: &str| -> Vec<&str> {
             Severity::ALL
                 .into_iter()
-                .filter(|s| matches(&format!("min_severity = {min:?}"), &problem(*s, "")))
+                .filter(|s| matches(&format!("min_severity = {min:?}"), &alert(*s, "")))
                 .map(Severity::name)
                 .collect()
         };
@@ -605,9 +615,9 @@ priority = "normal"
     #[test]
     fn a_customer_matches_by_name_ignoring_case_and_never_a_host_of_no_customer() {
         let rule = "customer = \"Brightfield\"";
-        let of = |customer: Option<&str>| Problem {
+        let of = |customer: Option<&str>| Alert {
             customer: customer.map(str::to_owned),
-            ..problem(Severity::High, "")
+            ..alert(Severity::High, "")
         };
         assert!(matches(rule, &of(Some("Brightfield"))));
         assert!(matches(rule, &of(Some("BRIGHTFIELD"))));
@@ -619,9 +629,9 @@ priority = "normal"
     #[test]
     fn a_host_group_matches_it_and_the_groups_nested_in_it() {
         let rule = "host_group = \"Brightfield/Offices\"";
-        let in_groups = |groups: &[&str]| Problem {
+        let in_groups = |groups: &[&str]| Alert {
             host_groups: groups.iter().map(|g| (*g).to_owned()).collect(),
-            ..problem(Severity::High, "")
+            ..alert(Severity::High, "")
         };
         assert!(matches(rule, &in_groups(&["Brightfield/Offices"])));
         assert!(matches(rule, &in_groups(&["brightfield/offices"])));
@@ -643,12 +653,12 @@ priority = "normal"
     #[test]
     fn every_tag_of_a_rule_must_be_present_with_its_value_when_it_gives_one() {
         let rule = r#"tags = [{ tag = "service", value = "mail" }, { tag = "scope" }]"#;
-        let tagged = |tags: &[(&str, &str)]| Problem {
+        let tagged = |tags: &[(&str, &str)]| Alert {
             tags: tags
                 .iter()
                 .map(|(t, v)| ((*t).to_owned(), (*v).to_owned()))
                 .collect(),
-            ..problem(Severity::High, "")
+            ..alert(Severity::High, "")
         };
         assert!(matches(
             rule,
@@ -680,11 +690,11 @@ priority = "normal"
         let rule = "trigger_contains = \"disk space\"";
         assert!(matches(
             rule,
-            &problem(Severity::High, "Low disk space on /var")
+            &alert(Severity::High, "Low disk space on /var")
         ));
-        assert!(matches(rule, &problem(Severity::High, "DISK SPACE is low")));
-        assert!(!matches(rule, &problem(Severity::High, "Disk is full")));
-        assert!(!matches(rule, &problem(Severity::High, "")));
+        assert!(matches(rule, &alert(Severity::High, "DISK SPACE is low")));
+        assert!(!matches(rule, &alert(Severity::High, "Disk is full")));
+        assert!(!matches(rule, &alert(Severity::High, "")));
     }
 
     #[test]
@@ -695,7 +705,7 @@ customer = "Brightfield"
 tags = [{ tag = "service", value = "mail" }]
 trigger_contains = "queue"
 "#;
-        let all = Problem {
+        let all = Alert {
             severity: Severity::Average,
             customer: Some("Brightfield".into()),
             host_groups: vec!["Brightfield".into()],
@@ -703,10 +713,10 @@ trigger_contains = "queue"
             trigger: "Mail queue is too long".into(),
         };
         assert!(matches(rule, &all));
-        let but = |change: fn(&mut Problem)| {
-            let mut problem = all.clone();
-            change(&mut problem);
-            problem
+        let but = |change: fn(&mut Alert)| {
+            let mut alert = all.clone();
+            change(&mut alert);
+            alert
         };
         assert!(!matches(rule, &but(|p| p.severity = Severity::Warning)));
         assert!(!matches(
@@ -776,7 +786,7 @@ close_in_zabbix = true"#
         let decided: Vec<(&str, Option<Priority>)> = Severity::ALL
             .into_iter()
             .map(|severity| {
-                let opened = match rules.outcome(&problem(severity, "Anything")) {
+                let opened = match outcome(&rules, &alert(severity, "Anything")) {
                     Outcome::Open(ticket) => {
                         assert_eq!(ticket.service, None);
                         assert_eq!(ticket.on_recovery, Recovery::ResolveIfNotWorkedOn);
@@ -807,8 +817,8 @@ close_in_zabbix = true"#
             super::tests::rules("[[rules]]\nmin_severity = \"warning\"\noutcome = \"ignore\"");
         assert!(!own.is_default());
         assert_eq!(
-            own.outcome(&problem(Severity::Disaster, "")),
-            &Outcome::Ignore
+            outcome(&own, &alert(Severity::Disaster, "")),
+            Outcome::Ignore
         );
     }
 

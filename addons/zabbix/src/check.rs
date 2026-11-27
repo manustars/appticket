@@ -1,8 +1,8 @@
-//! The `check` command: which rule a problem meets and with what outcome, or that none does. The
-//! problem is given by its event id in Zabbix, or by its severity, host, tags and trigger name.
-//! The host's groups come from Zabbix and its customer from the external references customers
-//! have, read from the core with the add-on's token as a round of the add-on reads them; nothing
-//! is written anywhere.
+//! The `check` command: which rule an alert meets and with what outcome, or that none does. The
+//! alert is given by Zabbix's event id, or by its severity, host, tags and trigger name. The
+//! host's groups come from Zabbix and its customer from the external references customers have,
+//! read from the core with the add-on's token as a round of the add-on reads them; nothing is
+//! written anywhere.
 
 use std::collections::HashMap;
 
@@ -11,27 +11,32 @@ use hd_addon_sdk::Client;
 
 use crate::config::Config;
 use crate::coverage::{Coverage, Placement};
-use crate::problems::{self, HostWithGroups};
-use crate::rules::{Matched, OpenTicket, Outcome, Problem, Recovery, Rules, Severity};
-use crate::zabbix::Zabbix;
+use crate::rules::{Alert, Matched, OpenTicket, Outcome, Recovery, Rules, Severity};
+use crate::text::list;
+use crate::zabbix::{Event, HostWithGroups, Zabbix};
 
-/// The problem to check, as the command line gives it.
+/// The alert to check, as the command line gives it.
 #[derive(Debug, Clone, clap::Args)]
-#[command(group(clap::ArgGroup::new("problem").required(true).args(["event", "host"])))]
+#[command(group(clap::ArgGroup::new("alert").required(true).args(["event", "host"])))]
 pub struct CheckArgs {
-    /// The problem's event id in Zabbix, such as 4213.
+    /// Zabbix's event id of the alert, such as 4213.
     #[arg(long, value_name = "ID")]
     pub event: Option<String>,
     /// The host, by its technical or its visible name.
     #[arg(long, requires = "severity", conflicts_with = "event")]
     pub host: Option<String>,
-    /// The problem's severity: not classified, information, warning, average, high or disaster.
-    #[arg(long, value_parser = parse_severity, requires = "host", conflicts_with = "event")]
+    #[arg(
+        long,
+        help = format!("The alert's severity: {}", Severity::names()),
+        value_parser = parse_severity,
+        requires = "host",
+        conflicts_with = "event"
+    )]
     pub severity: Option<Severity>,
-    /// An event tag, as NAME or NAME=VALUE; once for each tag.
+    /// A tag of the alert, as NAME or NAME=VALUE; once for each tag.
     #[arg(long = "tag", value_name = "NAME[=VALUE]", value_parser = parse_tag, conflicts_with = "event")]
     pub tags: Vec<(String, String)>,
-    /// The trigger's name, with its macros resolved, as the problem shows it.
+    /// The trigger's name, with its macros resolved, as Zabbix shows the problem.
     #[arg(long, value_name = "NAME", conflicts_with = "event")]
     pub trigger: Option<String>,
 }
@@ -39,8 +44,8 @@ pub struct CheckArgs {
 fn parse_severity(written: &str) -> Result<Severity, String> {
     Severity::from_name(written).ok_or_else(|| {
         format!(
-            "{written:?} is not a severity of Zabbix: give not classified, information, \
-             warning, average, high or disaster"
+            "{written:?} is not a severity of Zabbix: give {}",
+            Severity::names()
         )
     })
 }
@@ -67,6 +72,56 @@ pub enum Import {
     Conflict,
 }
 
+/// The alert as Zabbix or the command line gives it, before its hosts' customers are known.
+struct Given {
+    /// Zabbix's event id, when the alert is given by it.
+    event: Option<String>,
+    hosts: Vec<HostWithGroups>,
+    severity: Severity,
+    tags: Vec<(String, String)>,
+    trigger: String,
+}
+
+impl Given {
+    async fn read(zabbix: &Zabbix, args: CheckArgs) -> anyhow::Result<Given> {
+        match args.event {
+            Some(id) => {
+                let Event {
+                    id,
+                    severity,
+                    name,
+                    tags,
+                    host_ids,
+                } = zabbix.problem_event(id.trim()).await?;
+                let hosts = zabbix.hosts_by_id(&host_ids).await?;
+                if hosts.is_empty() {
+                    anyhow::bail!(
+                        "the trigger of Zabbix's event {id} is on no host the add-on's user can \
+                         read"
+                    );
+                }
+                Ok(Given {
+                    event: Some(id),
+                    hosts,
+                    severity,
+                    tags,
+                    trigger: name,
+                })
+            }
+            None => {
+                let host = args.host.context("give the host")?;
+                Ok(Given {
+                    event: None,
+                    hosts: vec![zabbix.host_by_name(host.trim()).await?],
+                    severity: args.severity.context("give the alert's severity")?,
+                    tags: args.tags,
+                    trigger: args.trigger.unwrap_or_default(),
+                })
+            }
+        }
+    }
+}
+
 /// Runs the check and answers what to print.
 pub async fn run(config: &Config, args: CheckArgs) -> anyhow::Result<String> {
     let zabbix = Zabbix::new(
@@ -75,28 +130,7 @@ pub async fn run(config: &Config, args: CheckArgs) -> anyhow::Result<String> {
         config.zabbix_timeout,
     )?;
     let core = Client::new(&config.core_url, &config.core_token)?;
-
-    let (event, hosts, severity, tags, trigger) = match &args.event {
-        Some(id) => {
-            let event = problems::problem_event(&zabbix, id.trim()).await?;
-            let hosts = problems::hosts_by_id(&zabbix, &event.host_ids).await?;
-            if hosts.is_empty() {
-                anyhow::bail!(
-                    "the trigger of event {} is on no host the add-on's user can read",
-                    event.id
-                );
-            }
-            let (severity, tags, name) = (event.severity, event.tags.clone(), event.name.clone());
-            (Some(event.id), hosts, severity, tags, name)
-        }
-        None => {
-            let host = args.host.as_deref().unwrap_or_default();
-            let host = problems::host_by_name(&zabbix, host.trim()).await?;
-            let severity = args.severity.context("give the problem's severity")?;
-            let trigger = args.trigger.clone().unwrap_or_default();
-            (None, vec![host], severity, args.tags.clone(), trigger)
-        }
-    };
+    let given = Given::read(&zabbix, args).await?;
 
     let groups = zabbix.host_groups().await?;
     let customers = core
@@ -110,29 +144,29 @@ pub async fn run(config: &Config, args: CheckArgs) -> anyhow::Result<String> {
     let coverage = Coverage::new(&config.system, &groups, &customers, &offboarded);
     let names: HashMap<_, _> = customers.iter().map(|c| (c.id, c.name.as_str())).collect();
 
-    let mut reports = Vec::with_capacity(hosts.len());
-    for host in &hosts {
+    let mut reports = Vec::with_capacity(given.hosts.len());
+    for host in &given.hosts {
         let import = match coverage.place(host.groups.iter().map(|g| g.id.as_str())) {
             Placement::Customer(id) => Import::Customer(names[&id].to_owned()),
             Placement::Uncovered => Import::Uncovered,
             Placement::Offboarded => Import::Offboarded,
             Placement::Conflict(_) => Import::Conflict,
         };
-        let problem = Problem {
-            severity,
+        let alert = Alert {
+            severity: given.severity,
             customer: match &import {
                 Import::Customer(name) => Some(name.clone()),
                 _ => None,
             },
             host_groups: host.groups.iter().map(|g| g.name.clone()).collect(),
-            tags: tags.clone(),
-            trigger: trigger.clone(),
+            tags: given.tags.clone(),
+            trigger: given.trigger.clone(),
         };
         reports.push(report(
-            event.as_deref(),
+            given.event.as_deref(),
             host,
             &import,
-            &problem,
+            &alert,
             &config.rules,
         ));
     }
@@ -142,20 +176,16 @@ pub async fn run(config: &Config, args: CheckArgs) -> anyhow::Result<String> {
 /// `"a"`, `"a" and "b"`, `"a", "b" and "c"`.
 fn quoted_list(items: &[String]) -> String {
     let quoted: Vec<String> = items.iter().map(|i| format!("{i:?}")).collect();
-    match quoted.as_slice() {
-        [] => String::new(),
-        [one] => one.clone(),
-        [init @ .., last] => format!("{} and {last}", init.join(", ")),
-    }
+    list(&quoted, "and")
 }
 
-/// What `check` prints of one host of the problem: whether the host is imported, the problem as
-/// the rules see it, and the rule that decides it with its outcome, or that none does.
+/// What `check` prints of one host of the alert: whether the host is imported, the alert as the
+/// rules see it, and the rule that decides it with its outcome, or that none does.
 pub fn report(
     event: Option<&str>,
     host: &HostWithGroups,
     import: &Import,
-    problem: &Problem,
+    alert: &Alert,
     rules: &Rules,
 ) -> String {
     let groups: Vec<String> = host.groups.iter().map(|g| g.name.clone()).collect();
@@ -177,7 +207,7 @@ pub fn report(
                              alerts open no ticket."
             .to_owned(),
     };
-    let tags = match problem.tags.as_slice() {
+    let tags = match alert.tags.as_slice() {
         [] => "no tags".to_owned(),
         tags => {
             // In name order: Zabbix gives them in none in particular.
@@ -192,28 +222,36 @@ pub fn report(
             format!("the tags {}", quoted_list(&written))
         }
     };
-    let event = event.map_or(String::new(), |id| format!("event {id}, "));
-    let decision = match rules.decide(problem) {
+    let event = event.map_or(String::new(), |id| format!("Zabbix's event {id}, "));
+    let decision = match rules.decide(alert) {
         None => "No rule matches: the alert is ignored.".to_owned(),
-        Some(matched) => format!("{} matches: {}.", label(&matched, rules), outcome(&matched)),
+        Some(matched) => {
+            let matches = match import {
+                Import::Customer(_) => "matches",
+                _ => "would match once the host is imported, an asset of a customer",
+            };
+            format!(
+                "{} {matches}: {}.",
+                rule_named(&matched, rules),
+                outcome(&matched)
+            )
+        }
     };
     format!(
-        "Host {:?}, {in_groups}: {imported}\nProblem: {event}severity {}, trigger {:?}, {tags}.\n\
+        "Host {:?}, {in_groups}: {imported}\nAlert: {event}severity {}, trigger {:?}, {tags}.\n\
          {decision}\n",
-        host.name, problem.severity, problem.trigger
+        host.name, alert.severity, alert.trigger
     )
 }
 
-fn label(matched: &Matched<'_>, rules: &Rules) -> String {
-    let named = match &matched.rule.name {
-        Some(name) => format!("Rule {} ({name:?})", matched.position),
-        None => format!("Rule {}", matched.position),
-    };
+/// The rule, starting a sentence: `Rule 2 ("Mail")`, with the default list named.
+fn rule_named(matched: &Matched<'_>, rules: &Rules) -> String {
+    let label = matched.label();
+    let mut named = label[..1].to_uppercase() + &label[1..];
     if rules.is_default() {
-        format!("{named} of the default list, the configuration having no rules,")
-    } else {
-        named
+        named.push_str(" of the default list, the configuration having no rules,");
     }
+    named
 }
 
 fn outcome(matched: &Matched<'_>) -> String {
@@ -256,7 +294,6 @@ mod tests {
 
     fn host(groups: &[&str]) -> HostWithGroups {
         HostWithGroups {
-            id: "10683".into(),
             name: "SRV-01".into(),
             groups: groups
                 .iter()
@@ -277,8 +314,8 @@ mod tests {
         Rules::read(rules).unwrap()
     }
 
-    fn problem(customer: Option<&str>, groups: &[&str]) -> Problem {
-        Problem {
+    fn alert(customer: Option<&str>, groups: &[&str]) -> Alert {
+        Alert {
             severity: Severity::High,
             customer: customer.map(str::to_owned),
             host_groups: groups.iter().map(|g| (*g).to_owned()).collect(),
@@ -317,12 +354,12 @@ close_in_zabbix = true
                 Some("4213"),
                 &host(&groups),
                 &brightfield,
-                &problem(Some("Brightfield"), &groups),
+                &alert(Some("Brightfield"), &groups),
                 &rules
             ),
             "Host \"SRV-01\", in the host groups \"Brightfield/Offices\" and \"Linux servers\": \
              an asset of Brightfield.\n\
-             Problem: event 4213, severity high, trigger \"Mail queue is too long\", the tags \
+             Alert: Zabbix's event 4213, severity high, trigger \"Mail queue is too long\", the tags \
              \"scope\" and \"service=mail\".\n\
              Rule 2 (\"Mail\") matches: a ticket opened with priority high, linking the service \
              \"Hosted mail\" when the customer uses it; on recovery, a note, and the ticket left \
@@ -330,16 +367,16 @@ close_in_zabbix = true
              its trigger allows it.\n"
         );
 
-        let backup = Problem {
+        let backup = Alert {
             trigger: "Backup failed".into(),
             tags: vec![],
-            ..problem(Some("Brightfield"), &groups[..1])
+            ..alert(Some("Brightfield"), &groups[..1])
         };
         assert_eq!(
             report(None, &host(&groups[..1]), &brightfield, &backup, &rules),
             "Host \"SRV-01\", in the host group \"Brightfield/Offices\": an asset of \
              Brightfield.\n\
-             Problem: severity high, trigger \"Backup failed\", no tags.\n\
+             Alert: severity high, trigger \"Backup failed\", no tags.\n\
              Rule 1 (\"Backups\") matches: the alert is ignored.\n"
         );
     }
@@ -353,12 +390,12 @@ close_in_zabbix = true
                 None,
                 &host(&["Lab"]),
                 &Import::Uncovered,
-                &problem(None, &["Lab"]),
+                &alert(None, &["Lab"]),
                 &rules
             ),
             "Host \"SRV-01\", in the host group \"Lab\": not imported, since no customer covers \
              its groups: its alerts open no ticket.\n\
-             Problem: severity high, trigger \"Mail queue is too long\", the tags \
+             Alert: severity high, trigger \"Mail queue is too long\", the tags \
              \"scope\" and \"service=mail\".\n\
              No rule matches: the alert is ignored.\n"
         );
@@ -372,12 +409,33 @@ close_in_zabbix = true
                 "not imported, since two customers or more cover its groups",
             ),
         ] {
-            let printed = report(None, &host(&[]), &import, &problem(None, &[]), &rules);
+            let printed = report(None, &host(&[]), &import, &alert(None, &[]), &rules);
             assert!(
                 printed.starts_with(&format!("Host \"SRV-01\", in no host group: {sentence}")),
                 "{printed}"
             );
         }
+
+        // A rule that holds without a customer would decide only once the host is imported.
+        let any_high = super::tests::rules(
+            "[[rules]]\nmin_severity = \"high\"\noutcome = \"open\"\npriority = \"low\"",
+        );
+        let printed = report(
+            None,
+            &host(&["Lab"]),
+            &Import::Uncovered,
+            &alert(None, &["Lab"]),
+            &any_high,
+        );
+        assert!(
+            printed.ends_with(
+                "\nRule 1 would match once the host is imported, an asset of a customer: a \
+                 ticket opened with priority low; on recovery, a note, and the ticket resolved \
+                 only when no agent has worked on it; once an agent resolves the ticket, the \
+                 problem left open in Zabbix.\n"
+            ),
+            "{printed}"
+        );
     }
 
     #[test]
@@ -386,7 +444,7 @@ close_in_zabbix = true
             None,
             &host(&["Brightfield"]),
             &Import::Customer("Brightfield".into()),
-            &problem(Some("Brightfield"), &["Brightfield"]),
+            &alert(Some("Brightfield"), &["Brightfield"]),
             &Rules::default_list(),
         );
         assert!(

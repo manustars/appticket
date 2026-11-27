@@ -3,6 +3,8 @@
 
 use serde::Deserialize;
 
+use crate::text::{has_tag, same};
+
 /// What of a host a mapping looks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Match {
@@ -88,12 +90,9 @@ pub struct Kinds {
 
 impl KindMapping {
     fn matches(&self, host: &HostTraits) -> bool {
-        let same = |a: &str, b: &str| a.trim().to_lowercase() == b.trim().to_lowercase();
         match &self.matches {
             Match::Template(template) => host.templates.iter().any(|t| same(t, template)),
-            Match::Tag { name, value } => host.tags.iter().any(|(tag, tag_value)| {
-                same(tag, name) && value.as_deref().is_none_or(|v| same(tag_value, v))
-            }),
+            Match::Tag { name, value } => has_tag(&host.tags, name, value.as_deref()),
         }
     }
 }

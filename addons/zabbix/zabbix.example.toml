@@ -38,7 +38,7 @@ kind = "Desktop"
 # What an alert does: the first rule whose conditions all hold decides, and an alert no rule
 # matches is ignored. A condition left out matches anything. Without rules, the default list opens
 # a ticket with priority urgent for a disaster and one with priority high for a high, and ignores
-# the rest. `hd-zabbix check` tells which rule a problem meets.
+# the rest. `hd-zabbix check` tells which rule an alert meets.
 
 [[alerts.rules]]
 name = "Backups"
@@ -52,14 +52,14 @@ name = "Mail at Brightfield"
 customer = "Brightfield"
 # This severity or higher: not classified, information, warning, average, high or disaster.
 min_severity = "average"
-# Event tags that must all be present, each with this value or with any.
+# Tags of the alert that must all be present, each with this value or with any.
 tags = [{ tag = "service", value = "mail" }, { tag = "scope" }]
 outcome = "open"
 # low, normal, high or urgent.
 priority = "high"
 # Linked to the ticket when the customer uses it.
 service = "Hosted mail"
-# When the problem recovers: resolve_if_not_worked_on (the default), resolve or note.
+# When the alert's problem recovers: resolve_if_not_worked_on (the default), resolve or note.
 on_recovery = "resolve_if_not_worked_on"
 # Close the problem in Zabbix when an agent resolves the ticket (default false).
 close_in_zabbix = false

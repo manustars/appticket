@@ -17,7 +17,7 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Command {
-    /// Tells which alert rule a problem meets and with what outcome, or that none does.
+    /// Tells which rule an alert meets and with what outcome, or that none does.
     Check(CheckArgs),
 }
 
