@@ -2362,9 +2362,12 @@ async fn an_addon_s_token_changes_nothing_but_its_own_calls(db: PgPool) {
     assert_eq!(
         addon_writes,
         [
+            "POST /api/addon/assets",
+            "POST /api/addon/assets/{id}/retire",
             "POST /api/addon/proposals",
             "POST /api/addon/tickets",
             "POST /api/addon/tickets/{number}/notes",
+            "PUT /api/addon/assets/{id}",
         ]
     );
     let ticket = api.get(&format!("/api/tickets/{number}")).await;
