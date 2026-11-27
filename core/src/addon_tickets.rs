@@ -738,6 +738,10 @@ mod tests {
         .await
         .unwrap();
         assert!(worked_on(outage).await, "an agent's announcement");
+        assert!(
+            !worked_on(untouched).await,
+            "an announcement from its parent is no work on the child"
+        );
     }
 
     /// The number of the one ticket there is.
