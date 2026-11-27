@@ -646,7 +646,7 @@ async fn assets_and_services_are_linked_through_the_api(db: PgPool) {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(
         refused["error"],
-        "The ticket's customer does not use this service."
+        "Brightfield does not use the service Hosted mail."
     );
     for (method, uri) in [
         (
@@ -2183,7 +2183,7 @@ async fn an_addon_opens_tickets_and_adds_notes_through_the_api(db: PgPool) {
     .await
     .unwrap();
     let bot = Client::new_with_token(&db, &watchtower.token, api.agent);
-    let blind = Client::new_with_token(&db, &reader.token, api.agent);
+    let reader_bot = Client::new_with_token(&db, &reader.token, api.agent);
     let ticket = serde_json::json!({
         "customer_id": brightfield,
         "title": "SRV-01: backup failed",
@@ -2193,7 +2193,7 @@ async fn an_addon_opens_tickets_and_adds_notes_through_the_api(db: PgPool) {
         "service_ids": [backup],
     });
 
-    let (status, refused) = blind
+    let (status, refused) = reader_bot
         .call("POST", "/api/addon/tickets", Some(ticket.clone()))
         .await;
     assert_eq!(status, StatusCode::CONFLICT);
@@ -2214,7 +2214,7 @@ async fn an_addon_opens_tickets_and_adds_notes_through_the_api(db: PgPool) {
     assert_eq!(status, StatusCode::CREATED, "{opened}");
     let n = opened["number"].as_i64().unwrap();
     let note = serde_json::json!({"body": "The rerun succeeded."});
-    let (status, refused) = blind
+    let (status, refused) = reader_bot
         .call(
             "POST",
             &format!("/api/addon/tickets/{n}/notes"),
@@ -2265,9 +2265,41 @@ async fn an_addon_opens_tickets_and_adds_notes_through_the_api(db: PgPool) {
             ("watchtower", true, "The rerun succeeded."),
         ]
     );
+    // Add-ons reading the ticket see which add-on opened it, but not its notes.
+    let read = reader_bot.get(&format!("/api/addon/tickets/{n}")).await;
+    assert_eq!(read["opened_by_addon"], "watchtower");
+    assert_eq!(read["timeline"], serde_json::json!([]));
     let by_hand = testing::ticket(&db, brightfield, None, "h1@brightfield.test").await;
     let by_hand = api.get(&format!("/api/tickets/{by_hand}")).await;
     assert_eq!(by_hand["opened_by_addon"], Value::Null);
+}
+
+/// The specification describes the ticket an add-on opens with its own fields, not those of the
+/// ticket an agent opens by hand.
+#[test]
+fn the_specification_describes_the_ticket_an_addon_opens() {
+    let spec = serde_json::to_value(super::openapi()).unwrap();
+    let body = &spec["paths"]["/api/addon/tickets"]["post"]["requestBody"]["content"]["application/json"]
+        ["schema"]["$ref"];
+    let name = body.as_str().unwrap().rsplit('/').next().unwrap();
+    let mut fields: Vec<&str> = spec["components"]["schemas"][name]["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort();
+    assert_eq!(
+        fields,
+        [
+            "asset_ids",
+            "customer_id",
+            "description",
+            "priority",
+            "service_ids",
+            "title"
+        ]
+    );
 }
 
 /// An add-on's token, whatever its scopes, opens no agent's call: it cannot reply, assign or

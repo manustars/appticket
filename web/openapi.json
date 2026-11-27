@@ -474,13 +474,13 @@
         "tags": [
           "add-ons"
         ],
-        "summary": "Opens a ticket without a requester for an active customer, with a priority and the customer's\nactive assets and services it is about; replies on it go to the customer's key requesters. The\ndescription becomes the ticket's first internal note, by the add-on. An asset or service that\ndoes not fit refuses the ticket, with a sentence naming it. Scope `tickets:write`.",
+        "summary": "Opens a ticket without a requester for an active customer, with a priority and the customer's\nactive assets and services it is about; replies on it go to the customer's key requesters. The\ndescription becomes the ticket's first internal note, by the add-on. An asset or service that\ndoes not fit refuses the ticket, with a sentence naming it; one that does not exist is not\nfound. Scope `tickets:write`.",
         "operationId": "open_ticket",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NewTicket"
+                "$ref": "#/components/schemas/AddonNewTicket"
               }
             }
           },
@@ -6165,6 +6165,58 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "AddonNewTicket": {
+        "type": "object",
+        "description": "A ticket an add-on opens.",
+        "required": [
+          "customer_id",
+          "title"
+        ],
+        "properties": {
+          "asset_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Active assets of the customer the ticket is about."
+          },
+          "customer_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The customer the ticket is for; an offboarded customer gets no new tickets."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the add-on knows of the problem, such as the alert it saw. It becomes the ticket's\nfirst internal note, by the add-on: seen by agents only, never sent to the customer."
+          },
+          "priority": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Priority",
+                "description": "Normal when omitted."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "service_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Active services the customer uses that the ticket is about."
+          },
+          "title": {
+            "type": "string"
           }
         }
       },

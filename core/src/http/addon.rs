@@ -366,7 +366,8 @@ pub struct AddonTicketOpened {
 /// Opens a ticket without a requester for an active customer, with a priority and the customer's
 /// active assets and services it is about; replies on it go to the customer's key requesters. The
 /// description becomes the ticket's first internal note, by the add-on. An asset or service that
-/// does not fit refuses the ticket, with a sentence naming it. Scope `tickets:write`.
+/// does not fit refuses the ticket, with a sentence naming it; one that does not exist is not
+/// found. Scope `tickets:write`.
 #[utoipa::path(post, path = "/api/addon/tickets", tag = "add-ons",
     request_body = addon_tickets::NewTicket,
     responses((status = CREATED, body = AddonTicketOpened), (status = NOT_FOUND, body = Problem),

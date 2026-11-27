@@ -3,15 +3,16 @@
 //! services, and adds internal notes to any ticket. It never replies and changes nothing else.
 
 use serde::Deserialize;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::PgPool;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{Error, Result, rule};
-use crate::tickets::Priority;
+use crate::tickets::{NoteAuthor, Priority};
 
 /// A ticket an add-on opens.
 #[derive(Debug, Deserialize, ToSchema)]
+#[schema(as = AddonNewTicket)]
 pub struct NewTicket {
     /// The customer the ticket is for; an offboarded customer gets no new tickets.
     pub customer_id: Uuid,
@@ -48,58 +49,18 @@ pub async fn open(db: &PgPool, addon: Uuid, new: &NewTicket) -> Result<i64> {
     .bind(new.customer_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let customer_name = match customer {
+    match customer {
         None => return Err(Error::NotFound("customer")),
         Some((name, true)) => {
             return rule(format!("{name} is offboarded and gets no new tickets"));
         }
-        Some((name, false)) => name,
-    };
+        Some((_, false)) => {}
+    }
     for &asset in &new.asset_ids {
-        let row: Option<(Uuid, String, bool)> = sqlx::query_as(
-            "SELECT customer_id, name, retired_at IS NOT NULL FROM assets WHERE id = $1 FOR SHARE",
-        )
-        .bind(asset)
-        .fetch_optional(&mut *tx)
-        .await?;
-        match row {
-            None => return rule(format!("there is no asset {asset}")),
-            Some((owner, name, _)) if owner != new.customer_id => {
-                return rule(format!(
-                    "the asset {name} belongs to another customer than {customer_name}"
-                ));
-            }
-            Some((_, name, true)) => {
-                return rule(format!(
-                    "the asset {name} is retired and gets no new tickets"
-                ));
-            }
-            Some(_) => {}
-        }
+        crate::catalog::ensure_asset_fits(&mut tx, asset, new.customer_id).await?;
     }
     for &service in &new.service_ids {
-        let row: Option<(String, bool, bool)> = sqlx::query_as(
-            "SELECT s.name, s.retired_at IS NOT NULL,
-                    EXISTS (SELECT 1 FROM customer_services cs
-                            WHERE cs.service_id = s.id AND cs.customer_id = $2)
-             FROM services s WHERE s.id = $1 FOR SHARE",
-        )
-        .bind(service)
-        .bind(new.customer_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        match row {
-            None => return rule(format!("there is no service {service}")),
-            Some((name, true, _)) => {
-                return rule(format!(
-                    "the service {name} is retired and gets no new tickets"
-                ));
-            }
-            Some((name, false, false)) => {
-                return rule(format!("{customer_name} does not use the service {name}"));
-            }
-            Some(_) => {}
-        }
+        crate::catalog::ensure_service_fits(&mut tx, service, new.customer_id).await?;
     }
     let id = Uuid::new_v4();
     let number: i64 = sqlx::query_scalar(
@@ -135,7 +96,7 @@ pub async fn open(db: &PgPool, addon: Uuid, new: &NewTicket) -> Result<i64> {
     if let Some(description) = new.description.as_deref().map(str::trim)
         && !description.is_empty()
     {
-        insert_note(&mut tx, id, addon, description).await?;
+        crate::tickets::insert_note(&mut tx, id, NoteAuthor::Addon(addon), description).await?;
     }
     crate::tickets::emit_opened(&mut tx, number).await?;
     tx.commit().await?;
@@ -144,36 +105,7 @@ pub async fn open(db: &PgPool, addon: Uuid, new: &NewTicket) -> Result<i64> {
 
 /// Adds an internal note by `addon` to any ticket, closed ones too.
 pub async fn add_note(db: &PgPool, addon: Uuid, number: i64, body: &str) -> Result<Uuid> {
-    let body = body.trim();
-    if body.is_empty() {
-        return rule("a note cannot be empty");
-    }
-    let mut tx = db.begin().await?;
-    let (ticket, _) = crate::tickets::lock(&mut tx, number).await?;
-    let id = insert_note(&mut tx, ticket, addon, body).await?;
-    sqlx::query("UPDATE tickets SET updated_at = now() WHERE id = $1")
-        .bind(ticket)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    Ok(id)
-}
-
-async fn insert_note(
-    tx: &mut Transaction<'_, Postgres>,
-    ticket: Uuid,
-    addon: Uuid,
-    body: &str,
-) -> Result<Uuid> {
-    let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO notes (id, ticket_id, addon_id, body) VALUES ($1, $2, $3, $4)")
-        .bind(id)
-        .bind(ticket)
-        .bind(addon)
-        .bind(body)
-        .execute(&mut **tx)
-        .await?;
-    Ok(id)
+    crate::tickets::write_note(db, number, NoteAuthor::Addon(addon), body).await
 }
 
 #[cfg(test)]
@@ -281,7 +213,7 @@ mod tests {
         assert!(ticket.timeline.is_empty(), "no description, no note");
     }
 
-    async fn tickets(db: &PgPool) -> i64 {
+    async fn ticket_count(db: &PgPool) -> i64 {
         sqlx::query_scalar("SELECT count(*) FROM tickets")
             .fetch_one(db)
             .await
@@ -320,7 +252,10 @@ mod tests {
         let nowhere = Uuid::new_v4();
 
         let refusals = [
-            (ticket_for(gone, "Disk full"), "Old Mill is offboarded"),
+            (
+                ticket_for(gone, "Disk full"),
+                "Old Mill is offboarded and gets no new tickets",
+            ),
             (ticket_for(brightfield, "   "), "a ticket needs a title"),
             (
                 NewTicket {
@@ -338,13 +273,6 @@ mod tests {
             ),
             (
                 NewTicket {
-                    asset_ids: vec![nowhere],
-                    ..ticket_for(brightfield, "Disk full")
-                },
-                "there is no asset",
-            ),
-            (
-                NewTicket {
                     service_ids: vec![mail, backup],
                     ..ticket_for(brightfield, "Disk full")
                 },
@@ -357,25 +285,38 @@ mod tests {
                 },
                 "the service Fax gateway is retired",
             ),
-            (
-                NewTicket {
-                    service_ids: vec![nowhere],
-                    ..ticket_for(brightfield, "Disk full")
-                },
-                "there is no service",
-            ),
         ];
         for (new, expected) in refusals {
             match open(&db, watchtower, &new).await {
-                Err(Error::Rule(why)) => assert!(why.starts_with(expected), "{why}"),
+                Err(Error::Rule(why)) => assert_eq!(why, expected),
                 other => panic!("{expected}: {other:?}"),
             }
         }
-        assert!(matches!(
-            open(&db, watchtower, &ticket_for(nowhere, "Disk full")).await,
-            Err(Error::NotFound("customer"))
-        ));
-        assert_eq!(tickets(&db).await, 0, "nothing was opened");
+        // Something that does not exist is not found, as when an agent links it.
+        let missing = [
+            (ticket_for(nowhere, "Disk full"), "customer"),
+            (
+                NewTicket {
+                    asset_ids: vec![ours, nowhere],
+                    ..ticket_for(brightfield, "Disk full")
+                },
+                "asset",
+            ),
+            (
+                NewTicket {
+                    service_ids: vec![mail, nowhere],
+                    ..ticket_for(brightfield, "Disk full")
+                },
+                "service",
+            ),
+        ];
+        for (new, what) in missing {
+            match open(&db, watchtower, &new).await {
+                Err(Error::NotFound(found)) => assert_eq!(found, what),
+                other => panic!("{what}: {other:?}"),
+            }
+        }
+        assert_eq!(ticket_count(&db).await, 0, "nothing was opened");
         let events: i64 = sqlx::query_scalar("SELECT count(*) FROM events")
             .fetch_one(&db)
             .await
@@ -391,7 +332,7 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(kind, crate::addons::TICKET_OPENED);
-        assert_eq!(number, detail_number(&db).await);
+        assert_eq!(number, only_ticket_number(&db).await);
     }
 
     /// An add-on adds notes to any ticket, one a requester opened or a closed one too, shown with
@@ -482,7 +423,7 @@ mod tests {
         assert_eq!(to, [Some("lena@brightfield.test".to_owned())]);
         assert!(ticket.requester.is_none());
 
-        // Lena's answer comes back to the ticket by its headers; it still has no requester.
+        // Lena's message back joins the ticket by its headers; it still has no requester.
         let sent: String =
             sqlx::query_scalar("SELECT rfc_message_id FROM messages WHERE direction = 'outbound'")
                 .fetch_one(&db)
@@ -497,9 +438,9 @@ mod tests {
             .unwrap();
         tx.commit().await.unwrap();
         let ticket = detail(&db, n).await.unwrap();
-        assert_eq!(ticket.timeline.len(), 2, "the answer joined the ticket");
+        assert_eq!(ticket.timeline.len(), 2, "her message joined the ticket");
         assert!(ticket.requester.is_none());
-        assert_eq!(ticket.state, TicketState::Open, "the answer reopened it");
+        assert_eq!(ticket.state, TicketState::Open, "her message reopened it");
     }
 
     /// The database keeps the rules also when the code is bypassed: a note has exactly one
@@ -557,7 +498,8 @@ mod tests {
         );
     }
 
-    async fn detail_number(db: &PgPool) -> i64 {
+    /// The number of the one ticket there is.
+    async fn only_ticket_number(db: &PgPool) -> i64 {
         sqlx::query_scalar("SELECT number FROM tickets")
             .fetch_one(db)
             .await
