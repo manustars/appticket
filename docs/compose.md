@@ -295,8 +295,10 @@ machine, with Docker Compose 5.1.4: every command is the same with `podman compo
 `docker compose`. What to know with Podman:
 
 - **Warnings about the optional secrets.** `up` warns `secret file hd_imap_url does not exist`,
-  and so for each optional secret that `.env` does not name, which is mounted from `/dev/null`
-  ([Secrets of the Compose install](../deploy/compose/secrets/README.md)): nothing is missing.
+  and so for each optional secret that `.env` does not name, and for each authority's
+  certificate (`hd_database_ca`, `hd_mail_ca`) that it does not name: each is mounted from
+  `/dev/null` ([Secrets of the Compose install](../deploy/compose/secrets/README.md)), and nothing
+  is missing.
 - **An empty volume left by each `down`.** The image of the dumps, PostgreSQL's, declares a
   volume, so `dumps-schedule` gets an anonymous one, which it never writes, and `podman compose
   down` leaves it behind when it removes the container (`down -v` removes it with the rest;
