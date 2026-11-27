@@ -1,14 +1,17 @@
-//! The `hd` binary reads its secrets from files, as Compose and Kubernetes give them.
+//! The `hd` binary reads its secrets from files, as Compose and Kubernetes give them. Each test
+//! gives it a database of its own, never the developer's.
 
+#[allow(dead_code, reason = "not every helper is used here")]
 mod common;
 
-use common::{database_url, dir, hd};
+use common::{OwnDatabase, dir, hd};
 
 #[test]
 fn the_database_url_is_read_from_its_file() {
+    let database = OwnDatabase::create("secrets");
     let dir = dir();
     let file = dir.join("database-url");
-    std::fs::write(&file, format!("{}\n", database_url())).unwrap();
+    std::fs::write(&file, format!("{}\n", database.url())).unwrap();
 
     let output = hd(
         &dir,
@@ -25,9 +28,11 @@ fn the_database_url_is_read_from_its_file() {
 
 #[test]
 fn the_database_url_and_its_file_together_are_refused() {
+    // Refused before connecting; should it connect, it reaches a database of its own.
+    let database = OwnDatabase::create("secrets");
     let dir = dir();
     let file = dir.join("database-url");
-    let url = database_url();
+    let url = database.url();
     std::fs::write(&file, &url).unwrap();
 
     let output = hd(
