@@ -87,8 +87,8 @@ priority = "high"
 
 [addon]
 # Where the add-on answers the core's reads of live details and receives its events on /events, at
-# the URL `hd addon add --url` gave, and receives Zabbix's alerts on /webhook (default 127.0.0.1:8091): an address the Zabbix server
-# reaches, when it is on another host.
+# the URL `hd addon add --url` gave, and receives Zabbix's alerts on /webhook (default
+# 127.0.0.1:8091): an address the Zabbix server reaches, when it is on another host.
 listen = "127.0.0.1:8091"
 
 # Zabbix's alerts, sent by the media type zabbix-media-type.yaml to http://<listen>/webhook.

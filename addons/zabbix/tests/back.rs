@@ -17,6 +17,7 @@ use hd_addon_sdk::events::{Agent, StateChangedBy, TicketStateChanged};
 use hd_zabbix::kinds::Kinds;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 const SECRET: &str = "a-webhook-secret-of-the-test";
 
@@ -86,7 +87,6 @@ on_recovery = "resolve"
 #[ignore = "needs the Zabbix in containers and the test database"]
 async fn an_agent_resolving_or_closing_the_ticket_acknowledges_the_problem_and_closes_it_only_when_rule_and_trigger_allow_it()
  {
-    let since = time::OffsetDateTime::now_utc() - Duration::from_secs(5);
     let (listener, url, _) = common::webhook_listener().await;
     let core = Core::start_at(&base(&url)).await;
     let mut zabbix = TestZabbix::connect().await;
@@ -170,7 +170,7 @@ async fn an_agent_resolving_or_closing_the_ticket_acknowledges_the_problem_and_c
 
     let admin = "Admin".to_owned();
     assert_eq!(
-        zabbix.acknowledges(&closable.1).await,
+        said(&zabbix, &closable.1).await,
         [(
             admin.clone(),
             CLOSED,
@@ -191,7 +191,7 @@ async fn an_agent_resolving_or_closing_the_ticket_acknowledges_the_problem_and_c
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     assert_eq!(
-        zabbix.acknowledges(&fixed.1).await,
+        said(&zabbix, &fixed.1).await,
         [(
             admin.clone(),
             ACKNOWLEDGED,
@@ -207,7 +207,7 @@ async fn an_agent_resolving_or_closing_the_ticket_acknowledges_the_problem_and_c
         "the trigger does not allow it"
     );
     assert_eq!(
-        zabbix.acknowledges(&kept.1).await,
+        said(&zabbix, &kept.1).await,
         [(
             admin.clone(),
             ACKNOWLEDGED,
@@ -221,7 +221,7 @@ async fn an_agent_resolving_or_closing_the_ticket_acknowledges_the_problem_and_c
     assert!(zabbix.is_open(&kept.1).await, "the rule does not say so");
     // Closed by the agent once the add-on resolved it, after the problem recovered.
     assert_eq!(
-        zabbix.acknowledges(&recovered.1).await,
+        said(&zabbix, &recovered.1).await,
         [(
             admin.clone(),
             ACKNOWLEDGED,
@@ -232,7 +232,59 @@ async fn an_agent_resolving_or_closing_the_ticket_acknowledges_the_problem_and_c
         )]
     );
 
-    // The same change again, as when the core delivers it once more, is not acknowledged twice.
+    // The same change again, as when the core delivers it once more after the add-on acted on
+    // it, is not acknowledged twice: also once the problem is closed, which would now be
+    // acknowledged as recovered.
+    for (event, number) in [(&closable.1, closable.2), (&kept.1, kept.2)] {
+        let change = changes(&zabbix, event).await[0];
+        let again = resolved_by_ada(&core, number, event).await;
+        alerts.state_changed(&again, change).await.unwrap();
+        assert_eq!(zabbix.acknowledges(event).await.len(), 1, "ticket {number}");
+    }
+
+    zabbix.clean_up().await;
+}
+
+/// The acknowledgements of the problem of `event`, as [`TestZabbix::acknowledges`] gives them,
+/// each message without the key of the change it acknowledges, which each must end with.
+async fn said(zabbix: &TestZabbix, event: &str) -> Vec<(String, u32, String)> {
+    zabbix
+        .acknowledges(event)
+        .await
+        .into_iter()
+        .map(|(user, action, message)| {
+            let (text, _) = keyed(&message);
+            (user, action, text.to_owned())
+        })
+        .collect()
+}
+
+/// The ids of the changes the acknowledgements of the problem of `event` acknowledge.
+async fn changes(zabbix: &TestZabbix, event: &str) -> Vec<Uuid> {
+    zabbix
+        .acknowledges(event)
+        .await
+        .iter()
+        .map(|(_, _, message)| keyed(message).1)
+        .collect()
+}
+
+/// An acknowledgement's message, split into its text and the id of the core's event that told
+/// the change: `… [help desk change 6f1c…]`.
+fn keyed(message: &str) -> (&str, Uuid) {
+    let (text, key) = message
+        .rsplit_once(" [help desk change ")
+        .unwrap_or_else(|| panic!("no change in {message:?}"));
+    let id = key
+        .strip_suffix(']')
+        .and_then(|id| id.parse().ok())
+        .unwrap_or_else(|| panic!("no change's id in {message:?}"));
+    (text, id)
+}
+
+/// The change of the core's administrator resolving the ticket `number` of the problem of
+/// `event`, as `ticket.state_changed` tells it.
+async fn resolved_by_ada(core: &Core, number: i64, event: &str) -> TicketStateChanged {
     let agents = core.get("/api/agents").await;
     let ada = agents
         .as_array()
@@ -240,8 +292,8 @@ async fn an_agent_resolving_or_closing_the_ticket_acknowledges_the_problem_and_c
         .iter()
         .find(|a| a["name"] == AGENT)
         .unwrap_or_else(|| panic!("no {AGENT} in {agents}"));
-    let again = TicketStateChanged {
-        ticket_number: kept.2,
+    TicketStateChanged {
+        ticket_number: number,
         old_state: TicketState::Open,
         new_state: TicketState::Resolved,
         changed_by: StateChangedBy::Agent {
@@ -250,12 +302,8 @@ async fn an_agent_resolving_or_closing_the_ticket_acknowledges_the_problem_and_c
                 name: AGENT.into(),
             },
         },
-        reference: Some(kept.1.clone()),
-    };
-    alerts.state_changed(&again, since).await.unwrap();
-    assert_eq!(zabbix.acknowledges(&kept.1).await.len(), 1);
-
-    zabbix.clean_up().await;
+        reference: Some(event.to_owned()),
+    }
 }
 
 const CLOSING_RULES: &str = r#"
@@ -302,7 +350,7 @@ async fn a_problem_zabbix_refuses_to_close_is_acknowledged_with_its_reason() {
         "Zabbix",
         common::rules(CLOSING_RULES),
     ));
-    common::serve_alerts(listener, alerts, SECRET, &core.event_secret);
+    common::serve_alerts(listener, alerts.clone(), SECRET, &core.event_secret);
 
     let event = zabbix.raise(&item, &trigger, "500").await;
     let (status, answer) = common::post_event(&url, SECRET, common::problem_sent(&event)).await;
@@ -315,7 +363,7 @@ async fn a_problem_zabbix_refuses_to_close_is_acknowledged_with_its_reason() {
     core.set_state(number, "resolved").await;
     core.wait_for_deliveries().await;
 
-    let made = zabbix.acknowledges(&event).await;
+    let made = said(&zabbix, &event).await;
     assert_eq!(made.len(), 1, "{made:?}");
     let (by, action, message) = &made[0];
     assert_eq!((by, *action), (&user, ACKNOWLEDGED));
@@ -329,7 +377,81 @@ async fn a_problem_zabbix_refuses_to_close_is_acknowledged_with_its_reason() {
     );
     assert!(zabbix.is_open(&event).await);
 
+    // Delivered again, it is not acknowledged twice, though the message differs from the one
+    // the add-on meant to give before Zabbix refused.
+    let change = changes(&zabbix, &event).await[0];
+    let again = resolved_by_ada(&core, number, &event).await;
+    alerts.state_changed(&again, change).await.unwrap();
+    assert_eq!(zabbix.acknowledges(&event).await.len(), 1);
+
     zabbix.clean_up().await;
+}
+
+/// A Zabbix that has the problem 4213, recovered by the event 4220, but fails to read 4220, as
+/// one that fails a read now and then does.
+async fn zabbix_failing_the_recovery() -> String {
+    let app = axum::Router::new().route(
+        "/api_jsonrpc.php",
+        // The add-on sends application/json-rpc, which axum's Json does not take.
+        axum::routing::post(|body: axum::body::Bytes| async move {
+            let call: Value = serde_json::from_slice(&body).unwrap();
+            let id = call["id"].clone();
+            let answer = match (
+                call["method"].as_str(),
+                call["params"]["eventids"][0].as_str(),
+            ) {
+                (Some("event.get"), Some("4213")) => json!({"result": [
+                    {"eventid": "4213", "value": "1", "severity": "4",
+                     "name": "Mail queue is too long", "clock": "1795801516", "opdata": "",
+                     "r_eventid": "4220", "tags": [], "hosts": []}]}),
+                _ => json!({"error": {"code": -32500, "message": "Application error.",
+                                      "data": "Database error occurred."}}),
+            };
+            let mut answer = answer;
+            answer["jsonrpc"] = json!("2.0");
+            answer["id"] = id;
+            axum::Json(answer)
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    url
+}
+
+#[tokio::test]
+#[ignore = "needs the test database"]
+async fn a_recovery_whose_closer_cannot_be_read_adds_nothing_and_is_answered_with_a_failure() {
+    let core = Core::start().await;
+    let brightfield = core.customer("Brightfield").await;
+    let opened = core
+        .addon()
+        .open_ticket(&hd_addon_sdk::NewTicket {
+            reference: Some("4213".into()),
+            ..hd_addon_sdk::NewTicket::new(brightfield, "SRV-01: Mail queue is too long")
+        })
+        .await
+        .unwrap();
+    let alerts = hd_zabbix::webhook::Alerts::new(
+        core.addon(),
+        hd_zabbix::zabbix::Zabbix::new(
+            &zabbix_failing_the_recovery().await,
+            "zabbix-token",
+            Duration::from_secs(5),
+        )
+        .unwrap(),
+        "Zabbix",
+        hd_zabbix::rules::Rules::default_list(),
+    );
+    let (listener, url, _) = common::webhook_listener().await;
+    common::serve_webhook(listener, alerts, SECRET);
+
+    // Whether the add-on itself closed the problem cannot be told: Zabbix tries again, rather
+    // than the ticket get a note and, by the default, be resolved.
+    let (status, why) = common::post_event(&url, SECRET, common::recovery_sent("4213")).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{why}");
+    assert_eq!(core.ticket(opened.number).await["state"], "open");
+    assert_eq!(core.addon_notes(opened.number).await, Vec::<String>::new());
 }
 
 const MEDIA_TYPE_RULES: &str = r#"
@@ -448,7 +570,7 @@ async fn the_event_menu_opens_the_ticket_and_the_add_on_s_own_acknowledgement_an
     core.set_state(number, "resolved").await;
     core.wait_for_deliveries().await;
     assert_eq!(
-        zabbix.acknowledges(&event).await,
+        said(&zabbix, &event).await,
         [(
             "Admin".to_owned(),
             CLOSED,
