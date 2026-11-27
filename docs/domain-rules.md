@@ -240,9 +240,9 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
 - An add-on allowed to work tickets opens tickets without a requester for a customer, with a
   priority, assets and services; it adds notes to any ticket and resolves the tickets it opened.
   It never replies and changes nothing else on tickets.
-- Add-ons that follow tickets are told of every change of a ticket's state, once, with the state
-  it left, the state it reached and who changed it: an agent, or a received message that reopened
-  it. A move to the state the ticket is already in is no change.
+- Add-ons registered for `ticket.state_changed` are told of every change of a ticket's state,
+  once, with the state it left, the state it reached and who changed it: an agent, or a received
+  message that reopened it. A move to the state the ticket is already in is no change.
 - An alert opens a ticket of the customer of the asset it is about, only when the monitoring
   add-on's rules say so, and at most one ticket per problem of the monitoring system. When the
   problem recovers, the add-on adds a note and resolves the ticket only if no agent has worked on
