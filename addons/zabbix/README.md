@@ -188,7 +188,8 @@ or a secret shorter than 16 characters, stops the add-on. Make one with, for exa
 Zabbix sends the problems of triggers, their recoveries and their updates to the add-on's webhook
 (`POST /webhook` on `addon.listen`), through the webhook media type
 [`zabbix-media-type.yaml`](zabbix-media-type.yaml). The add-on acts on each within the request and
-answers in less than 20 seconds, within the media type's 30: a request without the webhook's
+answers in less than 20 seconds, within the media type's timeout of 30, which the file sets
+(Zabbix allows 1 to 60): a request without the webhook's
 secret is refused (401), and one it could not act on, because Zabbix or the core did not answer or
 the core refused, is answered 502 with the reason, which Zabbix shows in its action log
 (*Reports → Action log*), trying three times in all, 10 seconds apart.
@@ -216,17 +217,31 @@ without the asset, and the description says so. A trigger on the items of severa
 the ticket of the first of them, in Zabbix's order, that is an asset of a customer and whose alert
 a rule opens.
 
-**A recovery.** The add-on adds a note with the time the problem recovered, then reads the ticket
-and resolves it as the rule that opens the alert says (`on_recovery`, with the ticket's customer):
-by default only when no agent has worked on it, always with `resolve`, never with `note`; and only
-an open or waiting ticket. When no rule opens the alert any more, such as after the rules changed,
-the default decides.
+**A recovery.** The add-on reads the problem from Zabbix again and finds the host and the rule
+that open its alert, as for the problem. It adds a note with the time the problem recovered, then
+reads the ticket and resolves it as that rule says (`on_recovery`): by default only when no agent
+has worked on it, always with `resolve`, never with `note`; and only an open or waiting ticket.
+When no rule opens the alert any more, such as after the rules changed, the default decides. When
+Zabbix does not answer, the add-on adds nothing and answers 502, so that Zabbix tries again,
+rather than guess what the rule would say; when only the recovery's time cannot be read, the note
+says the problem recovered without it, and the add-on logs why.
+
+`resolve` is the help desk's explicit choice, rule by rule, to override the default of
+[ADR 0010](../../docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md), by which the
+add-on resolves a ticket by itself only when no agent has worked on it: with `resolve`, the
+recovery resolves the ticket even when an agent has.
+
+A problem that reaches the add-on after it has already recovered in Zabbix, such as one Zabbix
+sends again after a failure while the problem recovered meanwhile, opens its ticket and is handled
+at once as its recovery would be: Zabbix's recovery message came when the add-on had no ticket for
+it, and nothing else would note or resolve it.
 
 **An update.** An update with a message, such as an acknowledgement with a comment, adds a note
 with the Zabbix user, what they did and the message:
 `Olga Operator (olga) updated the problem in Zabbix (acknowledged and commented): Looking at it`.
 Updates without a message, and those of the add-on's own Zabbix user (the one of
-`HD_ZABBIX_API_TOKEN`), add none.
+`HD_ZABBIX_API_TOKEN`, which the add-on asks Zabbix for once, at the first update with a message),
+add none.
 
 A problem without a ticket, because none was opened for it, gets no note on recovery or update.
 
@@ -362,10 +377,11 @@ and raise problems the same way. One waits for Zabbix to
 mark an interface nobody answers at as not available, which takes a minute or two.
 
 The tests of alerts raise problems the same way and serve the add-on's webhook on a port of their
-own, bound on `HD_TEST_WEBHOOK_LISTEN` (default `0.0.0.0:0`, every address, so that Zabbix's
+own, bound on `HD_TEST_ZABBIX_WEBHOOK_LISTEN` (default `0.0.0.0:0`, every address, so that Zabbix's
 server reaches it from its container). Most post the media type's events to it themselves; one
 imports `zabbix-media-type.yaml` under a name of its own, with a user and an action of its own,
-and lets Zabbix send them. The server reaches the test at the host named by
+gives the global macro `{$HD_WEBHOOK_SECRET}` a secret it generates (removing the macro at the
+end, so two runs at once on one Zabbix would clash), and lets Zabbix send them. The server reaches the test at the host named by
 `HD_TEST_ZABBIX_WEBHOOK_HOST`, by default `host.docker.internal`, which `compose.yaml` maps to the
 host for the server. With Podman on Windows or macOS that name reaches the machine's virtual
 machine, not the host where the test runs: give the host's address as the virtual machine sees

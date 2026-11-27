@@ -497,13 +497,15 @@ async fn a_problem_raised_in_zabbix_opens_one_ticket_through_the_media_type_and_
     )
     .await;
 
+    // Zabbix sends the secret from its global macro, as an install does.
+    let secret = uuid::Uuid::new_v4().simple().to_string();
     let (listener, _, reached) = common::webhook_listener().await;
     common::serve_webhook(
         listener,
         zabbix.alerts(&core, hd_zabbix::rules::Rules::default_list()),
-        SECRET,
+        &secret,
     );
-    let media_type = zabbix.media_type(&reached, SECRET).await;
+    let media_type = zabbix.media_type(&reached, &secret).await;
     let receiver = zabbix
         .user(
             "helpdesk",
