@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "sdk/rust", "addons/assistant"]
+members = ["core", "sdk/rust", "addons/assistant", "addons/zabbix"]
 
 [workspace.package]
 edition = "2024"
