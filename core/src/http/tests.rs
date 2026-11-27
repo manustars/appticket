@@ -563,7 +563,7 @@ async fn tickets_are_listed_with_their_sites_and_filtered_by_site(db: PgPool) {
         .unwrap();
     let nowhere = testing::ticket(&db, brightfield, None, "c@brightfield.test").await;
     let closed = testing::ticket(&db, brightfield, Some(ada), "d@brightfield.test").await;
-    crate::testing::set_state(&db, closed, crate::tickets::TicketState::Closed)
+    testing::set_state(&db, closed, crate::tickets::TicketState::Closed)
         .await
         .unwrap();
     crate::sites::retire(&db, head).await.unwrap();
@@ -932,20 +932,28 @@ async fn an_addon_calls_with_its_token_and_receives_messages(db: PgPool) {
 }
 
 /// An agent moving a ticket through the API reaches the add-ons registered for
-/// `ticket.state_changed`, signed, and no other add-on. Receiving the event needs no scope; reading
-/// the ticket afterwards needs `tickets:read`, as always.
+/// `ticket.state_changed`, signed, and no other add-on; a delivery the add-on fails is retried
+/// with the same event. Receiving the event needs no scope; reading the ticket afterwards needs
+/// `tickets:read`, as always.
 #[sqlx::test]
 async fn an_addon_receives_the_changes_of_a_ticket_s_state(db: PgPool) {
     use axum::{body::Bytes, http::HeaderMap, routing::post};
     use std::sync::{Arc, Mutex};
     type Seen = Arc<Mutex<Vec<(HeaderMap, Bytes)>>>;
     let seen: Seen = Arc::default();
+    // The add-on fails the first delivery and takes the next.
     let fake = axum::Router::new().route(
         "/events",
         post({
             let seen = seen.clone();
             move |headers: HeaderMap, body: Bytes| async move {
-                seen.lock().unwrap().push((headers, body));
+                let mut seen = seen.lock().unwrap();
+                seen.push((headers, body));
+                if seen.len() == 1 {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                } else {
+                    StatusCode::OK
+                }
             }
         }),
     );
@@ -995,10 +1003,33 @@ async fn an_addon_receives_the_changes_of_a_ticket_s_state(db: PgPool) {
     let client = crate::addons::http_client().unwrap();
     assert_eq!(
         crate::addons::deliver_due(&db, &client).await.unwrap(),
+        0,
+        "the add-on failed it"
+    );
+    assert_eq!(
+        seen.lock().unwrap().len(),
         1,
         "one event, for watchtower only"
     );
+    assert_eq!(
+        crate::addons::deliver_due(&db, &client).await.unwrap(),
+        0,
+        "not retried before its delay"
+    );
+    sqlx::query("UPDATE event_deliveries SET next_attempt_at = now()")
+        .execute(&db)
+        .await
+        .unwrap();
+    assert_eq!(crate::addons::deliver_due(&db, &client).await.unwrap(), 1);
+    let attempts: i32 =
+        sqlx::query_scalar("SELECT attempts FROM event_deliveries WHERE delivered_at IS NOT NULL")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(attempts, 2);
     let (headers, body) = seen.lock().unwrap().pop().unwrap();
+    let (_, failed) = seen.lock().unwrap().pop().unwrap();
+    assert_eq!(failed, body, "the same event again");
     let timestamp: u64 = headers[crate::addons::HEADER_TIMESTAMP]
         .to_str()
         .unwrap()

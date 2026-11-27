@@ -51,7 +51,7 @@ pub async fn set_priority(db: &PgPool, number: i64, priority: Priority) -> Resul
     Ok(())
 }
 
-/// Records that a ticket was opened, for the add-ons that follow it.
+/// Records that a ticket was opened, for the add-ons registered for `ticket.opened`.
 pub async fn emit_opened(tx: &mut Transaction<'_, Postgres>, number: i64) -> Result<()> {
     crate::addons::emit(
         tx,
@@ -183,9 +183,9 @@ pub enum StateChangedBy {
 }
 
 /// Moves the ticket to `to`, which counts as an update; when its state changes, records
-/// `ticket.state_changed` in the same transaction, for the add-ons that follow it. Every change
-/// of a ticket's state goes through here or [`reopen`]. The caller checks that the move is
-/// allowed.
+/// `ticket.state_changed` in the same transaction, for the add-ons registered for that event.
+/// Every change of a ticket's state goes through here or [`reopen`]. The caller checks that the
+/// move is allowed.
 pub(crate) async fn change_state(
     tx: &mut Transaction<'_, Postgres>,
     ticket: Uuid,

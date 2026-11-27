@@ -1593,7 +1593,7 @@ mod tests {
         crate::catalog::link_asset(&db, closed, laptop, true)
             .await
             .unwrap();
-        crate::testing::set_state(&db, closed, TicketState::Closed)
+        testing::set_state(&db, closed, TicketState::Closed)
             .await
             .unwrap();
         let other = testing::ticket(&db, brightfield, None, "o1@brightfield.test").await;
@@ -1697,7 +1697,7 @@ mod tests {
         let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
         let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
         let n = testing::ticket(&db, brightfield, Some(lena), "l1@brightfield.test").await;
-        crate::testing::set_state(&db, n, crate::tickets::TicketState::Closed)
+        testing::set_state(&db, n, crate::tickets::TicketState::Closed)
             .await
             .unwrap();
 

@@ -418,7 +418,7 @@ mod tests {
             panic!("announced from a ticket of a customer");
         };
         assert!(why.contains("help desk's own organization"), "{why}");
-        crate::testing::set_state(&db, outage, tickets::TicketState::Closed)
+        testing::set_state(&db, outage, tickets::TicketState::Closed)
             .await
             .unwrap();
         let Err(Error::Rule(why)) = refused(outage).await else {
@@ -467,10 +467,10 @@ mod tests {
         ] {
             let child = testing::ticket(&db, customer, None, id).await;
             attach(&db, child, outage).await.unwrap();
-            crate::testing::set_state(&db, child, state).await.unwrap();
+            testing::set_state(&db, child, state).await.unwrap();
             children.push(child);
         }
-        crate::testing::set_state(&db, outage, TicketState::Resolved)
+        testing::set_state(&db, outage, TicketState::Resolved)
             .await
             .unwrap();
         let sender = testing::sender();
@@ -597,7 +597,7 @@ mod tests {
         let sent = send(&db, &sender, outage, agent, "Mail is down.")
             .await
             .unwrap();
-        crate::testing::set_state(&db, outage, TicketState::Resolved)
+        testing::set_state(&db, outage, TicketState::Resolved)
             .await
             .unwrap();
         let announced: String = sqlx::query_scalar(
@@ -783,7 +783,7 @@ mod tests {
         let why = write(&db, other, to).await.unwrap_err();
         assert!(why.contains("from a parent ticket"), "{why}");
         write(&db, outage, to).await.unwrap();
-        crate::testing::set_state(&db, outage, tickets::TicketState::Closed)
+        testing::set_state(&db, outage, tickets::TicketState::Closed)
             .await
             .unwrap();
         let why = write(&db, outage, to).await.unwrap_err();

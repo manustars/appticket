@@ -351,7 +351,7 @@ mod tests {
         add_note(&db, watchtower, n, "  The disk is back to 60%.  ")
             .await
             .unwrap();
-        crate::testing::set_state(&db, n, TicketState::Closed)
+        testing::set_state(&db, n, TicketState::Closed)
             .await
             .unwrap();
         add_note(&db, watchtower, n, "Recovered again.")
