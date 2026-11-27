@@ -16,7 +16,7 @@
           "add-ons"
         ],
         "summary": "Creates an asset of a customer known by the add-on's reference, or updates the one the add-on\nalready supplied with that reference (bringing it back if it retired it), so that the add-on\ncan send its whole inventory again safely: 201 when created, 200 when updated. Its kind and its\nsite are named; what is left out is cleared, and its holder, whom agents choose, stays.",
-        "description": "When the add-on would create the asset and its customer already has an active one with the same\nserial number, else the same name, both ignoring case, that the add-on is not the source of,\nnothing is created: the answer is 202 with the link proposal recorded for the agents, which\nsays which asset matched. Sending the asset again while the proposal is open answers the same\nproposal; once agents discard it, the next attempt creates the asset. Scope `catalog:write`.",
+        "description": "When the add-on would create the asset and its customer already has an active one with the same\nserial number, else the same name, both ignoring case, that the add-on is not the source of,\nnothing is created: the answer is 202 with the link proposal recorded for the agents, which\nsays which asset matched. Sending the asset again while the proposal is open answers the same\nproposal, with the name and serial number just sent, even when the asset it matched was renamed\nor retired since; once agents discard it, the next attempt creates the asset. Scope\n`catalog:write`.",
         "operationId": "supply_asset",
         "requestBody": {
           "content": {
@@ -6919,11 +6919,11 @@
           },
           "matched_by": {
             "$ref": "#/components/schemas/MatchedBy",
-            "description": "What the two assets have in common: when both a serial number and a name match, the serial\nnumber decides."
+            "description": "What the two assets had in common when the proposal was recorded: when both a serial number\nand a name match, the serial number decides."
           },
           "name": {
             "type": "string",
-            "description": "The name the add-on sent."
+            "description": "The name the add-on sent last."
           },
           "reference": {
             "type": "string",
@@ -6934,7 +6934,7 @@
               "string",
               "null"
             ],
-            "description": "The serial number the add-on sent, if any."
+            "description": "The serial number the add-on sent last, if any."
           }
         }
       },

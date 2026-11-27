@@ -103,7 +103,8 @@ pub enum Supplied {
 
 /// A proposal, waiting for the agents, that the asset an add-on would create is one its customer
 /// already has, entered by hand or supplied by another add-on. Supplying the asset again while it
-/// is open answers the same proposal; once agents discard it, the next attempt creates the asset.
+/// is open answers the same proposal, with the name and serial number just sent; once agents
+/// discard it, the next attempt creates the asset.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinkProposal {
     pub id: Uuid,

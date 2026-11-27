@@ -68,7 +68,7 @@ pub async fn supply(
     if let Some((_, owner)) = existing
         && owner != customer
     {
-        return rule(another_customer(&reference));
+        return rule(reference_of_another_customer(&reference));
     }
     let checked = checked(&mut tx, customer, details).await?;
     let (id, created) = match existing {
@@ -112,7 +112,7 @@ pub async fn supply(
                 sqlx::Error::Database(d)
                     if d.constraint() == Some("assets_source_addon_source_ref_key") =>
                 {
-                    Error::Rule(another_customer(&reference))
+                    Error::Rule(reference_of_another_customer(&reference))
                 }
                 other => other.into(),
             })?;
@@ -196,10 +196,12 @@ fn its_own(asset: &StoredAsset, addon: &str) -> Result<()> {
     }
 }
 
-fn another_customer(reference: &str) -> String {
+/// The refusal of a reference that already names an asset of another customer, or is proposed as
+/// one: a reference names one asset of one customer, for good.
+pub(crate) fn reference_of_another_customer(reference: &str) -> String {
     format!(
-        "the asset with the reference {reference} belongs to another customer: an asset never \
-         changes customer"
+        "the reference {reference} belongs to another customer: a reference names one asset of one \
+         customer"
     )
 }
 
@@ -303,7 +305,7 @@ async fn write(tx: &mut Transaction<'_, Postgres>, id: Uuid, checked: &Checked) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing;
+    use crate::testing::{self, refusal};
 
     impl Supplied {
         /// The asset supplying created or updated, failing the test on a link proposal.
@@ -419,14 +421,6 @@ mod tests {
         );
     }
 
-    /// The sentence of a refusal, failing the test on anything else.
-    fn refusal<T: std::fmt::Debug>(result: Result<T>) -> String {
-        match result {
-            Err(Error::Rule(why)) => why,
-            other => panic!("not refused by a rule: {other:?}"),
-        }
-    }
-
     #[sqlx::test]
     async fn an_unknown_kind_or_a_site_not_active_at_the_customer_is_refused_by_name(db: PgPool) {
         let brightfield = testing::customer(&db, "Brightfield").await;
@@ -497,8 +491,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             refusal(try_supply("host-2", details("Laptop", "PC-02", None, None)).await),
-            "the asset with the reference host-2 belongs to another customer: an asset never \
-             changes customer"
+            "the reference host-2 belongs to another customer: a reference names one asset of one \
+             customer"
         );
         // References are the add-on's own: another add-on's are another matter, and case counts.
         testing::addon(&db, "netscope").await;

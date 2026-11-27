@@ -92,7 +92,9 @@ async fn written(
 /// serial number, else the same name, both ignoring case, that the add-on is not the source of,
 /// nothing is created: the answer is 202 with the link proposal recorded for the agents, which
 /// says which asset matched. Sending the asset again while the proposal is open answers the same
-/// proposal; once agents discard it, the next attempt creates the asset. Scope `catalog:write`.
+/// proposal, with the name and serial number just sent, even when the asset it matched was renamed
+/// or retired since; once agents discard it, the next attempt creates the asset. Scope
+/// `catalog:write`.
 #[utoipa::path(post, path = "/api/addon/assets", tag = "add-ons", request_body = SuppliedAsset,
     responses((status = CREATED, body = AddonAsset), (status = OK, body = AddonAsset),
         (status = ACCEPTED, body = AssetLinkProposal,

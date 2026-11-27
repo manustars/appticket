@@ -22,7 +22,9 @@ export interface paths {
          *     serial number, else the same name, both ignoring case, that the add-on is not the source of,
          *     nothing is created: the answer is 202 with the link proposal recorded for the agents, which
          *     says which asset matched. Sending the asset again while the proposal is open answers the same
-         *     proposal; once agents discard it, the next attempt creates the asset. Scope `catalog:write`.
+         *     proposal, with the name and serial number just sent, even when the asset it matched was renamed
+         *     or retired since; once agents discard it, the next attempt creates the asset. Scope
+         *     `catalog:write`.
          */
         post: operations["supply_asset"];
         delete?: never;
@@ -2060,15 +2062,15 @@ export interface components {
             /** Format: uuid */
             id: string;
             /**
-             * @description What the two assets have in common: when both a serial number and a name match, the serial
-             *     number decides.
+             * @description What the two assets had in common when the proposal was recorded: when both a serial number
+             *     and a name match, the serial number decides.
              */
             matched_by: components["schemas"]["MatchedBy"];
-            /** @description The name the add-on sent. */
+            /** @description The name the add-on sent last. */
             name: string;
             /** @description The add-on's own reference for the asset it would supply. */
             reference: string;
-            /** @description The serial number the add-on sent, if any. */
+            /** @description The serial number the add-on sent last, if any. */
             serial_number?: string | null;
         };
         AssigneeChange: {
