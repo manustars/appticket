@@ -74,6 +74,8 @@ pub struct Core {
     pub url: String,
     /// The add-on's token.
     pub token: String,
+    /// The add-on's event secret, which the core signs its reads of live details with.
+    pub event_secret: String,
     http: reqwest::Client,
     cookie: String,
     process: Child,
@@ -83,6 +85,11 @@ pub struct Core {
 
 impl Core {
     pub async fn start() -> Core {
+        Core::start_at("http://127.0.0.1:9").await
+    }
+
+    /// The core, with the add-on registered at `addon_url`, where it asks for live details.
+    pub async fn start_at(addon_url: &str) -> Core {
         let database = format!("hd_zabbix_{}", Uuid::new_v4().simple());
         let mut admin = PgConnection::connect(&database_url()).await.unwrap();
         sqlx::raw_sql(AssertSqlSafe(format!(r#"CREATE DATABASE "{database}""#)))
@@ -126,7 +133,7 @@ impl Core {
             "add",
             ADDON,
             "--url",
-            "http://127.0.0.1:9",
+            addon_url,
             "--scope",
             "directory:read",
             "--scope",
@@ -142,6 +149,12 @@ impl Core {
             .expect("hd addon add prints the token")
             .trim()
             .to_owned();
+        let event_secret = added
+            .lines()
+            .find_map(|l| l.strip_prefix("event secret: "))
+            .expect("hd addon add prints the event secret")
+            .trim()
+            .to_owned();
         let http = hd_addon_sdk::http_client(Duration::from_secs(30)).unwrap();
         // Its log in a file, not in the test's output, whose pipe it would hold open.
         let log = dir.join("core.log");
@@ -153,6 +166,7 @@ impl Core {
         let mut core = Core {
             url: format!("http://127.0.0.1:{port}"),
             token,
+            event_secret,
             http,
             cookie: String::new(),
             process,
@@ -529,4 +543,175 @@ impl TestZabbix {
             .await
             .unwrap();
     }
+}
+
+/// What the tests of live details make in Zabbix: items, triggers and the values that raise
+/// problems.
+impl TestZabbix {
+    /// The add-on's live details from this Zabbix, linking to its frontend.
+    pub fn details(&self) -> hd_zabbix::details::Details {
+        hd_zabbix::details::Details::new(
+            Zabbix::new(&zabbix_url(), &self.api_token, hd_zabbix::details::DEADLINE).unwrap(),
+            &zabbix_url(),
+        )
+    }
+
+    /// The technical name of the test's host `host`.
+    pub fn host_name(&self, host: &str) -> String {
+        format!("{}-{host}", self.prefix)
+    }
+
+    /// An item of the host with these fields, such as `key_`, `type` and `value_type`.
+    pub async fn item(&self, host: &str, name: &str, fields: Value) -> String {
+        let mut params = json!({"hostid": host, "name": name});
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let created: Value = self.admin.call("item.create", params).await.unwrap();
+        created["itemids"][0].as_str().unwrap().to_owned()
+    }
+
+    /// A trigger with this expression and severity, from 0 (not classified) to 5 (disaster).
+    pub async fn trigger(&self, description: &str, expression: &str, severity: u8) {
+        let _: Value = self
+            .admin
+            .call(
+                "trigger.create",
+                json!({"description": description, "expression": expression,
+                       "priority": severity}),
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Sends `value` to the trapper item with `history.push`, again until the server takes it:
+    /// it learns of new items from its database every few seconds.
+    pub async fn push(&self, item: &str, value: &str) {
+        let started = Instant::now();
+        loop {
+            let pushed: Value = self
+                .admin
+                .call("history.push", json!([{"itemid": item, "value": value}]))
+                .await
+                .unwrap();
+            if pushed["data"][0].get("error").is_none() {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(120),
+                "the server does not take values for item {item}: {pushed}"
+            );
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    /// Waits until `until` holds of the host's open problems, as `problem.get` answers them.
+    pub async fn wait_for_problems(&self, host: &str, until: impl Fn(&[Value]) -> bool) {
+        let started = Instant::now();
+        loop {
+            let problems: Vec<Value> = self
+                .admin
+                .call(
+                    "problem.get",
+                    json!({"output": ["eventid", "severity"], "hostids": [host]}),
+                )
+                .await
+                .unwrap();
+            if until(&problems) {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(120),
+                "the problems of host {host} are {problems:?}"
+            );
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    /// The `available` of each of the host's interfaces.
+    pub async fn availability(&self, host: &str) -> Vec<String> {
+        let hosts: Vec<Value> = self
+            .admin
+            .call(
+                "host.get",
+                json!({"output": ["hostid"], "hostids": [host],
+                       "selectInterfaces": ["available"]}),
+            )
+            .await
+            .unwrap();
+        hosts[0]["interfaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["available"].as_str().unwrap().to_owned())
+            .collect()
+    }
+}
+
+/// A port of the test's own for the add-on's live details, and its URL, to register the add-on
+/// at before it serves them there.
+pub async fn listener() -> (tokio::net::TcpListener, String) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    (listener, url)
+}
+
+/// Serves the add-on's live details on `listener`, as the add-on does, checking the core's
+/// signature with `event_secret`.
+pub fn serve(
+    listener: tokio::net::TcpListener,
+    details: hd_zabbix::details::Details,
+    event_secret: &str,
+) {
+    let app = hd_zabbix::details::router(
+        std::sync::Arc::new(details),
+        hd_addon_sdk::Verifier::new(event_secret),
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await });
+}
+
+/// Live details as the agents' page reads them: the state, the fields as `(English label,
+/// Italian label, value)` and the links as `(English label, URL)`.
+pub type Read = (String, Vec<(String, String, String)>, Vec<(String, String)>);
+
+/// The add-on's live details of each of the customer's assets as the agents' page reads them,
+/// `None` when they are unavailable.
+pub async fn live_details(core: &Core, customer: Uuid) -> Vec<Option<Read>> {
+    let read = core
+        .get(&format!("/api/customers/{customer}/assets/live-details"))
+        .await;
+    let label = |v: &Value, lang: &str| v["label"][lang].as_str().unwrap().to_owned();
+    read.as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["addon"] == ADDON)
+        .map(|d| {
+            let details = &d["details"];
+            if details.is_null() {
+                return None;
+            }
+            Some((
+                details["state"].as_str().unwrap().to_owned(),
+                details["fields"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|f| {
+                        (
+                            label(f, "en"),
+                            label(f, "it"),
+                            f["value"].as_str().unwrap().to_owned(),
+                        )
+                    })
+                    .collect(),
+                details["links"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|l| (label(l, "en"), l["url"].as_str().unwrap().to_owned()))
+                    .collect(),
+            ))
+        })
+        .collect()
 }

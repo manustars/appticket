@@ -1,7 +1,8 @@
 //! Settings: a configuration file in TOML, named by `HD_ZABBIX_CONFIG` (`zabbix.toml` in the
-//! working directory by default), and two secrets, each given in its variable or read from the
+//! working directory by default), and three secrets, each given in its variable or read from the
 //! file its `_FILE` variant names, as the Assistant reads its own (also from a `.env` file).
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -33,9 +34,17 @@ pub struct Config {
     pub kinds: Kinds,
     /// What each alert does.
     pub rules: Rules,
+    /// The base URL of Zabbix's frontend as agents' browsers reach it, for the links of the live
+    /// details; `zabbix_url` unless the configuration gives another.
+    pub frontend_url: String,
+    /// Where the add-on answers the core's reads of live details.
+    pub listen: SocketAddr,
+    /// The event secret, printed by `hd addon add`, with which the core signs its reads; needed
+    /// to answer them, not by `check`.
+    pub event_secret: Option<String>,
 }
 
-/// Everything but the two tokens.
+/// Everything but the two tokens and the event secret.
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")
@@ -46,6 +55,8 @@ impl std::fmt::Debug for Config {
             .field("interval", &self.interval)
             .field("kinds", &self.kinds)
             .field("rules", &self.rules)
+            .field("frontend_url", &self.frontend_url)
+            .field("listen", &self.listen)
             .finish_non_exhaustive()
     }
 }
@@ -61,6 +72,8 @@ struct File {
     assets: AssetsSection,
     #[serde(default)]
     alerts: AlertsSection,
+    #[serde(default)]
+    addon: AddonSection,
 }
 
 #[derive(Deserialize)]
@@ -77,6 +90,8 @@ struct ZabbixSection {
     system: String,
     #[serde(default = "default_timeout_seconds")]
     timeout_seconds: u64,
+    #[serde(default)]
+    frontend_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -110,6 +125,25 @@ struct AlertsSection {
     rules: Vec<toml::Value>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddonSection {
+    #[serde(default = "default_listen")]
+    listen: String,
+}
+
+impl Default for AddonSection {
+    fn default() -> Self {
+        AddonSection {
+            listen: default_listen(),
+        }
+    }
+}
+
+fn default_listen() -> String {
+    "127.0.0.1:8091".into()
+}
+
 fn default_system() -> String {
     "Zabbix".into()
 }
@@ -124,7 +158,11 @@ fn default_interval_minutes() -> u64 {
 
 /// The add-on's secrets. Each can be given in its variable or read from the file its `_FILE`
 /// variant names, such as a mounted secret.
-const SECRETS: [&str; 2] = ["HD_ZABBIX_TOKEN", "HD_ZABBIX_API_TOKEN"];
+const SECRETS: [&str; 3] = [
+    "HD_ZABBIX_TOKEN",
+    "HD_ZABBIX_API_TOKEN",
+    "HD_ZABBIX_EVENT_SECRET",
+];
 
 impl Config {
     /// Reads the configuration file `text` (read from `path`, which errors name) and the secrets
@@ -165,10 +203,19 @@ impl Config {
         if default.is_empty() {
             bail!("assets.default_kind is blank: give an asset kind of the help desk's list");
         }
+        let listen = file.addon.listen.trim();
+        let listen: SocketAddr = listen.parse().map_err(|_| {
+            anyhow::anyhow!("addon.listen is {listen:?}, not an address such as 127.0.0.1:8091")
+        })?;
+        let zabbix_url = checked_url("zabbix.url", &file.zabbix.url)?;
+        let frontend_url = match &file.zabbix.frontend_url {
+            Some(url) => checked_url("zabbix.frontend_url", url)?,
+            None => zabbix_url.clone(),
+        };
         Ok(Config {
             core_url: checked_url("core.url", &file.core.url)?,
             core_token: secret("HD_ZABBIX_TOKEN")?,
-            zabbix_url: checked_url("zabbix.url", &file.zabbix.url)?,
+            zabbix_url,
             zabbix_token: secret("HD_ZABBIX_API_TOKEN")?,
             zabbix_timeout: Duration::from_secs(file.zabbix.timeout_seconds),
             system,
@@ -178,6 +225,15 @@ impl Config {
                 default,
             },
             rules,
+            frontend_url,
+            listen,
+            event_secret: read_secret(
+                "HD_ZABBIX_EVENT_SECRET",
+                get("HD_ZABBIX_EVENT_SECRET"),
+                get("HD_ZABBIX_EVENT_SECRET_FILE")
+                    .map(PathBuf::from)
+                    .as_deref(),
+            )?,
         })
     }
 
@@ -249,12 +305,16 @@ url = "https://helpdesk.example.com/"
 url = "https://zabbix.example.com/"
 system = "Monitoring"
 timeout_seconds = 10
+frontend_url = "https://monitoring.example.com/zabbix/"
 
 [sync]
 interval_minutes = 2
 
 [assets]
 default_kind = "Server"
+
+[addon]
+listen = "0.0.0.0:8091"
 
 [[assets.kinds]]
 template = "Linux by Zabbix agent"
@@ -285,9 +345,10 @@ default_kind = "Server"
         move |name| vars.get(name).cloned()
     }
 
-    const TOKENS: [(&str, &str); 2] = [
+    const TOKENS: [(&str, &str); 3] = [
         ("HD_ZABBIX_TOKEN", "core-token"),
         ("HD_ZABBIX_API_TOKEN", "zabbix-token"),
+        ("HD_ZABBIX_EVENT_SECRET", "event-secret"),
     ];
 
     fn parse(text: &str) -> anyhow::Result<Config> {
@@ -309,6 +370,9 @@ default_kind = "Server"
         assert_eq!(config.system, "Monitoring");
         assert_eq!(config.interval, Duration::from_secs(120));
         assert_eq!(config.kinds.default, "Server");
+        assert_eq!(config.frontend_url, "https://monitoring.example.com/zabbix");
+        assert_eq!(config.listen.to_string(), "0.0.0.0:8091");
+        assert_eq!(config.event_secret.as_deref(), Some("event-secret"));
         assert_eq!(
             config
                 .kinds
@@ -332,7 +396,9 @@ default_kind = "Server"
         let shown = format!("{:?}", parse(FULL).unwrap());
         assert!(shown.contains("https://zabbix.example.com"), "{shown}");
         assert!(
-            !shown.contains("core-token") && !shown.contains("zabbix-token"),
+            !shown.contains("core-token")
+                && !shown.contains("zabbix-token")
+                && !shown.contains("event-secret"),
             "{shown}"
         );
     }
@@ -344,6 +410,8 @@ default_kind = "Server"
         assert_eq!(config.zabbix_timeout, Duration::from_secs(30));
         assert_eq!(config.interval, Duration::from_secs(300));
         assert!(config.kinds.mappings.is_empty());
+        assert_eq!(config.frontend_url, "http://127.0.0.1:8180");
+        assert_eq!(config.listen.to_string(), "127.0.0.1:8091");
     }
 
     #[test]
@@ -393,7 +461,8 @@ default_kind = "Server"
             let config = Config::parse(Path::new("z.toml"), SMALLEST, vars(&pairs)).unwrap();
             let read = match secret {
                 "HD_ZABBIX_TOKEN" => config.core_token,
-                _ => config.zabbix_token,
+                "HD_ZABBIX_API_TOKEN" => config.zabbix_token,
+                _ => config.event_secret.unwrap(),
             };
             assert_eq!(read, "from-the-file");
 
@@ -409,17 +478,26 @@ default_kind = "Server"
                 .copied()
                 .filter(|(n, _)| *n != secret)
                 .collect();
-            let none = Config::parse(Path::new("z.toml"), SMALLEST, vars(&missing)).unwrap_err();
-            assert_eq!(
-                format!("{none:#}"),
-                format!("set {secret} or {secret}_FILE")
-            );
+            let none = Config::parse(Path::new("z.toml"), SMALLEST, vars(&missing));
+            if secret == "HD_ZABBIX_EVENT_SECRET" {
+                // Only answering the core's reads needs it, which `check` does not.
+                assert_eq!(none.unwrap().event_secret, None);
+            } else {
+                assert_eq!(
+                    format!("{:#}", none.unwrap_err()),
+                    format!("set {secret} or {secret}_FILE")
+                );
+            }
         }
         std::fs::write(&file, "\n").unwrap();
         let empty = Config::parse(
             Path::new("z.toml"),
             SMALLEST,
-            vars(&[("HD_ZABBIX_TOKEN", "t"), ("HD_ZABBIX_API_TOKEN_FILE", path)]),
+            vars(&[
+                ("HD_ZABBIX_TOKEN", "t"),
+                ("HD_ZABBIX_EVENT_SECRET", "s"),
+                ("HD_ZABBIX_API_TOKEN_FILE", path),
+            ]),
         )
         .unwrap_err();
         assert!(format!("{empty:#}").contains("is empty"));
