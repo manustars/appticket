@@ -1,6 +1,7 @@
 //! What an add-on with the scope `tickets:write` does on tickets (docs/domain-rules.md,
 //! "Add-ons"): it opens tickets without a requester for a customer, with a priority, assets and
-//! services, and adds internal notes to any ticket. It never replies and changes nothing else.
+//! services, adds internal notes to any ticket and resolves the tickets it opened. It never replies
+//! and changes nothing else.
 
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -8,7 +9,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{Error, Result, rule};
-use crate::tickets::{NoteAuthor, Priority};
+use crate::tickets::{NoteAuthor, Priority, StateChanger, TicketState};
 
 /// A ticket an add-on opens.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -108,12 +109,49 @@ pub async fn add_note(db: &PgPool, addon: Uuid, number: i64, body: &str) -> Resu
     crate::tickets::write_note(db, number, NoteAuthor::Addon(addon), body).await
 }
 
+/// Resolves a ticket `addon` opened, open or waiting, with `ticket.state_changed` naming the
+/// add-on; a ticket already resolved stays as it is. A ticket an agent, a message or another
+/// add-on opened is refused, and so is a closed one. Whether an agent has worked on the ticket is
+/// for the add-on to weigh (`worked_on_by_agent` in its view of the ticket), not a refusal.
+pub async fn resolve(db: &PgPool, addon: Uuid, number: i64) -> Result<()> {
+    let mut tx = db.begin().await?;
+    let (ticket, state, opener, name): (Uuid, TicketState, Option<Uuid>, String) = sqlx::query_as(
+        "SELECT t.id, t.state, t.opened_by_addon_id, a.name
+         FROM tickets t, addons a WHERE t.number = $1 AND a.id = $2 FOR UPDATE OF t",
+    )
+    .bind(number)
+    .bind(addon)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound("ticket"))?;
+    if opener != Some(addon) {
+        return rule(format!(
+            "the add-on {name} did not open the ticket #{number}: an add-on resolves only the \
+             tickets it opened"
+        ));
+    }
+    match state {
+        TicketState::Closed => return rule("the ticket is closed; a closed ticket cannot change"),
+        TicketState::Resolved => return Ok(()),
+        TicketState::Open | TicketState::Waiting => {}
+    }
+    crate::tickets::change_state(
+        &mut tx,
+        ticket,
+        TicketState::Resolved,
+        StateChanger::Addon(addon),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::testing;
-    use crate::tickets::{TicketState, TimelineEntry, detail};
+    use crate::tickets::{TimelineEntry, detail};
 
     async fn addon(db: &PgPool, name: &str) -> Uuid {
         crate::addons::register(
@@ -496,6 +534,210 @@ mod tests {
             !opened(Some(ada)).await,
             "an add-on's ticket with a requester"
         );
+    }
+
+    /// An add-on resolves an open or waiting ticket it opened, and `ticket.state_changed` names
+    /// it; resolving it again changes nothing and records nothing, and a closed one is refused.
+    #[sqlx::test]
+    async fn an_addon_resolves_the_tickets_it_opened(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let watchtower = addon(&db, "watchtower").await;
+        let disk = open(
+            &db,
+            watchtower,
+            &ticket_for(brightfield, "SRV-01: disk full"),
+        )
+        .await
+        .unwrap();
+        let backup = open(&db, watchtower, &ticket_for(brightfield, "Backup failed"))
+            .await
+            .unwrap();
+        testing::set_state(&db, backup, TicketState::Waiting)
+            .await
+            .unwrap();
+        let done = open(&db, watchtower, &ticket_for(brightfield, "UPS on battery"))
+            .await
+            .unwrap();
+        testing::set_state(&db, done, TicketState::Closed)
+            .await
+            .unwrap();
+        let before = testing::state_changes(&db).await.len();
+
+        resolve(&db, watchtower, disk).await.unwrap();
+        resolve(&db, watchtower, backup).await.unwrap();
+        resolve(&db, watchtower, disk).await.unwrap();
+
+        assert_eq!(testing::state(&db, disk).await, "resolved");
+        assert_eq!(testing::state(&db, backup).await, "resolved");
+        let by = serde_json::json!({"kind": "addon", "addon": "watchtower"});
+        assert_eq!(
+            testing::state_changes(&db).await[before..],
+            [
+                serde_json::json!({"ticket_number": disk, "old_state": "open",
+                    "new_state": "resolved", "changed_by": by}),
+                serde_json::json!({"ticket_number": backup, "old_state": "waiting",
+                    "new_state": "resolved", "changed_by": by}),
+            ],
+            "nothing for the second time"
+        );
+        match resolve(&db, watchtower, done).await {
+            Err(Error::Rule(why)) => {
+                assert_eq!(why, "the ticket is closed; a closed ticket cannot change");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(testing::state(&db, done).await, "closed");
+        assert!(matches!(
+            resolve(&db, watchtower, 9999).await,
+            Err(Error::NotFound("ticket"))
+        ));
+    }
+
+    /// A ticket an agent opened, one a message opened and one another add-on opened are refused,
+    /// and stay as they were.
+    #[sqlx::test]
+    async fn an_addon_resolves_no_ticket_it_did_not_open(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let marco = testing::agent(&db, "marco@northgate.test").await;
+        let watchtower = addon(&db, "watchtower").await;
+        let pinger = addon(&db, "pinger").await;
+        let by_hand = crate::tickets::open(&db, brightfield, "Phone call", None, None, marco)
+            .await
+            .unwrap();
+        let raw = "From: Ada <ada@brightfield.test>\r\nTo: helpdesk@helpdesk.test\r\nMessage-ID: <a1@brightfield.test>\r\nSubject: Printer jams\r\n\r\nIt jams.\r\n";
+        let mut tx = db.begin().await.unwrap();
+        crate::mail::store(&mut tx, 1, raw.as_bytes())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let by_message: i64 =
+            sqlx::query_scalar("SELECT number FROM tickets WHERE title = 'Printer jams'")
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        let by_another = open(&db, pinger, &ticket_for(brightfield, "Host unreachable"))
+            .await
+            .unwrap();
+
+        for n in [by_hand, by_message, by_another] {
+            match resolve(&db, watchtower, n).await {
+                Err(Error::Rule(why)) => assert_eq!(
+                    why,
+                    format!(
+                        "the add-on watchtower did not open the ticket #{n}: an add-on resolves \
+                         only the tickets it opened"
+                    )
+                ),
+                other => panic!("#{n}: {other:?}"),
+            }
+            assert_eq!(testing::state(&db, n).await, "open");
+        }
+        assert!(testing::state_changes(&db).await.is_empty());
+    }
+
+    /// An agent has worked on a ticket once it has an assignee, or an agent wrote a reply, a note
+    /// or an announcement on it; notes of add-ons, its opener's included, and messages received
+    /// do not count.
+    #[sqlx::test]
+    async fn a_ticket_says_whether_an_agent_has_worked_on_it(db: PgPool) {
+        let northgate = testing::help_desk(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        crate::key_requesters::mark(&db, lena, None).await.unwrap();
+        let marco = testing::agent(&db, "marco@northgate.test").await;
+        let watchtower = addon(&db, "watchtower").await;
+        let pinger = addon(&db, "pinger").await;
+        let worked_on = |n: i64| {
+            let db = db.clone();
+            async move { detail(&db, n).await.unwrap().worked_on_by_agent }
+        };
+        let opened = |title: &'static str| {
+            let db = db.clone();
+            async move {
+                open(
+                    &db,
+                    watchtower,
+                    &NewTicket {
+                        description: Some("Seen at 03:10.".into()),
+                        ..ticket_for(brightfield, title)
+                    },
+                )
+                .await
+                .unwrap()
+            }
+        };
+
+        let untouched = opened("Disk full").await;
+        add_note(&db, watchtower, untouched, "Still full.")
+            .await
+            .unwrap();
+        add_note(&db, pinger, untouched, "Host answers.")
+            .await
+            .unwrap();
+        // A key requester's answer, as it joins the ticket by its headers.
+        sqlx::query(
+            "INSERT INTO messages (id, ticket_id, direction, from_address, subject, body_text)
+             SELECT $1, id, 'inbound', 'lena@brightfield.test', 'Re: Disk full', 'Is it fixed?'
+             FROM tickets WHERE number = $2",
+        )
+        .bind(Uuid::new_v4())
+        .bind(untouched)
+        .execute(&db)
+        .await
+        .unwrap();
+        assert_eq!(
+            detail(&db, untouched).await.unwrap().timeline.len(),
+            4,
+            "two notes of add-ons and Lena's message"
+        );
+        assert!(!worked_on(untouched).await);
+
+        let assigned = opened("Backup failed").await;
+        crate::tickets::assign(&db, assigned, Some(marco))
+            .await
+            .unwrap();
+        assert!(worked_on(assigned).await, "an assignee");
+        crate::tickets::assign(&db, assigned, None).await.unwrap();
+        assert!(!worked_on(assigned).await, "no assignee any more");
+
+        let noted = opened("UPS on battery").await;
+        crate::tickets::add_note(&db, noted, marco, "Called the site.")
+            .await
+            .unwrap();
+        assert!(worked_on(noted).await, "an agent's note");
+
+        let replied = opened("Certificate expiring").await;
+        crate::tickets::reply(
+            &db,
+            &testing::sender(),
+            replied,
+            marco,
+            "We are renewing it.",
+            None,
+            TicketState::Open,
+        )
+        .await
+        .unwrap();
+        assert!(worked_on(replied).await, "an agent's reply, even unsent");
+
+        let outage = open(&db, watchtower, &ticket_for(northgate, "Mail relay down"))
+            .await
+            .unwrap();
+        crate::parents::attach(&db, untouched, outage)
+            .await
+            .unwrap();
+        assert!(!worked_on(outage).await);
+        crate::announcements::send(
+            &db,
+            &testing::sender(),
+            outage,
+            marco,
+            "The mail relay is down.",
+        )
+        .await
+        .unwrap();
+        assert!(worked_on(outage).await, "an agent's announcement");
     }
 
     /// The number of the one ticket there is.

@@ -382,4 +382,20 @@ impl Client {
             .await?;
         Self::read_nothing(response).await
     }
+
+    /// Resolves a ticket the add-on opened, open or waiting; `ticket.state_changed` names the
+    /// add-on as who changed it, and resolving it again changes nothing. The core refuses (409) a
+    /// ticket an agent, a message or another add-on opened, and a closed one. It does not refuse
+    /// a ticket an agent has worked on: read [`Ticket::worked_on_by_agent`] with
+    /// [`Client::ticket`] first (scope `tickets:read`) and let the add-on's rules decide. Scope
+    /// `tickets:write`.
+    pub async fn resolve_ticket(&self, number: i64) -> Result<(), Error> {
+        let response = self
+            .http
+            .post(self.url(&format!("/tickets/{number}/resolve")))
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+        Self::read_nothing(response).await
+    }
 }

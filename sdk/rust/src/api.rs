@@ -200,6 +200,10 @@ pub struct TicketSummary {
     pub updated_at: OffsetDateTime,
 }
 
+fn worked_on_unless_said() -> bool {
+    true
+}
+
 /// A ticket with its conversation, as `GET /api/addon/tickets/{number}` answers it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ticket {
@@ -213,6 +217,12 @@ pub struct Ticket {
     /// The add-on that opened the ticket, by name, when an add-on did.
     #[serde(default)]
     pub opened_by_addon: Option<String>,
+    /// Whether an agent has worked on the ticket: it has an assignee, or an agent wrote a reply,
+    /// a note or an announcement on it; notes of add-ons do not count. The notes themselves are
+    /// never given to add-ons. True from a core that does not say, so that an add-on resolving
+    /// only tickets nobody worked on leaves them alone.
+    #[serde(default = "worked_on_unless_said")]
+    pub worked_on_by_agent: bool,
     /// Assets already linked to the ticket.
     #[serde(default)]
     pub assets: Vec<LinkedAsset>,

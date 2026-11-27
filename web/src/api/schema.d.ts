@@ -213,7 +213,8 @@ export interface paths {
         };
         /**
          * A ticket with its messages and links, without internal notes, announcements and its customer's
-         *     key requesters. Scope `tickets:read`.
+         *     key requesters; `worked_on_by_agent` says whether an agent has worked on it all the same.
+         *     Scope `tickets:read`.
          */
         get: operations["ticket"];
         put?: never;
@@ -238,6 +239,29 @@ export interface paths {
          *     add-on as its author. Scope `tickets:write`.
          */
         post: operations["add_note"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/addon/tickets/{number}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolves a ticket the add-on opened, open or waiting; `ticket.state_changed` names the add-on
+         *     as who changed it. A ticket already resolved stays as it is (204 again). A ticket an agent, a
+         *     message or another add-on opened is refused, and so is a closed one. Read
+         *     `worked_on_by_agent` on the ticket first: the core does not refuse a ticket an agent has
+         *     worked on, the add-on's rules decide. Scope `tickets:write`.
+         */
+        post: operations["resolve_ticket"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3064,8 +3088,8 @@ export interface components {
             state: components["schemas"]["TicketState"];
         };
         /**
-         * @description Who or what changed a ticket's state. More kinds may come (an add-on, once add-ons resolve
-         *     the tickets they opened): read `kind` and skip the ones you do not know.
+         * @description Who or what changed a ticket's state. More kinds may come: read `kind` and skip the ones you
+         *     do not know.
          */
         StateChangedBy: {
             agent: components["schemas"]["Party"];
@@ -3076,6 +3100,10 @@ export interface components {
             kind: "message";
             /** Format: uuid */
             message_id: string;
+        } | {
+            addon: string;
+            /** @enum {string} */
+            kind: "addon";
         };
         /** @description An asset as its source supplies it, known by the add-on's own reference. */
         SuppliedAsset: components["schemas"]["SuppliedDetails"] & {
@@ -3156,6 +3184,11 @@ export interface components {
             title: string;
             /** Format: date-time */
             updated_at: string;
+            /**
+             * @description Whether an agent has worked on the ticket: it has an assignee, or an agent wrote a reply,
+             *     a note or an announcement on it. Notes of add-ons and messages received do not count.
+             */
+            worked_on_by_agent: boolean;
         };
         /** @enum {string} */
         TicketState: "open" | "waiting" | "resolved" | "closed";
@@ -3761,6 +3794,50 @@ export interface operations {
         };
         responses: {
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    resolve_ticket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's number */
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };

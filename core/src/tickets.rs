@@ -156,6 +156,8 @@ pub enum StateChanger {
     Agent(Uuid),
     /// A received message that joined the ticket.
     Message(Uuid),
+    /// An add-on, resolving a ticket it opened.
+    Addon(Uuid),
 }
 
 /// The data of `ticket.state_changed`.
@@ -169,8 +171,8 @@ pub struct TicketStateChanged {
     pub changed_by: StateChangedBy,
 }
 
-/// Who or what changed a ticket's state. More kinds may come (an add-on, once add-ons resolve
-/// the tickets they opened): read `kind` and skip the ones you do not know.
+/// Who or what changed a ticket's state. More kinds may come: read `kind` and skip the ones you
+/// do not know.
 #[derive(Serialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StateChangedBy {
@@ -180,6 +182,8 @@ pub enum StateChangedBy {
     /// A received message that joined the ticket and reopened it; `message.received` carries the
     /// same `message_id`. Its sender is not always the ticket's requester.
     Message { message_id: Uuid },
+    /// An add-on, by name, that resolved a ticket it opened.
+    Addon { addon: String },
 }
 
 /// Moves the ticket to `to`, which counts as an update; when its state changes, records
@@ -240,6 +244,12 @@ async fn move_state(
             }
         }
         StateChanger::Message(message_id) => StateChangedBy::Message { message_id },
+        StateChanger::Addon(id) => StateChangedBy::Addon {
+            addon: sqlx::query_scalar("SELECT name FROM addons WHERE id = $1")
+                .bind(id)
+                .fetch_one(&mut **tx)
+                .await?,
+        },
     };
     let data = TicketStateChanged {
         ticket_number: number,
@@ -721,6 +731,9 @@ pub struct TicketDetail {
     /// The add-on that opened the ticket, by name, when an add-on did; empty for a ticket an agent
     /// or a message opened.
     pub opened_by_addon: Option<String>,
+    /// Whether an agent has worked on the ticket: it has an assignee, or an agent wrote a reply,
+    /// a note or an announcement on it. Notes of add-ons and messages received do not count.
+    pub worked_on_by_agent: bool,
     /// Assets of the ticket's customer the ticket is about.
     pub assets: Vec<crate::catalog::LinkedAsset>,
     /// Services of the help desk the ticket is about.
@@ -848,6 +861,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
         assignee_id: Option<Uuid>,
         assignee_name: Option<String>,
         opened_by_addon: Option<String>,
+        worked_on_by_agent: bool,
         created_at: OffsetDateTime,
         updated_at: OffsetDateTime,
     }
@@ -859,6 +873,13 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
                 (SELECT count(*) FROM tickets o WHERE o.requester_id = r.id) AS requester_tickets,
                 r.departed_at IS NOT NULL AS requester_departed,
                 a.id AS assignee_id, a.name AS assignee_name, ad.name AS opened_by_addon,
+                t.assignee_id IS NOT NULL
+                    OR EXISTS (SELECT 1 FROM messages m
+                               WHERE m.ticket_id = t.id AND m.author_id IS NOT NULL)
+                    OR EXISTS (SELECT 1 FROM notes n
+                               WHERE n.ticket_id = t.id AND n.author_id IS NOT NULL)
+                    OR EXISTS (SELECT 1 FROM announcements n WHERE n.ticket_id = t.id)
+                    AS worked_on_by_agent,
                 t.created_at, t.updated_at
          FROM tickets t
          JOIN customers c ON c.id = t.customer_id
@@ -949,6 +970,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
             name: row.assignee_name.unwrap_or_default(),
         }),
         opened_by_addon: row.opened_by_addon,
+        worked_on_by_agent: row.worked_on_by_agent,
         assets,
         services,
         parent,
@@ -1062,7 +1084,7 @@ mod tests {
     }
 
     /// The database keeps `ticket.state_changed` to real changes, also when the code is bypassed:
-    /// two different states, never from closed, and who changed it.
+    /// two different states, never from closed, and who changed it: an add-on only resolves.
     #[sqlx::test]
     async fn the_database_records_only_real_changes_of_state(db: PgPool) {
         let insert = |data: serde_json::Value| {
@@ -1079,6 +1101,7 @@ mod tests {
         };
         let agent = serde_json::json!({"kind": "agent",
             "agent": {"id": Uuid::new_v4(), "name": "marco"}});
+        let addon = serde_json::json!({"kind": "addon", "addon": "watchtower"});
         let change = |old: &str, new: &str, by: &serde_json::Value| {
             serde_json::json!({"ticket_number": 7, "old_state": old, "new_state": new,
                 "changed_by": by})
@@ -1090,6 +1113,10 @@ mod tests {
             change("open", "waiting", &serde_json::json!({"kind": "requester"})),
             serde_json::json!({"ticket_number": 7, "old_state": "open", "new_state": "waiting"}),
             serde_json::json!({"old_state": "open", "new_state": "waiting", "changed_by": agent}),
+            // An add-on only resolves, and is named.
+            change("open", "waiting", &addon),
+            change("resolved", "closed", &addon),
+            change("open", "resolved", &serde_json::json!({"kind": "addon"})),
         ];
         for data in refused {
             assert!(insert(data.clone()).await.is_err(), "{data}");
@@ -1102,6 +1129,7 @@ mod tests {
         ))
         .await
         .unwrap();
+        insert(change("waiting", "resolved", &addon)).await.unwrap();
     }
 
     /// The outbound messages on the ticket: to whom, oldest first.
