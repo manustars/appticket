@@ -3148,6 +3148,57 @@ mod tests {
         assert_eq!(names(&db).await, ["Copperleaf"]);
     }
 
+    /// In a system an add-on lists the names of, an imported external reference is one of them,
+    /// spelled as the list spells it; a row with another name is left out whole.
+    #[sqlx::test]
+    async fn an_imported_external_reference_is_one_of_the_names_an_addon_lists(db: PgPool) {
+        crate::testing::addon(&db, "watchtower").await;
+        crate::name_lists::replace(
+            &db,
+            "watchtower",
+            "Watchtower",
+            &[crate::name_lists::named("Copperleaf/Offices", None)],
+        )
+        .await
+        .unwrap();
+        let file = "name,external_system,external_name\n\
+            Copperleaf,watchtower,copperleaf/offices\n\
+            Ninefold,Watchtower,Ninefold/Lab\n";
+
+        for mode in [Mode::Preview, Mode::Apply] {
+            let report = import(&db, vec![customers(file)], mode).await;
+            assert_eq!(
+                outcomes(&report),
+                [[
+                    (2, Outcome::Create, "Copperleaf"),
+                    (3, Outcome::LeftOut, "Ninefold")
+                ]],
+                "{mode:?}"
+            );
+            assert_reasons(
+                &report.files[0],
+                &[(
+                    3,
+                    r#"the name "Ninefold/Lab" is not in the name list the add-on watchtower sends of Watchtower"#,
+                )],
+            );
+        }
+        assert_eq!(
+            names(&db).await,
+            ["Copperleaf"],
+            "no Ninefold without its reference"
+        );
+        let copperleaf = crate::customers::list(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|c| c.name == "Copperleaf")
+            .unwrap()
+            .id;
+        let shown = crate::customers::detail(&db, copperleaf).await.unwrap();
+        assert_eq!(references(&shown), [("Watchtower", "Copperleaf/Offices")]);
+    }
+
     #[sqlx::test]
     async fn the_rows_left_out_come_back_as_a_file_to_correct_and_import_again(db: PgPool) {
         let file = "\u{feff}Name;tax_id;tax_country\r\n\

@@ -27,6 +27,7 @@ use client_address::ClientAddress;
 
 mod addon;
 mod addon_catalog;
+mod addon_names;
 mod admin;
 mod catalog;
 mod client_address;

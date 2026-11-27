@@ -38,6 +38,11 @@ A name another system uses for a customer, such as a group in a monitoring tool;
 have several in the same system, and each one names exactly one customer.
 _Avoid_: External ID, external code, mapping
 
+**Name list**:
+The names of its system that an add-on lists, such as a monitoring tool's host groups, with how
+they nest; agents pick a customer's external references in that system from the latest one.
+_Avoid_: Group list, catalog of names, mapping table
+
 **Requester**:
 A person, belonging to exactly one customer, who asks the help desk for assistance.
 _Avoid_: User, contact, end user

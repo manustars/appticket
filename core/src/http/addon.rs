@@ -34,6 +34,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(add_note))
         .routes(routes!(resolve_ticket))
         .merge(super::addon_catalog::routes())
+        .merge(super::addon_names::routes())
 }
 
 /// Requires an enabled add-on's token.

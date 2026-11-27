@@ -29,6 +29,7 @@ pub const SCOPES: &[&str] = &[
     PROPOSALS_WRITE,
     CATALOG_WRITE,
     TICKETS_WRITE,
+    NAMES_WRITE,
 ];
 /// Read customers and their assets.
 pub const DIRECTORY_READ: &str = "directory:read";
@@ -40,6 +41,9 @@ pub const PROPOSALS_WRITE: &str = "proposals:write";
 pub const CATALOG_WRITE: &str = "catalog:write";
 /// Open tickets without a requester, add notes to tickets and resolve the tickets it opened.
 pub const TICKETS_WRITE: &str = "tickets:write";
+/// Replace the name list of the add-on's system, which customers' external references are
+/// picked from.
+pub const NAMES_WRITE: &str = "names:write";
 
 /// After this many failed attempts a delivery stops being retried.
 pub const MAX_ATTEMPTS: i32 = 12;

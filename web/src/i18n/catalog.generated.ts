@@ -384,6 +384,11 @@ export interface Messages {
   "externalReferences.name": { plural: false; placeholders: never; tags: never }
   "externalReferences.add": { plural: false; placeholders: never; tags: never }
   "externalReferences.removeNamed": { plural: false; placeholders: "name" | "system"; tags: never }
+  "externalReferences.chooseName": { plural: false; placeholders: never; tags: never }
+  "externalReferences.nameOf": { plural: false; placeholders: "customer" | "name"; tags: never }
+  "externalReferences.nameOfThisCustomer": { plural: false; placeholders: "name"; tags: never }
+  "externalReferences.listedBy": { plural: false; placeholders: "addon" | "system" | "time"; tags: never }
+  "externalReferences.listedNone": { plural: false; placeholders: "addon" | "system" | "time"; tags: never }
   "assets.title": { plural: false; placeholders: never; tags: never }
   "assets.hint": { plural: false; placeholders: never; tags: never }
   "assets.empty": { plural: false; placeholders: never; tags: never }

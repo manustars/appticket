@@ -12,6 +12,7 @@ use crate::api::{
     Asset, Customer, Identity, Service, Supplied, SuppliedAsset, SuppliedDetails, Ticket,
     TicketSummary,
 };
+use crate::names::SystemNames;
 use crate::proposals::{Content, Rationale, Target};
 use crate::tickets::NewTicket;
 
@@ -368,6 +369,23 @@ impl Client {
             .send()
             .await?;
         Ok(Self::read::<Opened>(response).await?.number)
+    }
+
+    /// Replaces the name list of the add-on's system, which agents who manage customers pick
+    /// external references from, such as its host groups, with their nesting: the core keeps the
+    /// latest list, also while the add-on is switched off, and the customers' external references
+    /// stay as they are. The core refuses the whole list (409) with a name twice (ignoring case),
+    /// nested in a name it does not list or in itself, or under a system another add-on lists.
+    /// Scope `names:write`.
+    pub async fn replace_names(&self, list: &SystemNames) -> Result<(), Error> {
+        let response = self
+            .http
+            .put(self.url("/names"))
+            .bearer_auth(&self.token)
+            .json(list)
+            .send()
+            .await?;
+        Self::read_nothing(response).await
     }
 
     /// Adds an internal note to any ticket, closed ones too: agents see it with the add-on as its

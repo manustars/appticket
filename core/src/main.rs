@@ -32,6 +32,7 @@ mod live_details;
 mod local_sign_in;
 mod mail;
 mod mail_status;
+mod name_lists;
 mod oidc;
 mod outbound;
 mod parents;

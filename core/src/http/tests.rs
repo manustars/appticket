@@ -16,6 +16,16 @@ use crate::testing;
 
 mod addon_catalog;
 mod live_details;
+mod name_lists;
+
+/// A client calling with the token of a new add-on called `name` that has `scopes`.
+async fn addon(db: &PgPool, api: &Client, name: &str, scopes: &[&str]) -> Client {
+    let scopes: Vec<String> = scopes.iter().map(|s| (*s).to_owned()).collect();
+    let registered = crate::addons::register(db, name, "http://127.0.0.1:9", &[], &scopes)
+        .await
+        .unwrap();
+    Client::new_with_token(db, &registered.token, api.agent)
+}
 
 /// A signed-in client of the API.
 pub struct Client {
@@ -2623,6 +2633,7 @@ async fn an_addon_s_token_changes_nothing_but_its_own_calls(db: PgPool) {
             "POST /api/addon/tickets/{number}/notes",
             "POST /api/addon/tickets/{number}/resolve",
             "PUT /api/addon/assets/{id}",
+            "PUT /api/addon/names",
         ]
     );
     let ticket = api.get(&format!("/api/tickets/{number}")).await;

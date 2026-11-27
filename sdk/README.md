@@ -168,6 +168,7 @@ sentence saying which scope is missing.
 | `POST /api/addon/tickets` | `tickets:write` | Opens a ticket without a requester for a customer. |
 | `POST /api/addon/tickets/{number}/notes` | `tickets:write` | Adds an internal note to a ticket. |
 | `POST /api/addon/tickets/{number}/resolve` | `tickets:write` | Resolves a ticket the add-on opened. |
+| `PUT /api/addon/names` | `names:write` | Replaces the name list of the add-on's system, which agents pick customers' external references from. |
 
 A requester has one or more e-mail addresses, each belonging to exactly one requester. A ticket's
 `requester` carries them all in `addresses`, the first registered first; `reply_to` is the address
@@ -188,8 +189,10 @@ A customer's `external_references` are the names other systems use for it, each 
 `name` in it, such as a group in a monitoring tool: `[{"system": "Watchtower", "name":
 "Brightfield/Offices"}]`. A customer can have several in the same system, and a name names exactly
 one customer within its system. The core compares systems and names ignoring case, so an add-on
-looking up a name of its own system should too. Agents who manage customers set them; add-ons only
-read them. Offboarded customers are not listed, and neither are their references.
+looking up a name of its own system should too. Agents who manage customers set them, picking
+from the names the add-on lists in a system it lists them for (see
+[Names of the add-on's system](#names-of-the-add-ons-system)); add-ons only read them. Offboarded
+customers are not listed, and neither are their references.
 
 The full request and response shapes are in the core's OpenAPI specification
 (`hd openapi`, or `/api/openapi.json` on a running core), which also describes the body of
@@ -283,6 +286,44 @@ linked add-on changes nothing of the asset: it only supplies live details and li
   asset of an offboarded customer.
 - After unlinking, the add-on's next attempt with that reference is treated as new: when the asset
   still matches, the core records a new link proposal for the agents.
+
+### Names of the add-on's system
+
+An add-on with `names:write`, such as a monitoring integration, sends its name list: the names of
+its system that a customer can be known by there, such as its host groups, so that agents who
+manage customers pick a customer's external references from them rather than typing them:
+
+```json
+{ "system": "Watchtower",
+  "names": [{ "name": "Brightfield" },
+            { "name": "Brightfield/Offices", "parent": "Brightfield" },
+            { "name": "Harbor Lane" }] }
+```
+
+- `PUT /api/addon/names` sends the whole list, under `system`, the name of the add-on's system as
+  external references name it; the core keeps the latest list (204), also while the add-on is
+  switched off, so that agents still pick from it. Send it again whenever the names change.
+- A name appears once in the list, compared ignoring case, and `parent`, when given, is the name
+  it is nested in, another of the list's. Trimmed, a name is at most 255 characters and the
+  system's name at most 100, neither blank nor with control characters; a list holds at most
+  10000 names, in at most 21 MiB of JSON, which the largest list fits with its names written as
+  UTF-8 rather than `\u` escapes (a larger body is refused with 413).
+- A name twice, a `parent` the list does not name, a name nested in itself, however far up, or a
+  name or system that does not fit the above refuses the whole list (409) with a sentence naming
+  it, and the list before stays.
+- A system's names come from one add-on: a `system` another add-on lists, compared ignoring case,
+  is refused (409).
+- In that system, agents add a customer's external reference by picking one of the names, spelled
+  as the list spells it and the system; a name that is already an external reference of a
+  customer cannot be picked for another, while the names nested in it, and the one it is nested
+  in, still can. Agents cannot add a name the list does not have, by hand or by importing it.
+- Replacing the list never changes the customers' external references: one whose name leaves the
+  list, or one typed by hand before the add-on listed its names, stays, and add-ons still read it
+  in `GET /api/addon/customers`.
+- Sending the list under another `system` renames nothing: the references picked under the old
+  name stay in the old system, which no add-on lists any more, so agents may type names there
+  again, and the add-on does not find them under the new name. Agents pick the names again in
+  the new system, and remove the old references once they no longer need them.
 
 ### Proposals
 

@@ -107,6 +107,12 @@ pub(crate) async fn add_in(
         return rule("an external reference needs a name");
     }
     crate::customers::lock_active(tx, customer).await?;
+    // In a system an add-on lists the names of, the name is one of them, spelled as it lists it.
+    let picked = crate::name_lists::pick_listed(tx, system, name).await?;
+    let (system, name) = match &picked {
+        Some(picked) => (picked.system.as_str(), picked.name.as_str()),
+        None => (system, name),
+    };
     let id = Uuid::new_v4();
     // Another customer can take the name at the same time: the database decides.
     let added = sqlx::query(
@@ -169,6 +175,7 @@ pub async fn remove(db: &PgPool, id: Uuid) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::name_lists::named;
     use crate::testing;
 
     #[sqlx::test]
@@ -302,6 +309,95 @@ mod tests {
             add(&db, harbor, "Watchtower", "Offices").await,
             Err(Error::Rule(_))
         ));
+    }
+
+    #[sqlx::test]
+    async fn in_a_system_an_addon_lists_a_name_is_picked_from_its_list(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        testing::addon(&db, "watchtower").await;
+        crate::name_lists::replace(
+            &db,
+            "watchtower",
+            "Watchtower",
+            &[
+                named("Brightfield", None),
+                named("Brightfield/Offices", Some("Brightfield")),
+            ],
+        )
+        .await
+        .unwrap();
+
+        // Picked in any case, it is spelled as the list spells it, system included.
+        add(&db, brightfield, "watchtower", "brightfield/offices")
+            .await
+            .unwrap();
+        let listed: Vec<(String, String)> = of(&db, brightfield)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.system, r.name))
+            .collect();
+        assert_eq!(
+            listed,
+            [("Watchtower".to_owned(), "Brightfield/Offices".to_owned())]
+        );
+
+        assert_eq!(
+            testing::refusal(add(&db, brightfield, "Watchtower", "Brightfield/Lab").await),
+            r#"the name "Brightfield/Lab" is not in the name list the add-on watchtower sends of Watchtower"#
+        );
+        // A name another customer has cannot be picked; the name it is nested in can.
+        assert_eq!(
+            testing::refusal(add(&db, harbor, "Watchtower", "Brightfield/Offices").await),
+            "Brightfield/Offices in Watchtower already names Brightfield"
+        );
+        add(&db, harbor, "Watchtower", "Brightfield").await.unwrap();
+        // A system no add-on lists takes any name.
+        add(&db, harbor, "Ledgerly", "HRB-0007").await.unwrap();
+    }
+
+    #[sqlx::test]
+    async fn references_typed_by_hand_stay_when_an_addon_lists_its_names(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        add(&db, brightfield, "watchtower", "BF Offices")
+            .await
+            .unwrap();
+        testing::addon(&db, "watchtower").await;
+        crate::name_lists::replace(
+            &db,
+            "watchtower",
+            "Watchtower",
+            &[named("Brightfield", None)],
+        )
+        .await
+        .unwrap();
+        add(&db, brightfield, "Watchtower", "Brightfield")
+            .await
+            .unwrap();
+        // The list leaves the name it named.
+        crate::name_lists::replace(&db, "watchtower", "Watchtower", &[])
+            .await
+            .unwrap();
+
+        let listed: Vec<(String, String)> = of(&db, brightfield)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.system, r.name))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("watchtower".to_owned(), "BF Offices".to_owned()),
+                ("Watchtower".to_owned(), "Brightfield".to_owned()),
+            ]
+        );
+        assert_eq!(
+            by_customer(&db).await.unwrap()[&brightfield].len(),
+            2,
+            "add-ons still read both"
+        );
     }
 
     /// The database keeps the rules even when the code above is bypassed.
