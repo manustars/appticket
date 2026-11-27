@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use super::{ApiError, AppState, Problem};
 use crate::asset_kinds::{self, AssetKind};
+use crate::asset_link_proposals::{self, AssetLinkProposal};
 use crate::auth::SignedIn;
 use crate::catalog::{self, Asset, AssetFields, Service, ServiceDetail};
 use crate::roles::Permission;
@@ -21,6 +22,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_asset_kinds, create_asset_kind))
         .routes(routes!(update_asset_kind))
         .routes(routes!(customer_assets, create_asset))
+        .routes(routes!(customer_asset_link_proposals))
+        .routes(routes!(discard_asset_link_proposal))
         .routes(routes!(customer_services))
         .routes(routes!(update_asset))
         .routes(routes!(retire_asset))
@@ -111,6 +114,37 @@ async fn create_asset(
     agent.grant.require(Permission::ManageCatalog)?;
     let id = catalog::create_asset(&state.db, id, &fields).await?;
     Ok((StatusCode::CREATED, Json(Created { id })))
+}
+
+/// The open link proposals on the customer's assets, oldest first: an add-on would supply an asset
+/// that has the same serial number or name as one of them.
+#[utoipa::path(get, path = "/api/customers/{id}/asset-link-proposals", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The customer")),
+    responses((status = OK, body = Vec<AssetLinkProposal>),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn customer_asset_link_proposals(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<AssetLinkProposal>>, ApiError> {
+    Ok(Json(asset_link_proposals::open_of(&state.db, id).await?))
+}
+
+/// Discards an open link proposal: the add-on's next attempt with its reference creates its own
+/// asset. Needs managing the catalog; an offboarded customer's proposals are not discarded.
+#[utoipa::path(post, path = "/api/asset-link-proposals/{id}/discard", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The link proposal")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = FORBIDDEN, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn discard_asset_link_proposal(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCatalog)?;
+    asset_link_proposals::discard(&state.db, id, agent.id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// The services the customer uses.

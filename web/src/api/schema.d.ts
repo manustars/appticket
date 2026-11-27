@@ -17,8 +17,12 @@ export interface paths {
          * Creates an asset of a customer known by the add-on's reference, or updates the one the add-on
          *     already supplied with that reference (bringing it back if it retired it), so that the add-on
          *     can send its whole inventory again safely: 201 when created, 200 when updated. Its kind and its
-         *     site are named; what is left out is cleared, and its holder, whom agents choose, stays. Scope
-         *     `catalog:write`.
+         *     site are named; what is left out is cleared, and its holder, whom agents choose, stays.
+         * @description When the add-on would create the asset and its customer already has an active one with the same
+         *     serial number, else the same name, both ignoring case, that the add-on is not the source of,
+         *     nothing is created: the answer is 202 with the link proposal recorded for the agents, which
+         *     says which asset matched. Sending the asset again while the proposal is open answers the same
+         *     proposal; once agents discard it, the next attempt creates the asset. Scope `catalog:write`.
          */
         post: operations["supply_asset"];
         delete?: never;
@@ -553,6 +557,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/asset-link-proposals/{id}/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discards an open link proposal: the add-on's next attempt with its reference creates its own
+         *     asset. Needs managing the catalog; an offboarded customer's proposals are not discarded.
+         */
+        post: operations["discard_asset_link_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assets/{id}": {
         parameters: {
             query?: never;
@@ -640,6 +664,26 @@ export interface paths {
          *     address, a phone number, a website and internal notes. A detail left out or blank is cleared.
          */
         put: operations["update_customer"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customers/{id}/asset-link-proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The open link proposals on the customer's assets, oldest first: an add-on would supply an asset
+         *     that has the same serial number or name as one of them.
+         */
+        get: operations["customer_asset_link_proposals"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1998,6 +2042,35 @@ export interface components {
             moves_with_holder: boolean;
             name: string;
         };
+        /** @description A proposal that the asset an add-on would supply is an asset its customer already has. */
+        AssetLinkProposal: {
+            /** @description The add-on that would supply the asset. */
+            addon: string;
+            /**
+             * Format: uuid
+             * @description The asset it matched, of the same customer.
+             */
+            asset_id: string;
+            /** @description That asset's name as it is now. */
+            asset_name: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            customer_id: string;
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description What the two assets have in common: when both a serial number and a name match, the serial
+             *     number decides.
+             */
+            matched_by: components["schemas"]["MatchedBy"];
+            /** @description The name the add-on sent. */
+            name: string;
+            /** @description The add-on's own reference for the asset it would supply. */
+            reference: string;
+            /** @description The serial number the add-on sent, if any. */
+            serial_number?: string | null;
+        };
         AssigneeChange: {
             /**
              * Format: uuid
@@ -2313,6 +2386,11 @@ export interface components {
             reading?: components["schemas"]["Activity"] | null;
             sending?: components["schemas"]["Activity"] | null;
         };
+        /**
+         * @description What the asset the add-on would supply has in common with the asset it matched.
+         * @enum {string}
+         */
+        MatchedBy: "serial_number" | "name";
         MergedRequester: {
             /**
              * Format: uuid
@@ -3006,6 +3084,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AddonAsset"];
+                };
+            };
+            /** @description A link proposal instead of the asset */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetLinkProposal"];
                 };
             };
             401: {
@@ -4507,6 +4594,58 @@ export interface operations {
             };
         };
     };
+    discard_asset_link_proposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link proposal */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     update_asset: {
         parameters: {
             query?: never;
@@ -4769,6 +4908,36 @@ export interface operations {
                 };
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    customer_asset_link_proposals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetLinkProposal"][];
+                };
+            };
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

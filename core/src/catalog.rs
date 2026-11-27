@@ -1302,7 +1302,7 @@ mod tests {
             crate::supplied_assets::supply(&db, "watchtower", brightfield, "host-1", &supplied)
                 .await
                 .unwrap()
-                .asset
+                .asset()
                 .id;
         let as_supplied =
             |holder: Option<Uuid>| fields(laptop, "PC-0042", Some("SN-0042"), Some(head), holder);
