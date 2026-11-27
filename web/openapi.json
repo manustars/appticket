@@ -258,6 +258,50 @@
         }
       }
     },
+    "/api/addon/conflicts": {
+      "put": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "Replaces the list of conflicts the add-on reports",
+        "description": "Replaces the list of conflicts the add-on reports, such as a host of its system in two groups that two customers have as external references, which it therefore does not import: administrators read the latest list in the add-on's state, also while the add-on is switched off, and an empty list says there are none. Each conflict has a sentence an administrator can act on, one per language of the agents' UI or a single one taken as English, at most 500 characters once trimmed in each of at most 4 languages, without control characters. At most 1000 conflicts, in at most 8 MiB of JSON (413 above), which the largest list fits written as UTF-8. A list with a conflict that does not fit is refused whole, and the list before stays. Scope `conflicts:write`.",
+        "operationId": "replace_conflicts",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportedConflicts"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "A body over the limit"
+          }
+        }
+      }
+    },
     "/api/addon/customers": {
       "get": {
         "tags": [
@@ -6781,6 +6825,17 @@
           "failing"
         ],
         "properties": {
+          "conflicts": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConflictList",
+                "description": "The conflicts the add-on last reported; none until it reports any."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -6805,6 +6860,17 @@
           },
           "name": {
             "type": "string"
+          },
+          "names": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NameListState",
+                "description": "The name list the add-on last sent, with the names no external reference covers; none\nuntil it sends one."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "pending": {
             "type": "integer",
@@ -7407,6 +7473,41 @@
         },
         "propertyNames": {
           "type": "string"
+        }
+      },
+      "Conflict": {
+        "type": "object",
+        "description": "A conflict an add-on reports.",
+        "required": [
+          "sentence"
+        ],
+        "properties": {
+          "sentence": {
+            "$ref": "#/components/schemas/BTreeMap",
+            "description": "What is not imported and why, in each language the add-on wrote it in."
+          }
+        }
+      },
+      "ConflictList": {
+        "type": "object",
+        "description": "An add-on's latest list of conflicts, as administrators read it in the add-on's state.",
+        "required": [
+          "updated_at",
+          "conflicts"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Conflict"
+            },
+            "description": "The conflicts, in the order the add-on sent them."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the add-on last sent the list."
+          }
         }
       },
       "Content": {
@@ -8675,6 +8776,39 @@
           }
         }
       },
+      "NameListState": {
+        "type": "object",
+        "description": "An add-on's latest name list as administrators see it in the add-on's state: the names they\nstill have to give a customer.",
+        "required": [
+          "system",
+          "updated_at",
+          "listed",
+          "uncovered"
+        ],
+        "properties": {
+          "listed": {
+            "type": "integer",
+            "description": "How many names the list holds.",
+            "minimum": 0
+          },
+          "system": {
+            "type": "string",
+            "description": "The system the list names."
+          },
+          "uncovered": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UncoveredName"
+            },
+            "description": "The names no customer's external reference covers, neither the name's own nor that of a\nname it is nested in: every name followed by those nested in it, as agents read the list."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the add-on last sent the list."
+          }
+        }
+      },
       "NewAddress": {
         "type": "object",
         "required": [
@@ -9253,6 +9387,35 @@
           }
         }
       },
+      "ReportedConflict": {
+        "type": "object",
+        "description": "A conflict as the add-on reports it.",
+        "required": [
+          "sentence"
+        ],
+        "properties": {
+          "sentence": {
+            "$ref": "#/components/schemas/SentenceInput",
+            "description": "What is not imported and why, so that an administrator can act on it: written in every\nlanguage of the agents' UI, as a rationale is, or a single sentence taken as English."
+          }
+        }
+      },
+      "ReportedConflicts": {
+        "type": "object",
+        "description": "The whole list of the conflicts the add-on reports, as the add-on sends it.",
+        "required": [
+          "conflicts"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportedConflict"
+            },
+            "description": "The conflicts, in the order administrators read them; none when there are none."
+          }
+        }
+      },
       "Requester": {
         "type": "object",
         "required": [
@@ -9617,6 +9780,19 @@
             }
           }
         }
+      },
+      "SentenceInput": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/BTreeMap",
+            "description": "One sentence per language."
+          },
+          {
+            "type": "string",
+            "description": "A single sentence, taken as English."
+          }
+        ],
+        "description": "A sentence as an add-on sends it."
       },
       "Service": {
         "type": "object",
@@ -10385,6 +10561,25 @@
             }
           }
         ]
+      },
+      "UncoveredName": {
+        "type": "object",
+        "description": "A name of a name list that no external reference covers.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name it is nested in; none at the top."
+          }
+        }
       }
     }
   }

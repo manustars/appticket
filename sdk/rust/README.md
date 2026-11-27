@@ -16,7 +16,8 @@ Apache-2.0, like the rest of `sdk/`.
   `open_tickets_of_requester`, `open_tickets_of_customer`, `ticket`, `propose`, `open_ticket`,
   `add_note` and `resolve_ticket` for the tickets the add-on opens, `supply_asset`,
   `update_asset`, `retire_asset` for the assets the add-on is the source of, `unlink_asset`
-  for those it is linked to, and `replace_names` for the names of its system). Errors carry the
+  for those it is linked to, `replace_names` for the names of its system, and
+  `replace_conflicts` for the conflicts it reports). Errors carry the
   core's sentence. Answers keep only the fields an add-on needs and ignore the rest.
   A `Ticket` says whether an agent has worked on it (`worked_on_by_agent`, true from a core that
   does not say), without giving its notes, so that an add-on resolves only what its rules allow.
@@ -36,6 +37,9 @@ Apache-2.0, like the rest of `sdk/`.
   name, that `replace_names` sends, such as a monitoring tool's host groups: each a `SystemName`,
   at the `top` or `nested_in` another of the list. Agents who manage customers pick the
   customers' external references in that system from the latest list.
+- `conflicts`: `Conflict`, what of its system the add-on does not import, with a `sentence` per
+  language (`new` from `(tag, sentence)` pairs, `in_english` with only English), in the whole
+  list that `replace_conflicts` sends; administrators read the latest list in the add-on's state.
 - `live_details`: `LiveDetails`, what the add-on answers when the core asks for the live details
   of an asset it is the source of or is linked to: a `DetailState` (`Ok`, `Warning`, `Problem`), `Field`s and
   `Link`s, each with a `Label` per language (`in_english` makes one with only English).

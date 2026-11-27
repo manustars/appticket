@@ -16,6 +16,7 @@ mod asset_link_proposals;
 mod auth;
 mod catalog;
 mod cli;
+mod conflicts;
 mod customers;
 mod database;
 mod drafts;

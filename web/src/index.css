@@ -627,6 +627,16 @@ code { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-siz
 td.figure.error { color: var(--danger); font-weight: 600; }
 tr.addon-error td { padding-top: 0; white-space: normal; }
 .data tr:has(+ tr.addon-error) td { border-bottom: 0; }
+/* An add-on's state: the names no external reference covers and the conflicts it reports. */
+tr.addon-state td { padding-top: 0; white-space: normal; }
+.data tr:has(+ tr.addon-state) td { border-bottom: 0; }
+.addon-state-list { margin: 0.2rem 0; }
+.addon-state-list summary { cursor: pointer; }
+.addon-state-list summary.has-conflicts { color: var(--danger); font-weight: 600; }
+.addon-state-list p { margin: 0.2rem 0; }
+.addon-state-list ul { margin: 0.2rem 0 0.4rem; padding-left: 1.2rem; max-height: 16rem; overflow-y: auto; }
+.uncovered-names { list-style: none; overflow-wrap: anywhere; }
+.conflicts li { overflow-wrap: anywhere; }
 
 /* Mail: reading and sending side by side, the outbox below. */
 .mail-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; }

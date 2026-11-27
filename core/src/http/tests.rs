@@ -15,6 +15,7 @@ use super::{AppState, router};
 use crate::testing;
 
 mod addon_catalog;
+mod addon_state;
 mod live_details;
 mod name_lists;
 
@@ -2633,6 +2634,7 @@ async fn an_addon_s_token_changes_nothing_but_its_own_calls(db: PgPool) {
             "POST /api/addon/tickets/{number}/notes",
             "POST /api/addon/tickets/{number}/resolve",
             "PUT /api/addon/assets/{id}",
+            "PUT /api/addon/conflicts",
             "PUT /api/addon/names",
         ]
     );

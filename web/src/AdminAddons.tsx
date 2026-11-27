@@ -1,8 +1,8 @@
 // The add-ons the help desk has registered: switching them on and off, and how delivering events
 // to them goes. Registering one stays on the server's command line, where its secrets are made.
 import { useId, type ReactNode } from 'react'
-import { addonName } from './addon'
-import { listAddons, setAddonEnabled, type AddonRow } from './api/client'
+import { addonName, inLanguage } from './addon'
+import { listAddons, setAddonEnabled, type AddonRow, type ConflictList, type NameListState } from './api/client'
 import { useI18n } from './i18n/context'
 import { Problem } from './Problem'
 import { useAction, useLoad } from './useAction'
@@ -88,6 +88,58 @@ function AddonRows({ addon: a, busy, list, onToggle }: {
           </td>
         </tr>
       )}
+      {(a.names || a.conflicts) && (
+        <tr className="addon-state">
+          <td colSpan={6}>
+            {a.names && <UncoveredNames names={a.names} />}
+            {a.conflicts && <Conflicts list={a.conflicts} />}
+          </td>
+        </tr>
+      )}
     </>
+  )
+}
+
+/**
+ * The names of the add-on's latest name list that no external reference covers, each below the
+ * name it is nested in: agents still have to give them a customer.
+ */
+function UncoveredNames({ names }: { names: NameListState }) {
+  const { t, formatTime } = useI18n()
+  const time = formatTime(names.updated_at)
+  if (names.uncovered.length === 0) {
+    return <p className="muted small">{t('addons.allCovered', { system: names.system, time })}</p>
+  }
+  // A name that no external reference covers is nested in one that none covers either.
+  const depth = new Map<string, number>()
+  for (const n of names.uncovered) depth.set(n.name, n.parent ? (depth.get(n.parent) ?? -1) + 1 : 0)
+  return (
+    <details className="addon-state-list">
+      <summary>{t('addons.uncovered', { count: names.uncovered.length, system: names.system, time })}</summary>
+      <p className="muted small">{t('addons.uncoveredHint')}</p>
+      <ul className="uncovered-names">
+        {names.uncovered.map((n) => (
+          <li key={n.name} style={{ paddingInlineStart: `${depth.get(n.name) ?? 0}rem` }}>{n.name}</li>
+        ))}
+      </ul>
+    </details>
+  )
+}
+
+/** The conflicts the add-on last reported, each in the agent's language as the add-on wrote it. */
+function Conflicts({ list }: { list: ConflictList }) {
+  const { t, locale, formatTime } = useI18n()
+  const time = formatTime(list.updated_at)
+  if (list.conflicts.length === 0) return <p className="muted small">{t('addons.noConflicts', { time })}</p>
+  return (
+    <details className="addon-state-list" open>
+      <summary className="has-conflicts">{t('addons.conflicts', { count: list.conflicts.length, time })}</summary>
+      <p className="muted small">{t('addons.conflictsHint')}</p>
+      <ul className="conflicts">
+        {list.conflicts.map((c, i) => (
+          <li key={i}>{inLanguage(c.sentence, locale)}</li>
+        ))}
+      </ul>
+    </details>
   )
 }

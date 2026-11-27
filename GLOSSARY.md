@@ -43,6 +43,12 @@ The names of its system that an add-on lists, such as a monitoring tool's host g
 they nest; agents pick a customer's external references in that system from the latest one.
 _Avoid_: Group list, catalog of names, mapping table
 
+**Conflict**:
+Something of an add-on's system that the add-on does not import because no external reference
+covers it or two do, such as a host in groups of two customers; the add-on reports it with a
+sentence an administrator can act on, and the add-on's state shows the latest list.
+_Avoid_: Import error, clash, mapping error
+
 **Requester**:
 A person, belonging to exactly one customer, who asks the help desk for assistance.
 _Avoid_: User, contact, end user
