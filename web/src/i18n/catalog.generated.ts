@@ -411,10 +411,15 @@ export interface Messages {
   "assets.setHolderNamed": { plural: false; placeholders: "name"; tags: never }
   "assets.suppliedHint": { plural: false; placeholders: never; tags: never }
   "assets.linkProposals": { plural: false; placeholders: never; tags: never }
+  "assets.linkedAddon": { plural: false; placeholders: "addon"; tags: never }
+  "assets.linkedHint": { plural: false; placeholders: never; tags: never }
   "assets.linkProposalsHint": { plural: false; placeholders: never; tags: never }
   "assets.linkProposal": { plural: false; placeholders: "addon" | "asset" | "name" | "reference"; tags: "strong" }
   "assets.sameSerialNumber": { plural: false; placeholders: "serialNumber"; tags: never }
   "assets.sameName": { plural: false; placeholders: never; tags: never }
+  "assets.acceptLink": { plural: false; placeholders: never; tags: never }
+  "assets.acceptLinkNamed": { plural: false; placeholders: "name"; tags: never }
+  "assets.confirmAcceptLink": { plural: false; placeholders: "addon" | "asset" | "reference"; tags: never }
   "assets.discardLink": { plural: false; placeholders: never; tags: never }
   "assets.discardLinkNamed": { plural: false; placeholders: "name"; tags: never }
   "assets.confirmDiscardLink": { plural: false; placeholders: "addon" | "asset" | "name"; tags: never }

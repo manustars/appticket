@@ -535,6 +535,11 @@ export function listAssetLinkProposals(customerId: string): Promise<AssetLinkPro
   return json('GET', `${customerPath(customerId)}/asset-link-proposals`)
 }
 
+/** Accepts a link proposal: the add-on is linked to the asset it matched, with its reference. */
+export async function acceptAssetLinkProposal(id: string): Promise<void> {
+  await call('POST', `/api/asset-link-proposals/${encodeURIComponent(id)}/accept`)
+}
+
 /** Discards a link proposal: the add-on's next attempt with its reference creates its own asset. */
 export async function discardAssetLinkProposal(id: string): Promise<void> {
   await call('POST', `/api/asset-link-proposals/${encodeURIComponent(id)}/discard`)
