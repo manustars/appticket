@@ -7,6 +7,9 @@
 [core]
 # The help desk core's base URL.
 url = "https://helpdesk.example.com"
+# The help desk's UI as agents' browsers reach it, for the address of a ticket's page that
+# Zabbix's event menu opens, when the add-on reaches the core at another one (default url).
+# ui_url = "https://helpdesk.example.com"
 
 [zabbix]
 # The base URL of Zabbix's frontend; the API is <url>/api_jsonrpc.php.
@@ -66,7 +69,8 @@ priority = "high"
 service = "Hosted mail"
 # When the alert's problem recovers: resolve_if_not_worked_on (the default), resolve or note.
 on_recovery = "resolve_if_not_worked_on"
-# Close the problem in Zabbix when an agent resolves the ticket (default false).
+# Close the problem in Zabbix when an agent resolves or closes the ticket, if its trigger allows
+# closing it by hand (default false).
 close_in_zabbix = false
 
 [[alerts.rules]]
@@ -82,8 +86,8 @@ outcome = "open"
 priority = "high"
 
 [addon]
-# Where the add-on answers the core's reads of live details, at the URL `hd addon add --url` gave,
-# and receives Zabbix's alerts on /webhook (default 127.0.0.1:8091): an address the Zabbix server
+# Where the add-on answers the core's reads of live details and receives its events on /events, at
+# the URL `hd addon add --url` gave, and receives Zabbix's alerts on /webhook (default 127.0.0.1:8091): an address the Zabbix server
 # reaches, when it is on another host.
 listen = "127.0.0.1:8091"
 

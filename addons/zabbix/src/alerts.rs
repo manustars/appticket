@@ -16,6 +16,16 @@ use crate::zabbix::{Event, HostWithGroups};
 /// The tag of Zabbix's event that the webhook's answer gives the ticket's number in.
 pub const TICKET_TAG: &str = "hd_ticket";
 
+/// The tag of Zabbix's event that the webhook's answer gives the address of the ticket's page in,
+/// which the media type's event menu entry opens.
+pub const TICKET_URL_TAG: &str = "hd_ticket_url";
+
+/// The address of the page of the ticket `number` in the help desk's UI at `ui_url`, such as
+/// `https://helpdesk.example.com/#/tickets/42`.
+pub fn ticket_url(ui_url: &str, number: i64) -> String {
+    format!("{}/#/tickets/{number}", ui_url.trim_end_matches('/'))
+}
+
 /// What the media type sends, its parameters as Zabbix resolved them: a macro Zabbix does not
 /// resolve for the kind of message, such as `{EVENT.UPDATE.MESSAGE}` in a problem's, comes as it
 /// is written.
@@ -475,6 +485,18 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_ticket_s_page_is_its_number_in_the_ui_s_hash_route() {
+        assert_eq!(
+            ticket_url("https://helpdesk.example.com", 42),
+            "https://helpdesk.example.com/#/tickets/42"
+        );
+        assert_eq!(
+            ticket_url("https://example.com/helpdesk/", 7),
+            "https://example.com/helpdesk/#/tickets/7"
+        );
     }
 
     #[test]

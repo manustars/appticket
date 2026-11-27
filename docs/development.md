@@ -176,7 +176,7 @@ Zabbix above, make an API token for `Admin` in its frontend (*Users → API toke
 ```sh
 cargo run -p hd-core -- addon add zabbix --url http://127.0.0.1:8091 \
   --scope directory:read --scope catalog:write --scope names:write --scope conflicts:write \
-  --scope tickets:read --scope tickets:write
+  --scope tickets:read --scope tickets:write --event ticket.state_changed
 cp addons/zabbix/zabbix.example.toml zabbix.toml   # core.url http://127.0.0.1:8080,
                                                    # zabbix.url http://127.0.0.1:55180
 # in .env: HD_ZABBIX_TOKEN=… and HD_ZABBIX_EVENT_SECRET=… (printed above) and

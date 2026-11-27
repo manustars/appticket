@@ -10,9 +10,9 @@ Zabbix 7.0 LTS or later through `api_jsonrpc.php`, with an API token sent in
 Zabbix sends its alerts to the add-on's [webhook](#alerts), through the media type shipped here,
 and the [rules for alerts](#alert-rules) decide which open a ticket
 ([ADR 0010](../../docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md)); the
-[`check` command](#checking-an-alert-against-the-rules) tells which rule an alert meets. The
-safety limit on the tickets opened, and what goes back to Zabbix besides the ticket's number, come
-in later versions.
+[`check` command](#checking-an-alert-against-the-rules) tells which rule an alert meets. What
+agents do to the tickets of problems goes [back to Zabbix](#back-to-zabbix). The safety limit on
+the tickets opened comes in a later version.
 
 ## What it does
 
@@ -111,18 +111,22 @@ unavailable.
 ```sh
 hd addon add zabbix --url http://127.0.0.1:8091 \
   --scope directory:read --scope catalog:write --scope names:write --scope conflicts:write \
-  --scope tickets:read --scope tickets:write
+  --scope tickets:read --scope tickets:write --event ticket.state_changed
 ```
 
-`--url` is where the core reaches the add-on's `addon.listen` for live details; the add-on receives
-no events of the core yet. `tickets:write` opens, notes and resolves the tickets of alerts, and
+`--url` is where the core reaches the add-on's `addon.listen`, for live details and for the
+event `ticket.state_changed` (`POST /events`), which tells the add-on that an agent resolved or
+closed the ticket of a problem, so that it goes [back to Zabbix](#back-to-zabbix). The core has no
+command that adds an event to an add-on registered before: without it, nothing goes back to
+Zabbix until the add-on is registered with it. `tickets:write` opens, notes and resolves the
+tickets of alerts, and
 `tickets:read` finds them by their problem and reads, before resolving one, whether an agent has
 worked on it. The core has no command that changes the scopes of an add-on registered before
 alerts came in: without the two, each alert fails with the core's sentence on the missing scope,
 in the add-on's log and in Zabbix's (*Reports → Action log*), until the add-on is registered with
 them. The core prints a token and an event secret once: put the token in
 `HD_ZABBIX_TOKEN`, or in a file named by `HD_ZABBIX_TOKEN_FILE`, and the event secret, with which
-the core signs its reads, in `HD_ZABBIX_EVENT_SECRET` or a file named by
+the core signs its reads and its events, in `HD_ZABBIX_EVENT_SECRET` or a file named by
 `HD_ZABBIX_EVENT_SECRET_FILE`.
 
 Upgrading from a version without live details, the add-on stops at startup until
@@ -137,7 +141,12 @@ agents get a link proposal per host to accept. Disable the old add-on afterwards
 
 In Zabbix, give the add-on a user that can read the host groups of the customers, with an API
 token (*Users → API tokens*), and put that token in `HD_ZABBIX_API_TOKEN` or in a file named by
-`HD_ZABBIX_API_TOKEN_FILE`. The add-on sees only the groups and hosts that user can read.
+`HD_ZABBIX_API_TOKEN_FILE`. The add-on sees only the groups and hosts that user can read. To go
+[back to Zabbix](#back-to-zabbix), the user's role (*Users → User roles*) must allow, among its
+actions, *Acknowledge problems* and *Add problem comments*, and *Close problems* when a rule
+closes them, with access to the API and `event.acknowledge` among the methods it may call; to
+close a problem the user also needs read-write permission on the host groups of the problem's
+hosts, which Zabbix requires for closing an event.
 
 ## Configuration
 
@@ -147,6 +156,7 @@ A TOML file, named by `HD_ZABBIX_CONFIG` (`zabbix.toml` in the working directory
 | Setting | Default | Meaning |
 |---|---|---|
 | `core.url` | required | The core's base URL, such as `https://helpdesk.example.com`. |
+| `core.ui_url` | `core.url` | The base URL of the help desk's UI as agents' browsers reach it, for the address of a ticket's page that Zabbix's event menu opens, when the add-on reaches the core at another one; 200 characters at most, so that the address fits in a tag of Zabbix (255). |
 | `zabbix.url` | required | The base URL of Zabbix's frontend, such as `https://zabbix.example.com`. |
 | `zabbix.system` | `Zabbix` | The system's name as customers' external references name it. |
 | `zabbix.timeout_seconds` | 30 | How long a call to Zabbix may take. |
@@ -155,7 +165,7 @@ A TOML file, named by `HD_ZABBIX_CONFIG` (`zabbix.toml` in the working directory
 | `assets.kinds` | none | Mappings, in order: each a `template` (its visible name) or a `tag` (with an optional `value`), and the `kind` it gives; names and values compared ignoring case. |
 | `alerts.rules` | the default list | The [rules for alerts](#alert-rules), in order. |
 | `zabbix.frontend_url` | `zabbix.url` | The base URL of Zabbix's frontend as agents' browsers reach it, for the links of the live details, when the add-on reaches Zabbix at another one. |
-| `addon.listen` | `127.0.0.1:8091` | Where the add-on answers the core's reads of live details and receives Zabbix's alerts on its [webhook](#alerts) (`/webhook`). |
+| `addon.listen` | `127.0.0.1:8091` | Where the add-on answers the core's reads of live details, receives its events (`/events`) and receives Zabbix's alerts on its [webhook](#alerts) (`/webhook`). |
 | `webhook.secret_file` | none | The file holding the webhook's secret, of 16 characters or more, which Zabbix's media type sends; without a `[webhook]` section, the add-on receives no alerts and says so at startup. |
 
 A file that does not fit, such as an unknown setting, a mapping with both a template and a tag or
@@ -197,8 +207,10 @@ the core refused, is answered 502 with the reason, which Zabbix shows in its act
 **A problem.** The add-on reads the problem's event from Zabbix (severity, name, tags, operational
 data, start, hosts) and the host's groups, finds the customer whose asset the host is, as a round
 does, and asks the [rules](#alert-rules). When they say `open`, it opens one ticket, with the
-problem's event id as its ticket reference, and answers its number, which Zabbix adds to the
-problem as the tag `hd_ticket`:
+problem's event id as its ticket reference, and answers its number and the address of its page in
+the help desk's UI (`core.ui_url`), which Zabbix adds to the problem as the tags `hd_ticket` and
+`hd_ticket_url`; the media type's entry in the event's menu, *Help desk ticket 42*, opens that
+page:
 
 - for the customer of the host's asset, without a requester, so replies go to the customer's key
   requesters, and linked to that asset;
@@ -224,7 +236,10 @@ has worked on it, always with `resolve`, never with `note`; and only an open or 
 When no rule opens the alert any more, such as after the rules changed, the default decides. When
 Zabbix does not answer, the add-on adds nothing and answers 502, so that Zabbix tries again,
 rather than guess what the rule would say; when only the recovery's time cannot be read, the note
-says the problem recovered without it, and the add-on logs why.
+says the problem recovered without it, and the add-on logs why. The recovery of a problem the
+add-on itself closed, [back in Zabbix](#back-to-zabbix) once an agent resolved or closed its
+ticket, adds no note and resolves nothing: the agent's change is the ticket's, and a ticket they
+reopened since stays open.
 
 `resolve` is the help desk's explicit choice, rule by rule, to override the default of
 [ADR 0010](../../docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md), by which the
@@ -248,7 +263,8 @@ A problem without a ticket, because none was opened for it, gets no note on reco
 ### Setting it up in Zabbix
 
 1. Import the media type: *Alerts → Media types → Import*, the file `zabbix-media-type.yaml`.
-   Zabbix 7.0 or later.
+   Zabbix 7.0 or later. It adds the entry *Help desk ticket* to the menu of each event the add-on
+   gave a ticket's page to (`{EVENT.TAGS.hd_ticket_url}`); Zabbix shows it only for those.
 2. In the media type **Help desk**, set the parameter `url` to the add-on's webhook as the Zabbix
    server reaches it, such as `https://hd-zabbix.example.com/webhook`; `addon.listen` must then be
    an address the server reaches (`0.0.0.0:8091` behind a proxy with HTTPS, for one). Set
@@ -267,6 +283,35 @@ A problem without a ticket, because none was opened for it, gets no note on reco
 
    The rules still decide which problems open a ticket; the action only decides which reach the
    add-on.
+
+## Back to Zabbix
+
+When an agent resolves or closes the ticket of a problem, the core tells the add-on
+(`ticket.state_changed`, with the ticket's reference, the problem's event id), and the add-on
+acknowledges the problem's event in Zabbix with a message naming the ticket and the agent:
+
+```text
+Ticket 42 was resolved in the help desk by Marco Bellini; the problem stays open in Zabbix, since its rule does not close it.
+```
+
+It also closes the problem when two things hold: the rule the problem's alert meets now says so
+(`close_in_zabbix = true`; when no rule opens the alert any more, the default does not), and the
+problem's trigger allows closing it by hand (*Allow manual close*, `manual_close`). The message
+then says the problem is closed, and otherwise why it stays open: its rule, or its trigger. When
+Zabbix refuses to close it all the same, such as for a user whose role does not allow closing
+problems or who may only read its hosts, the add-on acknowledges it without closing, and the message gives Zabbix's reason. A
+problem that has already recovered is acknowledged with the ticket and the agent only.
+
+Nothing goes back to Zabbix for the add-on's own resolutions, on recovery, for a ticket moving to
+another state (open or waiting), nor for a ticket whose reference is no problem's event id, such
+as one the add-on opens about itself. A problem Zabbix no longer has, such as one its housekeeper
+removed, is left alone. Zabbix sends the acknowledgement back to the webhook as an update of the
+add-on's own user, and the close as a recovery the add-on made: neither adds to the ticket.
+
+The add-on acts on the event within 8 seconds, less than the 10 the core waits; when Zabbix or the
+core did not answer, it answers a failure, and the core delivers the event again later, from 30
+seconds to an hour apart, twelve times in all. An acknowledgement the add-on already made for the
+same change is not made again.
 
 ## Alert rules
 
@@ -291,7 +336,7 @@ case. The outcome of a rule is `outcome = "ignore"`, or `outcome = "open"` with:
 | `priority` | required | The ticket's priority: `low`, `normal`, `high` or `urgent`. |
 | `service` | none | A service, by name, which the ticket links when the customer uses it. |
 | `on_recovery` | `resolve_if_not_worked_on` | When the alert's problem recovers in Zabbix: a note, and resolving the ticket only when no agent has worked on it; `resolve`, a note and resolving it in any case; or `note`, a note and never resolving it. |
-| `close_in_zabbix` | `false` | Whether the add-on closes the problem in Zabbix when an agent resolves the ticket, if the trigger allows closing it by hand. |
+| `close_in_zabbix` | `false` | Whether the add-on closes the problem in Zabbix when an agent resolves or closes the ticket, if the trigger allows closing it by hand ([back to Zabbix](#back-to-zabbix)). |
 
 A rule may have a `name`, which the sentences about it and `check` show beside its position.
 
@@ -351,7 +396,7 @@ not imported, it says which rule would match once the host is an asset of a cust
 ```text
 Host "SRV-01", in the host group "Brightfield/Offices": an asset of Brightfield.
 Alert: Zabbix's event 4213, severity high, trigger "Mail queue of SRV-01 is too long", the tags "service=mail" and "site=north".
-Rule 2 ("Mail at Brightfield") matches: a ticket opened with priority high, linking the service "Hosted mail" when the customer uses it; on recovery, a note, and the ticket resolved only when no agent has worked on it; once an agent resolves the ticket, the problem left open in Zabbix.
+Rule 2 ("Mail at Brightfield") matches: a ticket opened with priority high, linking the service "Hosted mail" when the customer uses it; on recovery, a note, and the ticket resolved only when no agent has worked on it; once an agent resolves or closes the ticket, the problem left open in Zabbix.
 ```
 
 ## Development
@@ -387,3 +432,10 @@ host for the server. With Podman on Windows or macOS that name reaches the machi
 machine, not the host where the test runs: give the host's address as the virtual machine sees
 it, such as the address after `default via` in `podman machine ssh ip route` with WSL, and
 allow the test's binary through the host's firewall if it asks.
+
+The tests of what goes back to Zabbix register the add-on with `ticket.state_changed` at the
+webhook's port, where they serve its events too, resolve and close tickets as the core's
+administrator and read the acknowledgements and the problems in Zabbix; one imports the media
+type, as the tests of alerts do, to read the event menu's entry and to let Zabbix send the
+add-on's acknowledgement and close back to it. With `HD_TEST_ZABBIX_WEBHOOK_LISTEN` on a fixed
+port, run them one at a time (`-- --ignored --test-threads=1`).

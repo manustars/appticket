@@ -76,23 +76,33 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("listening on {}", config.listen))?;
     tracing::info!(listen = %config.listen, "answering the core's reads of live details");
-    let mut app = details::router(Arc::new(details), Verifier::new(event_secret));
+    let verifier = Verifier::new(event_secret);
+    let mut app = details::router(Arc::new(details), verifier.clone());
     match &config.webhook_secret {
         Some(secret) => {
-            let alerts = Alerts::new(
-                Client::new(&config.core_url, &config.core_token)?,
-                Zabbix::new(&config.zabbix_url, &config.zabbix_token, webhook::DEADLINE)?,
-                config.system.clone(),
-                config.rules.clone(),
+            let alerts = Arc::new(
+                Alerts::new(
+                    Client::new(&config.core_url, &config.core_token)?,
+                    Zabbix::new(&config.zabbix_url, &config.zabbix_token, webhook::DEADLINE)?,
+                    config.system.clone(),
+                    config.rules.clone(),
+                )
+                .with_ui_url(&config.ui_url),
             );
-            app = app.merge(webhook::router(Arc::new(alerts), secret.clone()));
+            app = app
+                .merge(webhook::router(alerts.clone(), secret.clone()))
+                // What agents do to the tickets of problems goes back to Zabbix.
+                .merge(webhook::back::router(alerts, verifier));
             tracing::info!(listen = %config.listen, path = webhook::PATH,
                 "receiving Zabbix's alerts through its webhook");
         }
-        None => tracing::warn!(
-            "no [webhook] in the configuration: Zabbix's alerts are not received, and open no \
-             tickets"
-        ),
+        None => {
+            app = app.merge(webhook::back::ignoring(verifier));
+            tracing::warn!(
+                "no [webhook] in the configuration: Zabbix's alerts are not received, and open \
+                 no tickets"
+            );
+        }
     }
     // It stops when told to, after the rounds: ending before then is a failure.
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();

@@ -58,7 +58,10 @@ zabbix_export:
         
       timeout: 30s
       process_tags: 'YES'
-      description: 'Sends the problem, recovery and update events of triggers to the help desk''s Zabbix add-on, which opens and updates tickets by its rules and answers the ticket''s number in the tag hd_ticket. Set url to the add-on''s webhook and the global macro {$HD_WEBHOOK_SECRET} (of type Secret text) to the webhook''s secret.'
+      show_event_menu: 'YES'
+      event_menu_url: '{EVENT.TAGS.hd_ticket_url}'
+      event_menu_name: 'Help desk ticket {EVENT.TAGS.hd_ticket}'
+      description: 'Sends the problem, recovery and update events of triggers to the help desk''s Zabbix add-on, which opens and updates tickets by its rules and answers the ticket''s number in the tag hd_ticket and the address of its page in hd_ticket_url, which the event menu''s entry opens. Set url to the add-on''s webhook and the global macro {$HD_WEBHOOK_SECRET} (of type Secret text) to the webhook''s secret.'
       message_templates:
         - event_source: TRIGGERS
           operation_mode: PROBLEM

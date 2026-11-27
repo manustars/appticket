@@ -146,8 +146,8 @@ async fn check_tells_the_rule_an_alert_of_zabbix_meets_by_event_id_or_by_its_fie
              long\", the tags \"component=queue\", \"service=mail\" and \"site=north\".\n\
              Rule 2 (\"Mail\") matches: a ticket opened with priority high, linking the service \
              \"Hosted mail\" when the customer uses it; on recovery, a note, and the ticket \
-             resolved only when no agent has worked on it; once an agent resolves the ticket, \
-             the problem left open in Zabbix.\n",
+             resolved only when no agent has worked on it; once an agent resolves or closes the \
+             ticket, the problem left open in Zabbix.\n",
             p("Brightfield/Offices")
         )
     );

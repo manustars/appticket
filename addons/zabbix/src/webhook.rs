@@ -1,7 +1,10 @@
 //! The add-on's webhook, where Zabbix's media type (`zabbix-media-type.yaml`) sends the problem,
 //! recovery and update events of triggers, with the webhook's secret in `Authorization: Bearer`.
 //! The add-on acts on each within the request and answers the tags Zabbix adds to the problem:
-//! `hd_ticket` with the number of the ticket a problem opened.
+//! `hd_ticket` with the number of the ticket a problem opened, and `hd_ticket_url` with the
+//! address of its page in the help desk's UI, which the media type's event menu entry opens.
+
+pub mod back;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -19,14 +22,14 @@ use serde::Serialize;
 use tokio::sync::OnceCell;
 
 use crate::alerts::{
-    EventKind, Opening, Payload, Service, TICKET_TAG, Update, new_ticket, recovery_note, resolves,
-    update_note,
+    EventKind, Opening, Payload, Service, TICKET_TAG, TICKET_URL_TAG, Update, new_ticket,
+    recovery_note, resolves, ticket_url, update_note,
 };
 use crate::coverage::Covered;
 use crate::rules::{Alert, Matched, OpenTicket, Outcome, Recovery, Rules};
 use crate::sync;
 use crate::text::same;
-use crate::zabbix::{Event, HostWithGroups, Zabbix};
+use crate::zabbix::{Event, HostWithGroups, OwnUser, Zabbix};
 
 /// Where Zabbix's media type sends its events, on `addon.listen`.
 pub const PATH: &str = "/webhook";
@@ -56,10 +59,13 @@ pub struct Answer {
 }
 
 impl Answer {
-    fn ticket(number: i64) -> Answer {
-        Answer {
-            tags: BTreeMap::from([(TICKET_TAG.to_owned(), number.to_string())]),
+    /// The ticket's number and, with the UI's base URL, the address of its page.
+    fn ticket(number: i64, ui_url: Option<&str>) -> Answer {
+        let mut tags = BTreeMap::from([(TICKET_TAG.to_owned(), number.to_string())]);
+        if let Some(ui_url) = ui_url {
+            tags.insert(TICKET_URL_TAG.to_owned(), ticket_url(ui_url, number));
         }
+        Answer { tags }
     }
 }
 
@@ -70,8 +76,10 @@ pub struct Alerts {
     /// The system's name as external references name it.
     system: String,
     rules: Rules,
-    /// The username of the add-on's own Zabbix user, asked once.
-    own_username: OnceCell<String>,
+    /// The add-on's own Zabbix user, asked once.
+    own_user: OnceCell<OwnUser>,
+    /// The base URL of the help desk's UI, for the address of a ticket's page.
+    ui_url: Option<String>,
 }
 
 impl std::fmt::Debug for Alerts {
@@ -90,8 +98,24 @@ impl Alerts {
             zabbix,
             system: system.into(),
             rules,
-            own_username: OnceCell::new(),
+            own_user: OnceCell::new(),
+            ui_url: None,
         }
+    }
+
+    /// With the base URL of the help desk's UI, such as `https://helpdesk.example.com`: a
+    /// problem's answer also gives the address of its ticket's page, in the tag `hd_ticket_url`.
+    pub fn with_ui_url(mut self, ui_url: &str) -> Alerts {
+        self.ui_url = Some(ui_url.trim_end_matches('/').to_owned());
+        self
+    }
+
+    /// The add-on's own Zabbix user, asked once.
+    async fn own_user(&self) -> anyhow::Result<&OwnUser> {
+        self.own_user
+            .get_or_try_init(|| self.zabbix.own_user())
+            .await
+            .context("asking Zabbix who the add-on's user is")
     }
 
     /// Acts on one event and answers the tags for Zabbix.
@@ -209,7 +233,7 @@ impl Alerts {
             self.recover(opened.number, &event, open.on_recovery)
                 .await?;
         }
-        Ok(Answer::ticket(opened.number))
+        Ok(Answer::ticket(opened.number, self.ui_url.as_deref()))
     }
 
     /// The ticket the add-on opened for the problem with this event id; none when it opened none.
@@ -246,17 +270,18 @@ impl Alerts {
     }
 
     /// The recovery of the problem `event`, whose ticket is `number`: a note with its time, then
-    /// resolving the ticket as `on_recovery` says, reading it just before.
+    /// resolving the ticket as `on_recovery` says, reading it just before; nothing when the
+    /// add-on itself closed the problem.
     async fn recover(
         &self,
         number: i64,
         event: &Event,
         on_recovery: Recovery,
     ) -> anyhow::Result<()> {
-        let recovered_at = match &event.recovery_id {
+        let recovery = match &event.recovery_id {
             None => None,
-            Some(recovery) => match self.zabbix.event_clock(recovery).await {
-                Ok(clock) => Some(clock),
+            Some(recovery) => match self.zabbix.recovery_event(recovery).await {
+                Ok(recovery) => Some(recovery),
                 Err(e) => {
                     tracing::warn!(event = %event.id, recovery = %recovery,
                         error = format!("{e:#}"),
@@ -265,6 +290,16 @@ impl Alerts {
                 }
             },
         };
+        // The add-on itself closed the problem, since an agent resolved or closed its ticket:
+        // nothing to note, and a ticket the agent reopened since stays open.
+        if let Some(closed_by) = recovery.as_ref().and_then(|r| r.closed_by.as_deref())
+            && closed_by == self.own_user().await?.id
+        {
+            tracing::info!(event = %event.id, ticket = number,
+                "the add-on closed the problem in Zabbix: the ticket is left as it is");
+            return Ok(());
+        }
+        let recovered_at = recovery.map(|r| r.clock);
         self.core
             .add_note(number, &recovery_note(recovered_at))
             .await
@@ -296,12 +331,8 @@ impl Alerts {
             tracing::debug!(event = %id, "an update without a message: no note");
             return Ok(());
         }
-        let own = self
-            .own_username
-            .get_or_try_init(|| self.zabbix.username())
-            .await
-            .context("asking Zabbix who the add-on's user is")?;
-        let Some(note) = update_note(update, own) else {
+        let own = self.own_user().await?;
+        let Some(note) = update_note(update, &own.username) else {
             tracing::debug!(event = %id, "an update of the add-on's own user: no note");
             return Ok(());
         };

@@ -96,6 +96,39 @@ struct RawHost {
     inventory: Value,
 }
 
+/// Zabbix answering a call with an error, such as a method the user may not call: Zabbix
+/// answered, and said no.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused {
+    pub method: String,
+    pub message: String,
+    pub data: String,
+    pub code: i64,
+}
+
+impl Refused {
+    /// Why Zabbix refused, as it says it, such as `Cannot close problem: trigger does not allow
+    /// manual closing.`
+    pub fn reason(&self) -> String {
+        match self.data.trim() {
+            "" => self.message.clone(),
+            data => data.to_owned(),
+        }
+    }
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Zabbix refused {}: {} {} ({})",
+            self.method, self.message, self.data, self.code
+        )
+    }
+}
+
+impl std::error::Error for Refused {}
+
 impl Zabbix {
     /// The API of the Zabbix whose frontend is at `url` (such as `https://zabbix.example.com`),
     /// each call taking at most `timeout`.
@@ -138,12 +171,13 @@ impl Zabbix {
             .await
             .with_context(|| format!("reading Zabbix's answer to {method}"))?;
         match (answer.error, answer.result) {
-            (Some(e), _) => bail!(
-                "Zabbix refused {method}: {} {} ({})",
-                e.message,
-                e.data,
-                e.code
-            ),
+            (Some(e), _) => Err(Refused {
+                method: method.to_owned(),
+                message: e.message,
+                data: e.data,
+                code: e.code,
+            }
+            .into()),
             (None, Some(result)) => serde_json::from_value(result)
                 .with_context(|| format!("reading Zabbix's answer to {method}")),
             (None, None) => bail!("Zabbix answered {method} with neither result nor error"),
@@ -255,6 +289,37 @@ pub struct Event {
     pub recovery_id: Option<String>,
 }
 
+/// The recovery event of a problem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryEvent {
+    /// When it happened, in seconds since the Unix epoch.
+    pub clock: i64,
+    /// The id of the user who closed the problem by hand; none when it recovered by itself.
+    pub closed_by: Option<String>,
+}
+
+/// The Zabbix user the add-on calls Zabbix as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnUser {
+    pub id: String,
+    pub username: String,
+}
+
+/// An update a user made of a problem, as `event.acknowledge` makes them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Acknowledgement {
+    pub user_id: String,
+    /// When it was made, in seconds since the Unix epoch.
+    pub clock: i64,
+    /// Empty when it has none.
+    pub message: String,
+}
+
+/// The bits of `event.acknowledge`'s `action`.
+const CLOSE: u32 = 1;
+const ACKNOWLEDGE: u32 = 2;
+const ADD_MESSAGE: u32 = 4;
+
 /// A host by its visible name, with its host groups.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostWithGroups {
@@ -341,6 +406,17 @@ impl From<RawHost> for HostWithGroups {
 impl Zabbix {
     /// The problem event of a trigger with this id.
     pub async fn problem_event(&self, id: &str) -> anyhow::Result<Event> {
+        match self.find_problem_event(id).await? {
+            Some(event) => Ok(event),
+            None => bail!(
+                "Zabbix has no event {id} of a trigger's problem that the add-on's user can read"
+            ),
+        }
+    }
+
+    /// The problem event of a trigger with this id; none when Zabbix has none that the add-on's
+    /// user can read, such as one its housekeeper removed.
+    pub async fn find_problem_event(&self, id: &str) -> anyhow::Result<Option<Event>> {
         // event.get answers the events of triggers only, unless asked for another source.
         let events: Vec<RawEvent> = self
             .call(
@@ -354,38 +430,43 @@ impl Zabbix {
                 }),
             )
             .await?;
-        match events.into_iter().next() {
-            Some(event) => event.read(),
-            None => bail!(
-                "Zabbix has no event {id} of a trigger's problem that the add-on's user can read"
-            ),
-        }
+        events.into_iter().next().map(RawEvent::read).transpose()
     }
 
-    /// When the event with this id happened, in seconds since the Unix epoch, such as a
-    /// problem's recovery event.
-    pub async fn event_clock(&self, id: &str) -> anyhow::Result<i64> {
+    /// The recovery event of a problem with this id: when it happened and, for a problem closed
+    /// by hand, who closed it.
+    pub async fn recovery_event(&self, id: &str) -> anyhow::Result<RecoveryEvent> {
         #[derive(Deserialize)]
-        struct Clock {
+        struct Raw {
             clock: String,
+            #[serde(default)]
+            userid: String,
         }
-        let events: Vec<Clock> = self
-            .call("event.get", json!({"eventids": [id], "output": ["clock"]}))
+        let events: Vec<Raw> = self
+            .call(
+                "event.get",
+                json!({"eventids": [id], "output": ["clock", "userid"]}),
+            )
             .await?;
-        let clock = events
+        let Raw { clock, userid } = events
             .into_iter()
             .next()
-            .with_context(|| format!("Zabbix has no event {id} that the add-on's user can read"))?
-            .clock;
-        clock
-            .parse()
-            .with_context(|| format!("Zabbix's event {id} happened at {clock:?}, which is no time"))
+            .with_context(|| format!("Zabbix has no event {id} that the add-on's user can read"))?;
+        let clock = clock.parse().with_context(|| {
+            format!("Zabbix's event {id} happened at {clock:?}, which is no time")
+        })?;
+        Ok(RecoveryEvent {
+            clock,
+            // 0 when the trigger's expression recovered it rather than a user.
+            closed_by: Some(userid).filter(|id| !id.is_empty() && id != "0"),
+        })
     }
 
-    /// The username of the Zabbix user whose API token the add-on calls Zabbix with.
-    pub async fn username(&self) -> anyhow::Result<String> {
+    /// The Zabbix user whose API token the add-on calls Zabbix with.
+    pub async fn own_user(&self) -> anyhow::Result<OwnUser> {
         #[derive(Deserialize)]
         struct User {
+            userid: String,
             username: String,
         }
         // Zabbix answers it only to a call without a token in the header.
@@ -396,7 +477,86 @@ impl Zabbix {
                 false,
             )
             .await?;
-        Ok(user.username)
+        Ok(OwnUser {
+            id: user.userid,
+            username: user.username,
+        })
+    }
+
+    /// Whether the trigger of the problem event with this id allows closing its problems by hand
+    /// (its `manual_close`).
+    pub async fn allows_manual_close(&self, event: &str) -> anyhow::Result<bool> {
+        #[derive(Deserialize)]
+        struct Trigger {
+            manual_close: String,
+        }
+        #[derive(Deserialize)]
+        struct Related {
+            #[serde(rename = "relatedObject")]
+            related: Trigger,
+        }
+        let events: Vec<Related> = self
+            .call(
+                "event.get",
+                json!({"eventids": [event], "output": ["eventid"],
+                       "selectRelatedObject": ["triggerid", "manual_close"]}),
+            )
+            .await?;
+        let event = events.into_iter().next().with_context(|| {
+            format!("Zabbix has no event {event} that the add-on's user can read")
+        })?;
+        Ok(event.related.manual_close == "1")
+    }
+
+    /// The updates users made of the problem event with this id, such as acknowledgements,
+    /// oldest first.
+    pub async fn acknowledgements(&self, event: &str) -> anyhow::Result<Vec<Acknowledgement>> {
+        #[derive(Deserialize)]
+        struct Raw {
+            userid: String,
+            clock: String,
+            #[serde(default)]
+            message: String,
+        }
+        #[derive(Deserialize)]
+        struct WithAcknowledges {
+            #[serde(default)]
+            acknowledges: Vec<Raw>,
+        }
+        let events: Vec<WithAcknowledges> = self
+            .call(
+                "event.get",
+                json!({"eventids": [event], "output": ["eventid"],
+                       "selectAcknowledges": ["userid", "clock", "message"]}),
+            )
+            .await?;
+        let mut made: Vec<Acknowledgement> = events
+            .into_iter()
+            .flat_map(|e| e.acknowledges)
+            .map(|a| Acknowledgement {
+                user_id: a.userid,
+                clock: a.clock.parse().unwrap_or_default(),
+                message: a.message,
+            })
+            .collect();
+        made.sort_by_key(|a| a.clock);
+        Ok(made)
+    }
+
+    /// Acknowledges the problem event with this id with `message`, closing the problem when
+    /// `close` says so, which its trigger must allow.
+    pub async fn acknowledge(&self, event: &str, close: bool, message: &str) -> anyhow::Result<()> {
+        let mut action = ACKNOWLEDGE | ADD_MESSAGE;
+        if close {
+            action |= CLOSE;
+        }
+        let _: Value = self
+            .call(
+                "event.acknowledge",
+                json!({"eventids": [event], "action": action, "message": message}),
+            )
+            .await?;
+        Ok(())
     }
 
     /// The hosts that `filter` selects, such as `{"hostids": [...]}`, with their groups.
