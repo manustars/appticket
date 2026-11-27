@@ -37,6 +37,20 @@ async fn fake_core() -> (String, Seen) {
             post({
                 let seen = seen.clone();
                 move |Json(body): Json<Value>| async move {
+                    if body["reference"] == "host-9" {
+                        // Agents accepted its link proposal: the reference reaches the asset
+                        // another add-on supplies.
+                        return (
+                            StatusCode::OK,
+                            Json(json!({"id": HAND_MADE, "customer_id": CUSTOMER,
+                                "customer_name": "Brightfield",
+                                "kind_id": "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+                                "kind": "Laptop", "name": "PC-0001", "serial_number": null,
+                                "site": null, "source_addon": "netscope",
+                                "reference": "host-9", "linked_addons": ["watchtower"],
+                                "retired_at": null})),
+                        );
+                    }
                     if body["reference"] == "host-7" {
                         // The customer has an asset with that serial number already.
                         return (
@@ -87,6 +101,18 @@ async fn fake_core() -> (String, Seen) {
                     seen.lock()
                         .unwrap()
                         .push((format!("retire {id}"), Value::Null));
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        )
+        .route(
+            "/api/addon/assets/{id}/unlink",
+            post({
+                let seen = seen.clone();
+                move |Path(id): Path<String>| async move {
+                    seen.lock()
+                        .unwrap()
+                        .push((format!("unlink {id}"), Value::Null));
                     StatusCode::NO_CONTENT
                 }
             }),
@@ -209,6 +235,58 @@ async fn an_asset_matching_one_the_customer_has_comes_back_as_a_link_proposal() 
         )
     );
     assert!(seen.lock().unwrap().is_empty(), "no asset was created");
+}
+
+#[tokio::test]
+async fn a_linked_addon_reaches_the_asset_by_its_reference_and_unlinks_itself() {
+    let (url, seen) = fake_core().await;
+    let client = Client::new(&url, "token-of-the-test-addon").unwrap();
+    let asset = SuppliedAsset {
+        reference: "host-9".into(),
+        customer_id: Uuid::parse_str(CUSTOMER).unwrap(),
+        details: SuppliedDetails {
+            name: "PC-0001".into(),
+            serial_number: None,
+            site: None,
+            ..laptop()
+        },
+    };
+
+    let Supplied::Asset {
+        asset: reached,
+        created: false,
+    } = client.supply_asset(&asset).await.unwrap()
+    else {
+        panic!("200: the linked asset");
+    };
+    assert_eq!(
+        (
+            reached.id,
+            reached.source_addon.as_deref(),
+            reached.reference.as_deref(),
+            reached.linked_addons.as_slice()
+        ),
+        (
+            Uuid::parse_str(HAND_MADE).unwrap(),
+            Some("netscope"),
+            Some("host-9"),
+            ["watchtower".to_owned()].as_slice()
+        ),
+        "another add-on's asset, known by its own reference"
+    );
+    client.unlink_asset(reached.id).await.unwrap();
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        [(format!("unlink {HAND_MADE}"), Value::Null)]
+    );
+}
+
+#[tokio::test]
+async fn an_asset_from_a_core_without_linked_addons_has_none() {
+    let asset: hd_addon_sdk::api::Asset = serde_json::from_value(json!({"id": ASSET,
+        "customer_id": CUSTOMER, "kind": "Laptop", "name": "PC-0042"}))
+    .unwrap();
+    assert!(asset.linked_addons.is_empty());
 }
 
 #[tokio::test]

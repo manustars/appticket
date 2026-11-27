@@ -114,6 +114,7 @@ sentence saying which scope is missing.
 | `POST /api/addon/assets` | `catalog:write` | Creates an asset of a customer known by the add-on's reference, or updates the one the add-on supplied with that reference; proposes a link instead when the customer already has a matching asset. |
 | `PUT /api/addon/assets/{id}` | `catalog:write` | Updates an asset the add-on is the source of. |
 | `POST /api/addon/assets/{id}/retire` | `catalog:write` | Retires an asset the add-on is the source of. |
+| `POST /api/addon/assets/{id}/unlink` | `catalog:write` | Unlinks the add-on from an asset it is linked to, which stays as it was. |
 | `POST /api/addon/tickets` | `tickets:write` | Opens a ticket without a requester for a customer. |
 | `POST /api/addon/tickets/{number}/notes` | `tickets:write` | Adds an internal note to a ticket. |
 
@@ -126,9 +127,11 @@ written on it; `last_picked` is then the address an agent picked for the last re
 
 An asset, in a customer's asset list, has its `kind` (a name from the help desk's list of asset
 kinds) and `name`, its `serial_number` and its own `site` (`{"id", "name"}`, one of its customer's
-sites) when it has them, and `source_addon`, the add-on it came from, if any, with `reference`,
-the add-on's own reference for it, when the add-on reading it is that source. Add-ons are not told
-its holder, the requester it has been given to, nor the site it is at through them.
+sites) when it has them, `source_addon`, the add-on it came from, if any, and `linked_addons`, the
+names of the other add-ons linked to it (see [Linked add-ons](#linked-add-ons)), with
+`reference`, the add-on's own reference for it, when the add-on reading it is its source or linked
+to it; another add-on's reference is not given. Add-ons are not told its holder, the requester it
+has been given to, nor the site it is at through them.
 
 A customer's `external_references` are the names other systems use for it, each a `system` and a
 `name` in it, such as a group in a monitoring tool: `[{"system": "Watchtower", "name":
@@ -200,9 +203,32 @@ second one. It records a link proposal, that the add-on's asset is that existing
   compare what the add-on sends now. It stays open, proposing the same asset, even when that asset
   was renamed or retired meanwhile: an agent decides. The reference stays with its customer
   meanwhile: sending it for another customer is refused (409).
-- Agents who manage the catalog see the proposal on the customer's assets and discard it; once
-  discarded, the add-on's next attempt with that reference creates its own asset (201), and later
-  ones update it as usual. Updating an asset by its id (`PUT`) never proposes a link.
+- Agents who manage the catalog see the proposal on the customer's assets and accept or discard
+  it. Once discarded, the add-on's next attempt with that reference creates its own asset (201),
+  and later ones update it as usual. Once accepted, the add-on is linked to the asset that matched,
+  with that reference (see below). Updating an asset by its id (`PUT`) never proposes a link.
+- An asset the add-on is linked to matches none of its other references, as its own assets do not.
+  Agents cannot accept a proposal on an asset retired meanwhile, nor a second proposal of the same
+  add-on on an asset it is already linked to; they discard it instead.
+
+### Linked add-ons
+
+An asset has at most one source and can be linked to any number of other add-ons, each with its
+own reference to it, such as a server one integration monitors and another reaches remotely. A
+linked add-on changes nothing of the asset: it only supplies live details and links.
+
+- From then on the add-on's reference reaches the linked asset. `POST /api/addon/assets` with it
+  answers 200 with the asset, changing nothing, when it sends what the asset has (its kind, name,
+  serial number and site); any change to them is refused (409), and so is a change sent with
+  `PUT /api/addon/assets/{id}`. It never brings back a retired asset: only its source does. So an
+  add-on resending its whole inventory should leave out the assets it is linked to, which it
+  recognises in a customer's asset list by its `reference` when it is not their `source_addon`.
+- `POST /api/addon/assets/{id}/retire` is refused (409) to a linked add-on. When the asset leaves
+  its system it unlinks itself with `POST /api/addon/assets/{id}/unlink` (204, also when it is no
+  longer linked): the asset stays as it was, and the reference no longer reaches it. The asset's
+  source is refused (409), and so is an asset of an offboarded customer.
+- After unlinking, the add-on's next attempt with that reference is treated as new: when the asset
+  still matches, the core records a new link proposal for the agents.
 
 ### Proposals
 
