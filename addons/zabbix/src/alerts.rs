@@ -4,7 +4,7 @@
 //! recovery adds a note and resolves the ticket as the rule says; an update with a message from a
 //! Zabbix user other than the add-on's own adds a note.
 
-use hd_addon_sdk::api::TicketState;
+use hd_addon_sdk::api::{Customer, TicketState};
 use hd_addon_sdk::{NewTicket, api::Priority};
 use serde::Deserialize;
 use uuid::Uuid;
@@ -40,30 +40,30 @@ pub struct Payload {
     pub message: String,
 }
 
-/// An event of a trigger's problem, as the add-on acts on it.
+/// Which of Zabbix's events of a trigger's problem the media type sent, with the problem's event
+/// id: the problem, its recovery or an update of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Notice {
-    Problem {
-        event: String,
-    },
-    Recovery {
-        event: String,
-    },
-    Update {
-        event: String,
-        /// Who made it, as Zabbix names them; none when Zabbix did not say.
-        user: Option<String>,
-        /// What it did; none when Zabbix did not say.
-        action: Option<String>,
-        /// Its message; none when it has none.
-        message: Option<String>,
-    },
+pub enum EventKind {
+    Problem { event: String },
+    Recovery { event: String },
+    Update { event: String, update: Update },
 }
 
-impl Notice {
-    /// The notice a payload gives; none for an event that is not a trigger's, which opens no
+/// An update of a problem in Zabbix, such as an acknowledgement with a comment.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Update {
+    /// Who made it, as `{USER.FULLNAME}` names them; none when Zabbix did not say.
+    pub user: Option<String>,
+    /// What it did, such as `acknowledged and commented`; none when Zabbix did not say.
+    pub action: Option<String>,
+    /// Its message; none when it has none.
+    pub message: Option<String>,
+}
+
+impl EventKind {
+    /// The event a payload gives; none for an event that is not a trigger's, which opens no
     /// ticket. A payload that is no event of Zabbix's is refused with a sentence.
-    pub fn read(payload: &Payload) -> Result<Option<Notice>, String> {
+    pub fn read(payload: &Payload) -> Result<Option<EventKind>, String> {
         match resolved(&payload.event_source) {
             Some(TRIGGER_SOURCE) => {}
             Some(_) => return Ok(None),
@@ -82,16 +82,18 @@ impl Notice {
         }
         let event = event.to_owned();
         if resolved(&payload.event_update_status) == Some("1") {
-            return Ok(Some(Notice::Update {
+            return Ok(Some(EventKind::Update {
                 event,
-                user: resolved(&payload.user).map(str::to_owned),
-                action: resolved(&payload.action).map(str::to_owned),
-                message: resolved(&payload.message).map(str::to_owned),
+                update: Update {
+                    user: resolved(&payload.user).map(str::to_owned),
+                    action: resolved(&payload.action).map(str::to_owned),
+                    message: resolved(&payload.message).map(str::to_owned),
+                },
             }));
         }
         match resolved(&payload.event_value) {
-            Some("1") => Ok(Some(Notice::Problem { event })),
-            Some("0") => Ok(Some(Notice::Recovery { event })),
+            Some("1") => Ok(Some(EventKind::Problem { event })),
+            Some("0") => Ok(Some(EventKind::Recovery { event })),
             _ => Err(format!(
                 "the event's value {:?} is neither 1, a problem, nor 0, a recovery: send \
                  {{EVENT.VALUE}} as event_value",
@@ -125,18 +127,14 @@ pub fn made_by(user: &str, username: &str) -> bool {
 
 /// The note an update adds: none without a message, or when the add-on's own Zabbix user,
 /// `own_username`, made it.
-pub fn update_note(
-    user: Option<&str>,
-    action: Option<&str>,
-    message: Option<&str>,
-    own_username: &str,
-) -> Option<String> {
-    let message = message?;
+pub fn update_note(update: &Update, own_username: &str) -> Option<String> {
+    let message = update.message.as_deref()?;
+    let user = update.user.as_deref();
     if user.is_some_and(|user| made_by(user, own_username)) {
         return None;
     }
     let who = user.unwrap_or("A Zabbix user");
-    Some(match action {
+    Some(match update.action.as_deref() {
         Some(action) => format!("{who} updated the problem in Zabbix ({action}): {message}"),
         None => format!("{who} updated the problem in Zabbix: {message}"),
     })
@@ -188,8 +186,8 @@ pub enum Service {
 pub struct Opening<'a> {
     pub event: &'a Event,
     pub host: &'a HostWithGroups,
-    pub customer: Uuid,
-    pub customer_name: &'a str,
+    /// The customer whose asset the host is.
+    pub customer: &'a Customer,
     /// The asset of the host for the customer; none when the catalog does not have it yet.
     pub asset: Option<Uuid>,
     pub rule: &'a Matched<'a>,
@@ -206,7 +204,6 @@ pub fn new_ticket(opening: &Opening<'_>) -> NewTicket {
         event,
         host,
         customer,
-        customer_name,
         asset,
         rule,
         priority,
@@ -249,18 +246,19 @@ pub fn new_ticket(opening: &Opening<'_>) -> NewTicket {
     ];
     if let Service::NotUsed(name) = service {
         lines.push(format!(
-            "The rule links the service {name:?}, which {customer_name} does not use: the ticket \
-             links no service."
+            "The rule links the service {name:?}, which {} does not use: the ticket \
+             links no service.",
+            customer.name
         ));
     }
     if asset.is_none() {
         lines.push(format!(
-            "The catalog has no asset of {} for {customer_name} yet: the ticket links no asset.",
-            host.name
+            "The catalog has no asset of {} for {} yet: the ticket links no asset.",
+            host.name, customer.name
         ));
     }
     NewTicket {
-        customer_id: *customer,
+        customer_id: customer.id,
         title: format!("{}: {}", host.name, event.name),
         description: Some(lines.join("\n")),
         priority: Some(*priority),
@@ -292,28 +290,30 @@ mod tests {
             "event_source": "0", "user": "{USER.FULLNAME}",
             "action": "{EVENT.UPDATE.ACTION}", "message": "{EVENT.UPDATE.MESSAGE}"}));
         assert_eq!(
-            Notice::read(&problem),
-            Ok(Some(Notice::Problem { event: "26".into() }))
+            EventKind::read(&problem),
+            Ok(Some(EventKind::Problem { event: "26".into() }))
         );
         let recovery = Payload {
             event_value: "0".into(),
             ..problem.clone()
         };
         assert_eq!(
-            Notice::read(&recovery),
-            Ok(Some(Notice::Recovery { event: "26".into() }))
+            EventKind::read(&recovery),
+            Ok(Some(EventKind::Recovery { event: "26".into() }))
         );
         let update = payload(serde_json::json!({
             "event_id": "26", "event_value": "1", "event_update_status": "1",
             "event_source": "0", "user": "Olga Operator (olga)",
             "action": "acknowledged and commented", "message": " Looking at it "}));
         assert_eq!(
-            Notice::read(&update),
-            Ok(Some(Notice::Update {
+            EventKind::read(&update),
+            Ok(Some(EventKind::Update {
                 event: "26".into(),
-                user: Some("Olga Operator (olga)".into()),
-                action: Some("acknowledged and commented".into()),
-                message: Some("Looking at it".into()),
+                update: Update {
+                    user: Some("Olga Operator (olga)".into()),
+                    action: Some("acknowledged and commented".into()),
+                    message: Some("Looking at it".into()),
+                },
             }))
         );
         // An update of a problem that has recovered is still an update.
@@ -323,12 +323,14 @@ mod tests {
             ..update.clone()
         };
         assert_eq!(
-            Notice::read(&late),
-            Ok(Some(Notice::Update {
+            EventKind::read(&late),
+            Ok(Some(EventKind::Update {
                 event: "26".into(),
-                user: Some("Olga Operator (olga)".into()),
-                action: Some("acknowledged and commented".into()),
-                message: None,
+                update: Update {
+                    user: Some("Olga Operator (olga)".into()),
+                    action: Some("acknowledged and commented".into()),
+                    message: None,
+                },
             }))
         );
     }
@@ -344,7 +346,7 @@ mod tests {
                 event_source: source.into(),
                 ..problem.clone()
             };
-            assert_eq!(Notice::read(&other), Ok(None), "{source}");
+            assert_eq!(EventKind::read(&other), Ok(None), "{source}");
         }
         for (change, sentence) in [
             (
@@ -378,7 +380,7 @@ mod tests {
                  event_source",
             ),
         ] {
-            assert_eq!(Notice::read(&change), Err(sentence.to_owned()));
+            assert_eq!(EventKind::read(&change), Err(sentence.to_owned()));
         }
     }
 
@@ -397,11 +399,18 @@ mod tests {
 
     #[test]
     fn an_update_with_a_message_adds_a_note_unless_the_add_on_made_it() {
+        let update = |user: Option<&str>, action: Option<&str>, message: Option<&str>| Update {
+            user: user.map(str::to_owned),
+            action: action.map(str::to_owned),
+            message: message.map(str::to_owned),
+        };
         assert_eq!(
             update_note(
-                Some("Olga Operator (olga)"),
-                Some("acknowledged and commented"),
-                Some("Looking at it"),
+                &update(
+                    Some("Olga Operator (olga)"),
+                    Some("acknowledged and commented"),
+                    Some("Looking at it")
+                ),
                 "hd-addon"
             )
             .as_deref(),
@@ -411,14 +420,12 @@ mod tests {
             )
         );
         assert_eq!(
-            update_note(None, None, Some("Rebooted"), "hd-addon").as_deref(),
+            update_note(&update(None, None, Some("Rebooted")), "hd-addon").as_deref(),
             Some("A Zabbix user updated the problem in Zabbix: Rebooted")
         );
         assert_eq!(
             update_note(
-                Some("Olga Operator (olga)"),
-                Some("acknowledged"),
-                None,
+                &update(Some("Olga Operator (olga)"), Some("acknowledged"), None),
                 "hd-addon"
             ),
             None,
@@ -426,9 +433,11 @@ mod tests {
         );
         assert_eq!(
             update_note(
-                Some("Help desk (hd-addon)"),
-                Some("commented"),
-                Some("Ticket 42 resolved"),
+                &update(
+                    Some("Help desk (hd-addon)"),
+                    Some("commented"),
+                    Some("Ticket 42 resolved")
+                ),
                 "hd-addon"
             ),
             None,
@@ -521,7 +530,14 @@ mod tests {
 
     #[test]
     fn a_problem_s_ticket_has_the_customer_asset_priority_service_title_and_description() {
-        let customer = Uuid::from_u128(1);
+        let brightfield = Customer {
+            id: Uuid::from_u128(1),
+            name: "Brightfield".into(),
+            is_help_desk: false,
+            domains: vec![],
+            external_references: vec![],
+        };
+        let customer = brightfield.id;
         let asset = Uuid::from_u128(2);
         let service = Uuid::from_u128(3);
         let rule = open_rule(Some("Mail"));
@@ -534,8 +550,7 @@ mod tests {
         let opening = Opening {
             event: &event,
             host: &host,
-            customer,
-            customer_name: "Brightfield",
+            customer: &brightfield,
             asset: Some(asset),
             rule: &matched,
             priority: Priority::High,
