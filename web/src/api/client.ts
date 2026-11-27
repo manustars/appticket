@@ -11,6 +11,7 @@ export type Announcement = Schemas['Announcement']
 export type Asset = Schemas['Asset']
 export type AssetFields = Schemas['AssetFields']
 export type AssetKind = Schemas['AssetKind']
+export type AssetLinkProposal = Schemas['AssetLinkProposal']
 export type CustomerDetail = Schemas['CustomerDetail']
 export type CustomerEntry = Schemas['CustomerEntry']
 export type CustomerSummary = Schemas['CustomerSummary']
@@ -527,6 +528,16 @@ export async function updateAsset(id: string, fields: AssetFields): Promise<void
 /** The asset stays on the tickets that refer to it but gets no new links. */
 export async function retireAsset(id: string): Promise<void> {
   await call('POST', `${assetPath(id)}/retire`)
+}
+
+/** The open link proposals on the customer's assets, oldest first. */
+export function listAssetLinkProposals(customerId: string): Promise<AssetLinkProposal[]> {
+  return json('GET', `${customerPath(customerId)}/asset-link-proposals`)
+}
+
+/** Discards a link proposal: the add-on's next attempt with its reference creates its own asset. */
+export async function discardAssetLinkProposal(id: string): Promise<void> {
+  await call('POST', `/api/asset-link-proposals/${encodeURIComponent(id)}/discard`)
 }
 
 /** The services the customer uses. */

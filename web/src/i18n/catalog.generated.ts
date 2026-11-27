@@ -410,6 +410,14 @@ export interface Messages {
   "assets.setHolder": { plural: false; placeholders: never; tags: never }
   "assets.setHolderNamed": { plural: false; placeholders: "name"; tags: never }
   "assets.suppliedHint": { plural: false; placeholders: never; tags: never }
+  "assets.linkProposals": { plural: false; placeholders: never; tags: never }
+  "assets.linkProposalsHint": { plural: false; placeholders: never; tags: never }
+  "assets.linkProposal": { plural: false; placeholders: "addon" | "asset" | "name" | "reference"; tags: "strong" }
+  "assets.sameSerialNumber": { plural: false; placeholders: "serialNumber"; tags: never }
+  "assets.sameName": { plural: false; placeholders: never; tags: never }
+  "assets.discardLink": { plural: false; placeholders: never; tags: never }
+  "assets.discardLinkNamed": { plural: false; placeholders: "name"; tags: never }
+  "assets.confirmDiscardLink": { plural: false; placeholders: "addon" | "asset" | "name"; tags: never }
   "kinds.title": { plural: false; placeholders: never; tags: never }
   "kinds.hint": { plural: false; placeholders: never; tags: never }
   "kinds.empty": { plural: false; placeholders: never; tags: never }

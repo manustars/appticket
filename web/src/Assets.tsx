@@ -4,11 +4,14 @@
 import { useCallback, useId, useState, type FormEvent } from 'react'
 import {
   createAsset,
+  discardAssetLinkProposal,
   listAssetKinds,
+  listAssetLinkProposals,
   listCustomerAssets,
   retireAsset,
   updateAsset,
   type Asset,
+  type AssetLinkProposal,
   type CustomerDetail,
 } from './api/client'
 import { useI18n } from './i18n/context'
@@ -100,6 +103,58 @@ interface Props {
   onSignedOut: () => void
 }
 
+/**
+ * The open link proposals on the customer's assets: an add-on would create an asset with the same
+ * serial number or name as one the customer has, and the core asked the agents instead. Every agent
+ * sees them; those who manage the catalog discard them, and the add-on then creates its own asset.
+ */
+function LinkProposals({ proposals, readOnly, busy, onDiscard }: {
+  proposals: AssetLinkProposal[]
+  readOnly: boolean
+  busy: boolean
+  onDiscard: (p: AssetLinkProposal) => void
+}) {
+  const { t, rich } = useI18n()
+  const id = useId()
+  if (proposals.length === 0) return null
+  return (
+    <section className="link-proposals" aria-labelledby={`${id}-title`}>
+      <h3 id={`${id}-title`}>{t('assets.linkProposals')}</h3>
+      <p className="hint">{t('assets.linkProposalsHint')}</p>
+      <ul className="proposal-list">
+        {proposals.map((p) => (
+          <li key={p.id} className="proposal">
+            <span>
+              {rich('assets.linkProposal', {
+                addon: p.addon,
+                name: p.name,
+                reference: p.reference,
+                asset: p.asset_name,
+                strong: (inner) => <strong>{inner}</strong>,
+              })}
+              {' '}
+              <span className="muted">
+                · {p.matched_by === 'serial_number'
+                  ? t('assets.sameSerialNumber', { serialNumber: p.serial_number ?? '' })
+                  : t('assets.sameName')}
+              </span>
+            </span>
+            {!readOnly && (
+              <div className="proposal-actions">
+                <button type="button" className="quiet" disabled={busy}
+                  aria-label={t('assets.discardLinkNamed', { name: p.name })}
+                  onClick={() => onDiscard(p)}>
+                  {t('assets.discardLink')}
+                </button>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 /** The customer's assets: added, corrected and retired by those who manage the catalog. */
 export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
   const { t, rich, formatTime } = useI18n()
@@ -107,6 +162,8 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
   // changes where its assets are and who holds them.
   const load = useCallback(() => listCustomerAssets(c.id), [c])
   const assets = useLoad(load, onSignedOut)
+  const loadProposals = useCallback(() => listAssetLinkProposals(c.id), [c])
+  const proposals = useLoad(loadProposals, onSignedOut)
   const kinds = useLoad(loadKinds, onSignedOut)
   const action = useAction(onSignedOut)
   const [editing, setEditing] = useState<Draft | null>(null)
@@ -165,12 +222,21 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
     void action.run(() => retireAsset(a.id)).then(async (ok) => { if (ok) await assets.reload() })
   }
 
+  function discardLink(p: AssetLinkProposal) {
+    if (!window.confirm(t('assets.confirmDiscardLink', { addon: p.addon, name: p.name, asset: p.asset_name }))) return
+    void action.run(() => discardAssetLinkProposal(p.id)).then(async (ok) => { if (ok) await proposals.reload() })
+  }
+
   return (
     <section className="panel" aria-labelledby={`${id}-title`}>
       <h2 id={`${id}-title`}>{t('assets.title')}</h2>
       <p className="hint">{t('assets.hint')}</p>
       <Problem error={assets.error} />
       <Problem error={kinds.error} />
+      <Problem error={proposals.error} />
+      {proposals.data && (
+        <LinkProposals proposals={proposals.data} readOnly={readOnly} busy={action.busy} onDiscard={discardLink} />
+      )}
       {assets.data?.length === 0 && <p className="empty">{t('assets.empty')}</p>}
       {assets.data && assets.data.length > 0 && (
         // The row being edited submits the form below by its id, so that the table sits in no form.
