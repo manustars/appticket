@@ -136,7 +136,7 @@ else.
 - `PUT /api/addon/assets/{id}` updates an asset by its id, with the same fields but `reference`
   and `customer_id`; `POST /api/addon/assets/{id}/retire` retires it when it leaves the add-on's
   system (204, also when it is already retired). A retired asset stays on its tickets and loses
-  its holder; supplying it again brings it back.
+  its holder; supplying it again, or updating it by its id, brings it back.
 - An add-on never gives an asset a holder: a `holder_id` or `holder` is refused (409). Agents
   choose the holder, and supplying the asset again leaves it. An asset entered by hand or
   supplied by another add-on is refused (409) by both calls.
