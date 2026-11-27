@@ -421,6 +421,7 @@ pub struct TestZabbix {
     users: Vec<String>,
     actions: Vec<String>,
     media_types: Vec<String>,
+    global_macros: Vec<String>,
 }
 
 impl TestZabbix {
@@ -472,6 +473,7 @@ impl TestZabbix {
             users: vec![],
             actions: vec![],
             media_types: vec![],
+            global_macros: vec![],
         }
     }
 
@@ -585,6 +587,13 @@ impl TestZabbix {
             let _: Value = self
                 .admin
                 .call("user.delete", json!(self.users))
+                .await
+                .unwrap();
+        }
+        if !self.global_macros.is_empty() {
+            let _: Value = self
+                .admin
+                .call("usermacro.deleteglobal", json!(self.global_macros))
                 .await
                 .unwrap();
         }
@@ -935,7 +944,8 @@ impl TestZabbix {
     }
 
     /// Imports the add-on's media type (`zabbix-media-type.yaml`) under a name of the test's own,
-    /// and sets it to send to `url` with `secret`; answers its id.
+    /// sets it to send to `url`, and gives the global macro it sends as the secret,
+    /// `{$HD_WEBHOOK_SECRET}`, the value `secret`; answers its id.
     pub async fn media_type(&mut self, url: &str, secret: &str) -> String {
         let shipped = include_str!("../../zabbix-media-type.yaml");
         let name = self.name("Help desk");
@@ -954,7 +964,8 @@ impl TestZabbix {
             .admin
             .call(
                 "mediatype.get",
-                json!({"output": ["mediatypeid", "status", "process_tags", "parameters"],
+                json!({"output": ["mediatypeid", "status", "process_tags", "timeout",
+                                  "parameters"],
                        "filter": {"name": [name]}}),
             )
             .await
@@ -964,13 +975,22 @@ impl TestZabbix {
         self.media_types.push(id.clone());
         assert_eq!(media_type["status"], "0", "imported enabled");
         assert_eq!(media_type["process_tags"], "1", "imported processing tags");
+        // Longer than the add-on's 20 seconds, said in the file rather than left to the default.
+        assert_eq!(media_type["timeout"], "30s", "imported with its timeout");
+        assert!(
+            include_str!("../../zabbix-media-type.yaml").contains("      timeout: 30s\n"),
+            "the file sets the timeout"
+        );
         let parameters: Vec<Value> = media_type["parameters"]
             .as_array()
             .unwrap()
             .iter()
             .map(|p| match p["name"].as_str().unwrap() {
                 "url" => json!({"name": "url", "value": url}),
-                "secret" => json!({"name": "secret", "value": secret}),
+                "secret" => {
+                    assert_eq!(p["value"], SECRET_MACRO, "the secret comes from the macro");
+                    p.clone()
+                }
                 _ => p.clone(),
             })
             .collect();
@@ -982,7 +1002,48 @@ impl TestZabbix {
             )
             .await
             .unwrap();
+        self.secret_macro(secret).await;
         id
+    }
+
+    /// Gives the global macro `{$HD_WEBHOOK_SECRET}` the value `secret`, as Secret text,
+    /// creating it when Zabbix has none; removed at the end. Only one test uses it.
+    async fn secret_macro(&mut self, secret: &str) {
+        let found: Vec<Value> = self
+            .admin
+            .call(
+                "usermacro.get",
+                json!({"globalmacro": true, "output": ["globalmacroid"],
+                       "filter": {"macro": [SECRET_MACRO]}}),
+            )
+            .await
+            .unwrap();
+        let id = match found.first() {
+            Some(found) => {
+                let id = found["globalmacroid"].as_str().unwrap().to_owned();
+                let _: Value = self
+                    .admin
+                    .call(
+                        "usermacro.updateglobal",
+                        json!({"globalmacroid": id, "value": secret, "type": SECRET_TEXT}),
+                    )
+                    .await
+                    .unwrap();
+                id
+            }
+            None => {
+                let created: Value = self
+                    .admin
+                    .call(
+                        "usermacro.createglobal",
+                        json!({"macro": SECRET_MACRO, "value": secret, "type": SECRET_TEXT}),
+                    )
+                    .await
+                    .unwrap();
+                created["globalmacroids"][0].as_str().unwrap().to_owned()
+            }
+        };
+        self.global_macros.push(id);
     }
 
     /// An action that sends the problems of the hosts of `group` to `user` through `media_type`,
@@ -1055,6 +1116,12 @@ impl TestZabbix {
 /// The password of the Zabbix users the tests make: none of their names is in it.
 const USER_PASSWORD: &str = "Kx7-test-pass-31!q";
 
+/// The global macro the media type sends as the webhook's secret.
+const SECRET_MACRO: &str = "{$HD_WEBHOOK_SECRET}";
+
+/// A macro of type Secret text.
+const SECRET_TEXT: u8 = 1;
+
 /// Zabbix's role `Super admin role`.
 const SUPER_ADMIN_ROLE: &str = "3";
 
@@ -1065,12 +1132,13 @@ pub fn rules(toml_text: &str) -> hd_zabbix::rules::Rules {
     hd_zabbix::rules::Rules::read(rules).unwrap()
 }
 
-/// A port for the add-on's webhook, bound on `HD_TEST_WEBHOOK_LISTEN` (default `0.0.0.0:0`, so
+/// A port for the add-on's webhook, bound on `HD_TEST_ZABBIX_WEBHOOK_LISTEN` (default `0.0.0.0:0`, so
 /// that the Zabbix server's container reaches it), with the URL the test posts to and the URL
 /// Zabbix's server reaches it at, on the host `HD_TEST_ZABBIX_WEBHOOK_HOST` names (default
 /// `host.docker.internal`, which `compose.yaml` maps to the host).
 pub async fn webhook_listener() -> (tokio::net::TcpListener, String, String) {
-    let listen = std::env::var("HD_TEST_WEBHOOK_LISTEN").unwrap_or_else(|_| "0.0.0.0:0".into());
+    let listen =
+        std::env::var("HD_TEST_ZABBIX_WEBHOOK_LISTEN").unwrap_or_else(|_| "0.0.0.0:0".into());
     let listener = tokio::net::TcpListener::bind(&listen).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let host = std::env::var("HD_TEST_ZABBIX_WEBHOOK_HOST")

@@ -56,6 +56,7 @@ zabbix_export:
         }
         return JSON.stringify({tags: answer.tags || {}});
         
+      timeout: 30s
       process_tags: 'YES'
       description: 'Sends the problem, recovery and update events of triggers to the help desk''s Zabbix add-on, which opens and updates tickets by its rules and answers the ticket''s number in the tag hd_ticket. Set url to the add-on''s webhook and the global macro {$HD_WEBHOOK_SECRET} (of type Secret text) to the webhook''s secret.'
       message_templates:
