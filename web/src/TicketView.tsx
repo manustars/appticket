@@ -260,7 +260,13 @@ export function TicketView({ number, backHref, onChanged, onSignedOut }: Props) 
             </select>
           </dd>
         </div>
-        <div><dt>{t('ticket.opened')}</dt><dd className="when">{formatTime(ticket.created_at)}</dd></div>
+        <div>
+          <dt>{t('ticket.opened')}</dt>
+          <dd className="when">
+            {formatTime(ticket.created_at)}
+            {ticket.opened_by_addon && <> {t('ticket.openedByAddon', { addon: addonName(ticket.opened_by_addon) })}</>}
+          </dd>
+        </div>
       </dl>
       {moving && (
         <MoveCustomer ticket={ticket} customers={customers} busy={busy} onCancel={() => setMoving(false)}
@@ -337,7 +343,7 @@ function Entry({ entry }: { entry: TimelineEntry }) {
       <li className="entry note">
         <div className="entry-head">
           <span className="tag note-tag">{t('entry.note')}</span>
-          <span className="who">{entry.author_name}</span>
+          <span className="who">{entry.by_addon ? t('entry.byAddon', { addon: addonName(entry.author_name) }) : entry.author_name}</span>
           <time className="when" dateTime={entry.created_at}>{formatTime(entry.created_at)}</time>
         </div>
         <p className="body">{entry.body}</p>

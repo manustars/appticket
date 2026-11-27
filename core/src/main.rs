@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 
+mod addon_tickets;
 mod addons;
 mod agents;
 mod announcements;

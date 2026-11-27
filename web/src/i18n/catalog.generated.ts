@@ -126,6 +126,7 @@ export interface Messages {
   "ticket.assignee": { plural: false; placeholders: never; tags: never }
   "ticket.unassigned": { plural: false; placeholders: never; tags: never }
   "ticket.opened": { plural: false; placeholders: never; tags: never }
+  "ticket.openedByAddon": { plural: false; placeholders: "addon"; tags: never }
   "ticket.confirmClose": { plural: false; placeholders: "number"; tags: never }
   "ticket.moved": { plural: false; placeholders: never; tags: never }
   "ticket.movedWithRequester": { plural: true; placeholders: "count"; tags: never }
@@ -133,6 +134,7 @@ export interface Messages {
   "ticket.emptyTimeline": { plural: false; placeholders: never; tags: never }
   "ticket.closedNotice": { plural: false; placeholders: never; tags: never }
   "entry.note": { plural: false; placeholders: never; tags: never }
+  "entry.byAddon": { plural: false; placeholders: "addon"; tags: never }
   "entry.outgoing": { plural: false; placeholders: never; tags: never }
   "entry.incoming": { plural: false; placeholders: never; tags: never }
   "entry.to": { plural: false; placeholders: "address"; tags: never }

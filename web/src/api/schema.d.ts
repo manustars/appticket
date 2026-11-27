@@ -157,7 +157,13 @@ export interface paths {
          */
         get: operations["open_tickets"];
         put?: never;
-        post?: never;
+        /**
+         * Opens a ticket without a requester for an active customer, with a priority and the customer's
+         *     active assets and services it is about; replies on it go to the customer's key requesters. The
+         *     description becomes the ticket's first internal note, by the add-on. An asset or service that
+         *     does not fit refuses the ticket, with a sentence naming it. Scope `tickets:write`.
+         */
+        post: operations["open_ticket"];
         delete?: never;
         options?: never;
         head?: never;
@@ -178,6 +184,26 @@ export interface paths {
         get: operations["ticket"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/addon/tickets/{number}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adds an internal note, seen only by agents, to any ticket, closed ones too; agents see the
+         *     add-on as its author. Scope `tickets:write`.
+         */
+        post: operations["add_note"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1722,6 +1748,9 @@ export interface components {
             name: string;
             scopes: string[];
         };
+        AddonNote: {
+            body: string;
+        };
         /** @description An add-on as the command line and those who manage add-ons see it; never its secrets. */
         AddonRow: {
             enabled: boolean;
@@ -1743,6 +1772,10 @@ export interface components {
             /** @description What its token may do. */
             scopes: string[];
             url: string;
+        };
+        AddonTicketOpened: {
+            /** Format: int64 */
+            number: number;
         };
         AddonTicketSummary: {
             /** Format: uuid */
@@ -2368,8 +2401,11 @@ export interface components {
             title: string;
         };
         NoteEntry: {
+            /** @description The name of the agent who wrote it, or of the add-on. */
             author_name: string;
             body: string;
+            /** @description An add-on wrote it, not an agent. */
+            by_addon: boolean;
             /** Format: date-time */
             created_at: string;
             /** Format: uuid */
@@ -2762,6 +2798,11 @@ export interface components {
             key_requesters?: components["schemas"]["KeyRequester"][] | null;
             /** Format: int64 */
             number: number;
+            /**
+             * @description The add-on that opened the ticket, by name, when an add-on did; empty for a ticket an agent
+             *     or a message opened.
+             */
+            opened_by_addon?: string | null;
             parent?: components["schemas"]["RelatedTicket"] | null;
             priority: components["schemas"]["Priority"];
             /** @description Open proposals of add-ons such as the Assistant. */
@@ -3194,6 +3235,53 @@ export interface operations {
             };
         };
     };
+    open_ticket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewTicket"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddonTicketOpened"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     ticket: {
         parameters: {
             query?: never;
@@ -3213,6 +3301,54 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TicketDetail"];
                 };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    add_note: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's number */
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddonNote"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             401: {
                 headers: {

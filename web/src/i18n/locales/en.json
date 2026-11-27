@@ -122,6 +122,7 @@
   "ticket.assignee": "Assignee",
   "ticket.unassigned": "Unassigned",
   "ticket.opened": "Opened",
+  "ticket.openedByAddon": "by the add-on {addon}",
   "ticket.confirmClose": "Close ticket #{number}? Closing is final: the ticket cannot be reopened, and a new message from the requester will open a new ticket.",
   "ticket.moved": "Ticket moved.",
   "ticket.movedWithRequester": {
@@ -135,6 +136,7 @@
   "ticket.emptyTimeline": "Nothing written on this ticket yet.",
   "ticket.closedNotice": "This ticket is closed, which is final. A new message from the requester opens a new ticket. Agents can still add internal notes.",
   "entry.note": "Internal note",
+  "entry.byAddon": "{addon} (add-on)",
   "entry.outgoing": "Outgoing message",
   "entry.incoming": "Incoming message",
   "entry.to": "to {address}",

@@ -469,6 +469,61 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "Opens a ticket without a requester for an active customer, with a priority and the customer's\nactive assets and services it is about; replies on it go to the customer's key requesters. The\ndescription becomes the ticket's first internal note, by the add-on. An asset or service that\ndoes not fit refuses the ticket, with a sentence naming it. Scope `tickets:write`.",
+        "operationId": "open_ticket",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewTicket"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddonTicketOpened"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/addon/tickets/{number}": {
@@ -500,6 +555,67 @@
               }
             }
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/addon/tickets/{number}/notes": {
+      "post": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "Adds an internal note, seen only by agents, to any ticket, closed ones too; agents see the\nadd-on as its author. Scope `tickets:write`.",
+        "operationId": "add_note",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddonNote"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {},
           "401": {
             "content": {
               "application/json": {
@@ -6052,6 +6168,17 @@
           }
         }
       },
+      "AddonNote": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          }
+        }
+      },
       "AddonRow": {
         "type": "object",
         "description": "An add-on as the command line and those who manage add-ons see it; never its secrets.",
@@ -6104,6 +6231,18 @@
           },
           "url": {
             "type": "string"
+          }
+        }
+      },
+      "AddonTicketOpened": {
+        "type": "object",
+        "required": [
+          "number"
+        ],
+        "properties": {
+          "number": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -7922,15 +8061,21 @@
         "required": [
           "id",
           "author_name",
+          "by_addon",
           "body",
           "created_at"
         ],
         "properties": {
           "author_name": {
-            "type": "string"
+            "type": "string",
+            "description": "The name of the agent who wrote it, or of the add-on."
           },
           "body": {
             "type": "string"
+          },
+          "by_addon": {
+            "type": "boolean",
+            "description": "An add-on wrote it, not an agent."
           },
           "created_at": {
             "type": "string",
@@ -8967,6 +9112,13 @@
           "number": {
             "type": "integer",
             "format": "int64"
+          },
+          "opened_by_addon": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The add-on that opened the ticket, by name, when an add-on did; empty for a ticket an agent\nor a message opened."
           },
           "parent": {
             "oneOf": [
