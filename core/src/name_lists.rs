@@ -62,6 +62,30 @@ pub struct ListedName {
     pub customer: Option<CustomerRef>,
 }
 
+/// An add-on's latest name list as administrators see it in the add-on's state: the names they
+/// still have to give a customer.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct NameListState {
+    /// The system the list names.
+    pub system: String,
+    /// When the add-on last sent the list.
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+    /// How many names the list holds.
+    pub listed: usize,
+    /// The names no customer's external reference covers, neither the name's own nor that of a
+    /// name it is nested in: every name followed by those nested in it, as agents read the list.
+    pub uncovered: Vec<UncoveredName>,
+}
+
+/// A name of a name list that no external reference covers.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UncoveredName {
+    pub name: String,
+    /// The name it is nested in; none at the top.
+    pub parent: Option<String>,
+}
+
 /// A name picked from an add-on's list, spelled as the list spells it and its system.
 pub(crate) struct Picked {
     pub system: String,
@@ -390,6 +414,55 @@ pub async fn all(db: &PgPool) -> Result<Vec<NameList>> {
         .collect())
 }
 
+/// Each add-on's latest name list, by add-on, with the names no external reference covers. A name
+/// an offboarded customer has is covered: it cannot be picked for another customer.
+pub async fn states(db: &PgPool) -> Result<HashMap<String, NameListState>> {
+    Ok(all(db)
+        .await?
+        .into_iter()
+        .map(|list| {
+            let uncovered = list
+                .names
+                .iter()
+                .zip(covered_by(&list.names))
+                .filter(|(_, covering)| covering.is_none())
+                .map(|(listed, _)| UncoveredName {
+                    name: listed.name.clone(),
+                    parent: listed.parent.clone(),
+                })
+                .collect();
+            let state = NameListState {
+                system: list.system,
+                updated_at: list.updated_at,
+                listed: list.names.len(),
+                uncovered,
+            };
+            (list.addon, state)
+        })
+        .collect())
+}
+
+/// The customer whose external reference covers each of `names`, listed as [`all`] lists them,
+/// each after the name it is nested in: the customer that has the name itself, else the one that
+/// covers the name it is nested in, so that a subgroup another customer has is that customer's,
+/// with the names nested in it; none when no external reference covers it.
+pub(crate) fn covered_by(names: &[ListedName]) -> Vec<Option<&CustomerRef>> {
+    let mut by_name: HashMap<&str, Option<&CustomerRef>> = HashMap::with_capacity(names.len());
+    names
+        .iter()
+        .map(|listed| {
+            let covering = listed.customer.as_ref().or_else(|| {
+                listed
+                    .parent
+                    .as_deref()
+                    .and_then(|parent| by_name.get(parent).copied().flatten())
+            });
+            by_name.insert(&listed.name, covering);
+            covering
+        })
+        .collect()
+}
+
 /// What names are put in order by: without accents and ignoring case, so that `Élan` comes
 /// between `Delta` and `Foxtrot`, then as written. The core orders them rather than the
 /// database, whose collation can take milliseconds to compare two long names of characters it
@@ -610,6 +683,137 @@ mod tests {
                 ("Brightfield".to_owned(), Some("Brightfield".to_owned())),
                 ("Brightfield/Offices".to_owned(), None),
                 ("Harbor Lane".to_owned(), Some("Harbor Lane".to_owned())),
+            ]
+        );
+    }
+
+    #[sqlx::test]
+    async fn a_name_is_covered_by_its_own_reference_or_the_nearest_one_above(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        testing::addon(&db, "watchtower").await;
+        replace(
+            &db,
+            "watchtower",
+            "Watchtower",
+            &[
+                named("Brightfield", None),
+                named("Brightfield/Offices", Some("Brightfield")),
+                named("Brightfield/Offices/Floor 2", Some("Brightfield/Offices")),
+                named("Brightfield/Docks", Some("Brightfield")),
+                named("Brightfield/Docks/Crane", Some("Brightfield/Docks")),
+                named("Unclaimed", None),
+                named("Unclaimed/Lab", Some("Unclaimed")),
+                named("Unclaimed/Annex", Some("Unclaimed")),
+            ],
+        )
+        .await
+        .unwrap();
+        for (customer, name) in [
+            (brightfield, "brightfield"),
+            // A subgroup of Brightfield's another customer has.
+            (harbor, "Brightfield/Docks"),
+            // A subgroup of a name no customer has.
+            (brightfield, "Unclaimed/Lab"),
+        ] {
+            crate::external_references::add(&db, customer, "Watchtower", name)
+                .await
+                .unwrap();
+        }
+
+        let list = all(&db).await.unwrap().remove(0);
+        let covering: Vec<(&str, Option<&str>)> = list
+            .names
+            .iter()
+            .zip(covered_by(&list.names))
+            .map(|(n, c)| (n.name.as_str(), c.map(|c| c.name.as_str())))
+            .collect();
+        assert_eq!(
+            covering,
+            [
+                ("Brightfield", Some("Brightfield")),
+                ("Brightfield/Docks", Some("Harbor Lane")),
+                ("Brightfield/Docks/Crane", Some("Harbor Lane")),
+                ("Brightfield/Offices", Some("Brightfield")),
+                ("Brightfield/Offices/Floor 2", Some("Brightfield")),
+                ("Unclaimed", None),
+                ("Unclaimed/Annex", None),
+                ("Unclaimed/Lab", Some("Brightfield")),
+            ]
+        );
+    }
+
+    #[sqlx::test]
+    async fn an_addon_s_state_lists_the_names_no_external_reference_covers(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        testing::addon(&db, "watchtower").await;
+        testing::addon(&db, "netscope").await;
+        replace(
+            &db,
+            "watchtower",
+            "Watchtower",
+            &[
+                named("Unclaimed", None),
+                named("Unclaimed/Lab", Some("Unclaimed")),
+                named("Unclaimed/Annex", Some("Unclaimed")),
+                named("Brightfield", None),
+                named("Brightfield/Offices", Some("Brightfield")),
+                named("Harbor Lane", None),
+                named("Harbor Lane/Docks", Some("Harbor Lane")),
+            ],
+        )
+        .await
+        .unwrap();
+        crate::external_references::add(&db, brightfield, "Watchtower", "Brightfield")
+            .await
+            .unwrap();
+        crate::external_references::add(&db, brightfield, "Watchtower", "Unclaimed/Lab")
+            .await
+            .unwrap();
+        // An offboarded customer keeps the names it has: they are not to be picked for another.
+        crate::external_references::add(&db, harbor, "Watchtower", "Harbor Lane")
+            .await
+            .unwrap();
+        crate::customers::offboard(&db, harbor).await.unwrap();
+        // Switched off, the add-on's latest list still counts.
+        crate::addons::set_enabled(&db, "watchtower", false)
+            .await
+            .unwrap();
+
+        /// The system, how many names the list holds and the names no reference covers.
+        type State = (String, usize, Vec<(String, Option<String>)>);
+        let states: Vec<(String, Option<State>)> = crate::addons::list(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|a| {
+                let names = a.names.map(|n| {
+                    (
+                        n.system,
+                        n.listed,
+                        n.uncovered
+                            .into_iter()
+                            .map(|u| (u.name, u.parent))
+                            .collect(),
+                    )
+                });
+                (a.name, names)
+            })
+            .collect();
+        assert_eq!(
+            states,
+            [
+                // An add-on that sent no list.
+                ("netscope".to_owned(), None),
+                (
+                    "watchtower".to_owned(),
+                    Some((
+                        "Watchtower".to_owned(),
+                        7,
+                        pairs(&[("Unclaimed", None), ("Unclaimed/Annex", Some("Unclaimed"))])
+                    ))
+                ),
             ]
         );
     }

@@ -683,6 +683,18 @@
   "addons.on": "On",
   "addons.off": "Off",
   "addons.lastError": "Latest failed delivery: {error}",
+  "addons.uncovered": {
+    "one": "{count} name of {system} that no customer's external reference covers (name list sent {time})",
+    "other": "{count} names of {system} that no customer's external reference covers (name list sent {time})"
+  },
+  "addons.uncoveredHint": "Pick them among the external references of the customers they belong to; a name covers the names nested in it.",
+  "addons.allCovered": "Every name of {system} is covered by a customer's external reference (name list sent {time}).",
+  "addons.conflicts": {
+    "one": "{count} conflict reported (sent {time})",
+    "other": "{count} conflicts reported (sent {time})"
+  },
+  "addons.conflictsHint": "The add-on does not import what a conflict is about until the conflict is gone.",
+  "addons.noConflicts": "No conflicts reported (sent {time}).",
   "addons.register": "Add-ons are registered on the server's command line, with <code>hd addon add …</code>, which also makes their token and event secret (see docs/deploy.md).",
   "mail.hint": "Mail and sign-in settings live in the server's configuration and Secrets, not in this screen.",
   "mail.reading": "Reading mail",

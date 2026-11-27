@@ -30,6 +30,7 @@ pub const SCOPES: &[&str] = &[
     CATALOG_WRITE,
     TICKETS_WRITE,
     NAMES_WRITE,
+    CONFLICTS_WRITE,
 ];
 /// Read customers and their assets.
 pub const DIRECTORY_READ: &str = "directory:read";
@@ -44,6 +45,8 @@ pub const TICKETS_WRITE: &str = "tickets:write";
 /// Replace the name list of the add-on's system, which customers' external references are
 /// picked from.
 pub const NAMES_WRITE: &str = "names:write";
+/// Replace the list of conflicts the add-on reports, which administrators read in its state.
+pub const CONFLICTS_WRITE: &str = "conflicts:write";
 
 /// After this many failed attempts a delivery stops being retried.
 pub const MAX_ATTEMPTS: i32 = 12;
@@ -153,10 +156,18 @@ pub struct AddonRow {
     pub failing: i64,
     /// Why the latest failed delivery failed.
     pub last_error: Option<String>,
+    /// The name list the add-on last sent, with the names no external reference covers; none
+    /// until it sends one.
+    #[sqlx(skip)]
+    pub names: Option<crate::name_lists::NameListState>,
+    /// The conflicts the add-on last reported; none until it reports any.
+    #[sqlx(skip)]
+    pub conflicts: Option<crate::conflicts::ConflictList>,
 }
 
+/// Every add-on with its deliveries and its state.
 pub async fn list(db: &PgPool) -> Result<Vec<AddonRow>> {
-    Ok(sqlx::query_as(
+    let mut addons: Vec<AddonRow> = sqlx::query_as(
         "SELECT a.name, a.url, a.events, a.scopes, a.enabled,
                 (SELECT count(*) FROM event_deliveries d
                  WHERE d.addon_id = a.id AND d.delivered_at IS NULL) AS pending,
@@ -168,7 +179,14 @@ pub async fn list(db: &PgPool) -> Result<Vec<AddonRow>> {
          FROM addons a ORDER BY a.name",
     )
     .fetch_all(db)
-    .await?)
+    .await?;
+    let mut names = crate::name_lists::states(db).await?;
+    let mut conflicts = crate::conflicts::lists(db).await?;
+    for addon in &mut addons {
+        addon.names = names.remove(&addon.name);
+        addon.conflicts = conflicts.remove(&addon.name);
+    }
+    Ok(addons)
 }
 
 /// Records an event in the caller's transaction, for every add-on that receives its kind.

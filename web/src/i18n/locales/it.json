@@ -693,6 +693,18 @@
   "addons.on": "Attivo",
   "addons.off": "Non attivo",
   "addons.lastError": "Ultima consegna non riuscita: {error}",
+  "addons.uncovered": {
+    "one": "{count} nome di {system} non coperto da alcun riferimento esterno di un cliente (elenco dei nomi inviato {time})",
+    "other": "{count} nomi di {system} non coperti da alcun riferimento esterno di un cliente (elenco dei nomi inviato {time})"
+  },
+  "addons.uncoveredHint": "Sceglierli tra i riferimenti esterni dei clienti a cui appartengono; un nome copre anche i nomi annidati in esso.",
+  "addons.allCovered": "Ogni nome di {system} è coperto dal riferimento esterno di un cliente (elenco dei nomi inviato {time}).",
+  "addons.conflicts": {
+    "one": "{count} conflitto segnalato (inviato {time})",
+    "other": "{count} conflitti segnalati (inviati {time})"
+  },
+  "addons.conflictsHint": "L'add-on non importa ciò di cui tratta un conflitto finché il conflitto non è risolto.",
+  "addons.noConflicts": "Nessun conflitto segnalato (inviato {time}).",
   "addons.register": "Gli add-on si registrano dalla riga di comando del server, con <code>hd addon add …</code>, che ne crea anche il token e il segreto degli eventi (vedere docs/deploy.md).",
   "mail.hint": "Le impostazioni della posta e dell'accesso stanno nella configurazione del server e nei suoi Secret, non in questa schermata.",
   "mail.reading": "Lettura della posta",

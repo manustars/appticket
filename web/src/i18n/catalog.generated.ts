@@ -603,6 +603,12 @@ export interface Messages {
   "addons.on": { plural: false; placeholders: never; tags: never }
   "addons.off": { plural: false; placeholders: never; tags: never }
   "addons.lastError": { plural: false; placeholders: "error"; tags: never }
+  "addons.uncovered": { plural: true; placeholders: "count" | "system" | "time"; tags: never }
+  "addons.uncoveredHint": { plural: false; placeholders: never; tags: never }
+  "addons.allCovered": { plural: false; placeholders: "system" | "time"; tags: never }
+  "addons.conflicts": { plural: true; placeholders: "count" | "time"; tags: never }
+  "addons.conflictsHint": { plural: false; placeholders: never; tags: never }
+  "addons.noConflicts": { plural: false; placeholders: "time"; tags: never }
   "addons.register": { plural: false; placeholders: never; tags: "code" }
   "mail.hint": { plural: false; placeholders: never; tags: never }
   "mail.reading": { plural: false; placeholders: never; tags: never }

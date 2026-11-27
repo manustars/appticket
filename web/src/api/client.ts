@@ -4,6 +4,8 @@ import type { components } from './schema'
 type Schemas = components['schemas']
 export type Activity = Schemas['Activity']
 export type AddonRow = Schemas['AddonRow']
+export type NameListState = Schemas['NameListState']
+export type ConflictList = Schemas['ConflictList']
 export type Agent = Schemas['Agent']
 export type AgentAccount = Schemas['AgentAccount']
 export type AgentEntry = Schemas['AgentEntry']

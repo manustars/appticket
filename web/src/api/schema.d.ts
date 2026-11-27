@@ -103,6 +103,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/addon/conflicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replaces the list of conflicts the add-on reports
+         * @description Replaces the list of conflicts the add-on reports, such as a host of its system in two groups that two customers have as external references, which it therefore does not import: administrators read the latest list in the add-on's state, also while the add-on is switched off, and an empty list says there are none. Each conflict has a sentence an administrator can act on, one per language of the agents' UI or a single one taken as English, at most 500 characters once trimmed in each of at most 4 languages, without control characters. At most 1000 conflicts, in at most 8 MiB of JSON (413 above), which the largest list fits written as UTF-8. A list with a conflict that does not fit is refused whole, and the list before stays. Scope `conflicts:write`.
+         */
+        put: operations["replace_conflicts"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/addon/customers": {
         parameters: {
             query?: never;
@@ -2071,6 +2091,7 @@ export interface components {
         };
         /** @description An add-on as the command line and those who manage add-ons see it; never its secrets. */
         AddonRow: {
+            conflicts?: components["schemas"]["ConflictList"] | null;
             enabled: boolean;
             /** @description Event kinds it receives. */
             events: string[];
@@ -2082,6 +2103,7 @@ export interface components {
             /** @description Why the latest failed delivery failed. */
             last_error?: string | null;
             name: string;
+            names?: components["schemas"]["NameListState"] | null;
             /**
              * Format: int64
              * @description Events not yet delivered.
@@ -2312,6 +2334,21 @@ export interface components {
         };
         BTreeMap: {
             [key: string]: string;
+        };
+        /** @description A conflict an add-on reports. */
+        Conflict: {
+            /** @description What is not imported and why, in each language the add-on wrote it in. */
+            sentence: components["schemas"]["BTreeMap"];
+        };
+        /** @description An add-on's latest list of conflicts, as administrators read it in the add-on's state. */
+        ConflictList: {
+            /** @description The conflicts, in the order the add-on sent them. */
+            conflicts: components["schemas"]["Conflict"][];
+            /**
+             * Format: date-time
+             * @description When the add-on last sent the list.
+             */
+            updated_at: string;
         };
         /** @description What is proposed. */
         Content: (components["schemas"]["Triage"] & {
@@ -2738,6 +2775,26 @@ export interface components {
              */
             updated_at: string;
         };
+        /**
+         * @description An add-on's latest name list as administrators see it in the add-on's state: the names they
+         *     still have to give a customer.
+         */
+        NameListState: {
+            /** @description How many names the list holds. */
+            listed: number;
+            /** @description The system the list names. */
+            system: string;
+            /**
+             * @description The names no customer's external reference covers, neither the name's own nor that of a
+             *     name it is nested in: every name followed by those nested in it, as agents read the list.
+             */
+            uncovered: components["schemas"]["UncoveredName"][];
+            /**
+             * Format: date-time
+             * @description When the add-on last sent the list.
+             */
+            updated_at: string;
+        };
         NewAddress: {
             address: string;
         };
@@ -2946,6 +3003,19 @@ export interface components {
             state: components["schemas"]["TicketState"];
             title: string;
         };
+        /** @description A conflict as the add-on reports it. */
+        ReportedConflict: {
+            /**
+             * @description What is not imported and why, so that an administrator can act on it: written in every
+             *     language of the agents' UI, as a rationale is, or a single sentence taken as English.
+             */
+            sentence: components["schemas"]["SentenceInput"];
+        };
+        /** @description The whole list of the conflicts the add-on reports, as the add-on sends it. */
+        ReportedConflicts: {
+            /** @description The conflicts, in the order administrators read them; none when there are none. */
+            conflicts: components["schemas"]["ReportedConflict"][];
+        };
         Requester: {
             /** @description All the requester's addresses, the first registered first. */
             addresses: string[];
@@ -3102,6 +3172,8 @@ export interface components {
             name: string;
             permissions: components["schemas"]["Permission"][];
         };
+        /** @description A sentence as an add-on sends it. */
+        SentenceInput: components["schemas"]["BTreeMap"] | string;
         Service: {
             /**
              * Format: int64
@@ -3361,6 +3433,12 @@ export interface components {
             /** @enum {string} */
             action: "discard";
         };
+        /** @description A name of a name list that no external reference covers. */
+        UncoveredName: {
+            name: string;
+            /** @description The name it is nested in; none at the top. */
+            parent?: string | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -3569,6 +3647,50 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Problem"];
                 };
+            };
+        };
+    };
+    replace_conflicts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReportedConflicts"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A body over the limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
