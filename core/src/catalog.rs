@@ -8,6 +8,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{Error, Result, rule};
+use crate::linked_addons::LinkedAddon;
 use crate::requesters::SiteRef;
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -34,6 +35,9 @@ pub struct Asset {
     pub source_addon: Option<String>,
     /// The reference that add-on knows it by, which is not an external reference.
     pub reference: Option<String>,
+    /// The other add-ons linked to it, by name, each with the reference it knows it by: they
+    /// change nothing of it, and only supply live details and links.
+    pub linked_addons: Vec<LinkedAddon>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub retired_at: Option<OffsetDateTime>,
 }
@@ -67,6 +71,8 @@ struct AssetRow {
     at_site_name: Option<String>,
     source_addon: Option<String>,
     source_ref: Option<String>,
+    linked_addons: Vec<String>,
+    linked_references: Vec<String>,
     retired_at: Option<OffsetDateTime>,
 }
 
@@ -93,14 +99,20 @@ impl From<AssetRow> for Asset {
             at_site: site(row.at_site_id, row.at_site_name),
             source_addon: row.source_addon,
             reference: row.source_ref,
+            linked_addons: row
+                .linked_addons
+                .into_iter()
+                .zip(row.linked_references)
+                .map(|(addon, reference)| LinkedAddon { addon, reference })
+                .collect(),
             retired_at: row.retired_at,
         }
     }
 }
 
 /// The assets picked by the end of the query (`WHERE`, `ORDER BY`, on `assets a` and `asset_kinds
-/// k`), with their site and holder, and the site each is at (the `asset_sites` view follows its
-/// kind).
+/// k`), with their site and holder, the site each is at (the `asset_sites` view follows its kind)
+/// and the add-ons linked to each, by name.
 macro_rules! select_assets {
     ($rest:literal) => {
         concat!(
@@ -111,7 +123,12 @@ macro_rules! select_assets {
                     (SELECT ha.address FROM requester_addresses ha WHERE ha.requester_id = h.id
                      ORDER BY ha.created_at, ha.address LIMIT 1) AS holder_address,
                     w.site_id AS at_site_id, ws.name AS at_site_name,
-                    a.source_addon, a.source_ref, a.retired_at
+                    a.source_addon, a.source_ref,
+                    ARRAY(SELECT l.addon FROM asset_linked_addons l WHERE l.asset_id = a.id
+                          ORDER BY l.addon) AS linked_addons,
+                    ARRAY(SELECT l.reference FROM asset_linked_addons l WHERE l.asset_id = a.id
+                          ORDER BY l.addon) AS linked_references,
+                    a.retired_at
              FROM assets a
              JOIN customers c ON c.id = a.customer_id
              JOIN asset_kinds k ON k.id = a.kind_id

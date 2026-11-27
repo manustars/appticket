@@ -1,5 +1,6 @@
 //! The assets an add-on supplies, with the scope `catalog:write` (docs/domain-rules.md, "Add-ons"):
-//! it creates, updates and retires those it is the source of, and nothing else.
+//! it creates, updates and retires those it is the source of, and nothing else; linked to an asset
+//! by an accepted link proposal, it reaches it by its reference and unlinks itself.
 
 use axum::{
     Json,
@@ -24,6 +25,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(supply_asset))
         .routes(routes!(update_supplied_asset))
         .routes(routes!(retire_supplied_asset))
+        .routes(routes!(unlink_asset))
 }
 
 /// An asset as its source supplies it, known by the add-on's own reference.
@@ -93,8 +95,11 @@ async fn written(
 /// nothing is created: the answer is 202 with the link proposal recorded for the agents, which
 /// says which asset matched. Sending the asset again while the proposal is open answers the same
 /// proposal, with the name and serial number just sent, even when the asset it matched was renamed
-/// or retired since; once agents discard it, the next attempt creates the asset. Scope
-/// `catalog:write`.
+/// or retired since; once agents discard it, the next attempt creates the asset.
+///
+/// Once agents accept it, the add-on is linked to that asset and the reference reaches it: sending
+/// what the asset has answers it with 200 and changes nothing, while any change to its kind, name,
+/// serial number or site is refused, since only its source changes them. Scope `catalog:write`.
 #[utoipa::path(post, path = "/api/addon/assets", tag = "add-ons", request_body = SuppliedAsset,
     responses((status = CREATED, body = AddonAsset), (status = OK, body = AddonAsset),
         (status = ACCEPTED, body = AssetLinkProposal,
@@ -131,7 +136,8 @@ async fn supply_asset(
 
 /// Updates an asset the add-on is the source of, as supplying it again does, but refuses a retired
 /// one, which only supplying it again with its reference brings back; an asset entered by
-/// hand or supplied by another add-on is refused. Scope `catalog:write`.
+/// hand or supplied by another add-on is refused. For an asset the add-on is linked to, sending
+/// what it has changes nothing, and any change is refused. Scope `catalog:write`.
 #[utoipa::path(put, path = "/api/addon/assets/{id}", tag = "add-ons",
     params(("id" = Uuid, Path, description = "The asset")), request_body = SuppliedUpdate,
     responses((status = OK, body = AddonAsset), (status = NOT_FOUND, body = Problem),
@@ -150,8 +156,8 @@ async fn update_supplied_asset(
 
 /// Retires an asset the add-on is the source of, when it leaves the add-on's system: it stays on
 /// the tickets that refer to it, gets no new links and loses its holder. Retiring it again changes
-/// nothing; an asset entered by hand or supplied by another add-on is refused. Scope
-/// `catalog:write`.
+/// nothing; an asset entered by hand or supplied by another add-on is refused, and an add-on linked
+/// to an asset unlinks itself instead. Scope `catalog:write`.
 #[utoipa::path(post, path = "/api/addon/assets/{id}/retire", tag = "add-ons",
     params(("id" = Uuid, Path, description = "The asset")),
     responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
@@ -163,5 +169,23 @@ async fn retire_supplied_asset(
 ) -> Result<StatusCode, ApiError> {
     caller.require(CATALOG_WRITE)?;
     supplied_assets::retire(&state.db, &caller.name, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Unlinks the add-on from an asset it is linked to, when the asset leaves the add-on's system:
+/// the asset stays as it was, retired or not, and the add-on's reference no longer reaches it.
+/// Unlinking again changes nothing; the asset's source is refused, which retires it instead, as is
+/// an asset of an offboarded customer. Scope `catalog:write`.
+#[utoipa::path(post, path = "/api/addon/assets/{id}/unlink", tag = "add-ons",
+    params(("id" = Uuid, Path, description = "The asset")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn unlink_asset(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    caller.require(CATALOG_WRITE)?;
+    crate::linked_addons::unlink(&state.db, &caller.name, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

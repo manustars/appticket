@@ -157,6 +157,7 @@ async fn the_catalog_calls_need_the_scope_catalog_write(db: PgPool) {
             Some(json!({"kind": "Laptop", "name": "PC-0042"})),
         ),
         ("POST", format!("/api/addon/assets/{pc}/retire"), None),
+        ("POST", format!("/api/addon/assets/{pc}/unlink"), None),
     ] {
         let (status, json) = reader.call(method, &uri, body).await;
         assert_eq!(status, StatusCode::CONFLICT, "{method} {uri}: {json}");
@@ -481,4 +482,164 @@ async fn a_matching_asset_is_proposed_as_a_link_and_discarded_through_the_api(db
         .get(&format!("/api/customers/{brightfield}/assets"))
         .await;
     assert_eq!(shown.as_array().unwrap().len(), 2, "{shown}");
+}
+
+/// Agents who manage the catalog accept a link proposal; the add-on's reference then reaches the
+/// existing asset, which it changes nothing of, until it unlinks itself.
+#[sqlx::test]
+async fn a_link_proposal_is_accepted_and_the_linked_addon_unlinks_itself_through_the_api(
+    db: PgPool,
+) {
+    use crate::roles::Permission;
+    let cataloguer = super::role_with(&db, "Cataloguer", &[Permission::ManageCatalog]).await;
+    let cataloguer = Client::with_role(&db, "carla@northgate.test", cataloguer).await;
+    let manager = super::role_with(&db, "Manager", &[Permission::ManageCustomers]).await;
+    let manager = Client::with_role(&db, "mara@northgate.test", manager).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    testing::asset_kind(&db, "Laptop").await;
+    let netscope = addon(&db, &cataloguer, "netscope", &[CATALOG_WRITE]).await;
+    let watchtower = addon(&db, &cataloguer, "watchtower", &[CATALOG_WRITE]).await;
+    let reader = addon(&db, &cataloguer, "reader", &[DIRECTORY_READ]).await;
+    let (_, srv) = netscope
+        .call(
+            "POST",
+            "/api/addon/assets",
+            Some(
+                json!({"reference": "n-1", "customer_id": brightfield, "kind": "Laptop",
+                "name": "SRV-01", "serial_number": "SN-1"}),
+            ),
+        )
+        .await;
+    let srv = srv["id"].as_str().unwrap().to_owned();
+    let same = json!({"reference": "host-1042", "customer_id": brightfield, "kind": "Laptop",
+        "name": "SRV-01", "serial_number": "SN-1"});
+    let (status, proposed) = watchtower
+        .call("POST", "/api/addon/assets", Some(same.clone()))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{proposed}");
+    let accept = format!(
+        "/api/asset-link-proposals/{}/accept",
+        proposed["id"].as_str().unwrap()
+    );
+
+    let (status, json) = manager.call("POST", &accept, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{json}");
+    let (status, json) = cataloguer.call("POST", &accept, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    let (status, json) = cataloguer.call("POST", &accept, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert_eq!(json["error"], "The link proposal is no longer open.");
+    let (status, _) = cataloguer
+        .call(
+            "POST",
+            &format!("/api/asset-link-proposals/{}/accept", Uuid::new_v4()),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let shown = manager
+        .get(&format!("/api/customers/{brightfield}/assets"))
+        .await;
+    assert_eq!(shown.as_array().unwrap().len(), 1, "{shown}");
+    assert_eq!(
+        (&shown[0]["source_addon"], &shown[0]["linked_addons"]),
+        (
+            &json!("netscope"),
+            &json!([{"addon": "watchtower", "reference": "host-1042"}])
+        ),
+        "agents see its source and its linked add-ons"
+    );
+
+    // The linked add-on's reference reaches the asset; it reads it with its own reference, and
+    // others read only which add-ons are linked.
+    let (status, reached) = watchtower
+        .call("POST", "/api/addon/assets", Some(same))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reached}");
+    assert_eq!(
+        (
+            &reached["id"],
+            &reached["source_addon"],
+            &reached["reference"],
+            &reached["linked_addons"]
+        ),
+        (
+            &json!(srv),
+            &json!("netscope"),
+            &json!("host-1042"),
+            &json!(["watchtower"])
+        )
+    );
+    let seen = reader
+        .get(&format!("/api/addon/customers/{brightfield}/assets"))
+        .await;
+    assert_eq!(
+        (&seen[0]["reference"], &seen[0]["linked_addons"]),
+        (&Value::Null, &json!(["watchtower"]))
+    );
+    let refused = "SRV-01 comes from the add-on netscope: watchtower is linked to it, and an \
+                   add-on changes only the assets it is the source of.";
+    for (method, uri, body) in [
+        (
+            "POST",
+            "/api/addon/assets".to_owned(),
+            json!({"reference": "host-1042", "customer_id": brightfield, "kind": "Laptop",
+                "name": "srv-01.example.test", "serial_number": "SN-1"}),
+        ),
+        (
+            "PUT",
+            format!("/api/addon/assets/{srv}"),
+            json!({"kind": "Laptop", "name": "SRV-01"}),
+        ),
+    ] {
+        let (status, json) = watchtower.call(method, &uri, Some(body)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{method} {uri}: {json}");
+        assert_eq!(json["error"], refused, "{method} {uri}");
+    }
+    let (status, json) = watchtower
+        .call("POST", &format!("/api/addon/assets/{srv}/retire"), None)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert_eq!(
+        json["error"],
+        "Watchtower is linked to SRV-01: an add-on linked to an asset unlinks itself from it, \
+         and never retires it."
+    );
+    let (status, json) = netscope
+        .call("POST", &format!("/api/addon/assets/{srv}/unlink"), None)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    let (status, _) = watchtower
+        .call(
+            "POST",
+            &format!("/api/addon/assets/{}/unlink", Uuid::new_v4()),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    for _ in 0..2 {
+        let (status, json) = watchtower
+            .call("POST", &format!("/api/addon/assets/{srv}/unlink"), None)
+            .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    }
+    let shown = cataloguer
+        .get(&format!("/api/customers/{brightfield}/assets"))
+        .await;
+    assert_eq!(
+        (
+            &shown[0]["name"],
+            &shown[0]["source_addon"],
+            &shown[0]["linked_addons"],
+            &shown[0]["retired_at"]
+        ),
+        (
+            &json!("SRV-01"),
+            &json!("netscope"),
+            &json!([]),
+            &Value::Null
+        ),
+        "the asset stays as it was"
+    );
 }

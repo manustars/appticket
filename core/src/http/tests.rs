@@ -2514,6 +2514,7 @@ async fn an_addon_s_token_changes_nothing_but_its_own_calls(db: PgPool) {
         [
             "POST /api/addon/assets",
             "POST /api/addon/assets/{id}/retire",
+            "POST /api/addon/assets/{id}/unlink",
             "POST /api/addon/proposals",
             "POST /api/addon/tickets",
             "POST /api/addon/tickets/{number}/notes",

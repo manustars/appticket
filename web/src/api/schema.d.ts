@@ -23,8 +23,11 @@ export interface paths {
          *     nothing is created: the answer is 202 with the link proposal recorded for the agents, which
          *     says which asset matched. Sending the asset again while the proposal is open answers the same
          *     proposal, with the name and serial number just sent, even when the asset it matched was renamed
-         *     or retired since; once agents discard it, the next attempt creates the asset. Scope
-         *     `catalog:write`.
+         *     or retired since; once agents discard it, the next attempt creates the asset.
+         *
+         *     Once agents accept it, the add-on is linked to that asset and the reference reaches it: sending
+         *     what the asset has answers it with 200 and changes nothing, while any change to its kind, name,
+         *     serial number or site is refused, since only its source changes them. Scope `catalog:write`.
          */
         post: operations["supply_asset"];
         delete?: never;
@@ -44,7 +47,8 @@ export interface paths {
         /**
          * Updates an asset the add-on is the source of, as supplying it again does, but refuses a retired
          *     one, which only supplying it again with its reference brings back; an asset entered by
-         *     hand or supplied by another add-on is refused. Scope `catalog:write`.
+         *     hand or supplied by another add-on is refused. For an asset the add-on is linked to, sending
+         *     what it has changes nothing, and any change is refused. Scope `catalog:write`.
          */
         put: operations["update_supplied_asset"];
         post?: never;
@@ -66,10 +70,32 @@ export interface paths {
         /**
          * Retires an asset the add-on is the source of, when it leaves the add-on's system: it stays on
          *     the tickets that refer to it, gets no new links and loses its holder. Retiring it again changes
-         *     nothing; an asset entered by hand or supplied by another add-on is refused. Scope
-         *     `catalog:write`.
+         *     nothing; an asset entered by hand or supplied by another add-on is refused, and an add-on linked
+         *     to an asset unlinks itself instead. Scope `catalog:write`.
          */
         post: operations["retire_supplied_asset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/addon/assets/{id}/unlink": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unlinks the add-on from an asset it is linked to, when the asset leaves the add-on's system:
+         *     the asset stays as it was, retired or not, and the add-on's reference no longer reaches it.
+         *     Unlinking again changes nothing; the asset's source is refused, which retires it instead, as is
+         *     an asset of an offboarded customer. Scope `catalog:write`.
+         */
+        post: operations["unlink_asset"];
         delete?: never;
         options?: never;
         head?: never;
@@ -553,6 +579,28 @@ export interface paths {
         /** Renames an asset kind or changes whether its assets move with their holder. */
         put: operations["update_asset_kind"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/asset-link-proposals/{id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accepts an open link proposal: the add-on is linked to the asset it matched, with its
+         *     reference, which from then on reaches that asset without changing anything of it. Refused when
+         *     the asset was retired meanwhile or the add-on is linked to it already by another reference.
+         *     Needs managing the catalog; an offboarded customer's proposals are not accepted.
+         */
+        post: operations["accept_asset_link_proposal"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1808,8 +1856,16 @@ export interface components {
             kind: string;
             /** Format: uuid */
             kind_id: string;
+            /**
+             * @description The other add-ons linked to it, by name: they change nothing of it, and only supply live
+             *     details and links.
+             */
+            linked_addons: string[];
             name: string;
-            /** @description Your own reference for it, when you are its source; another add-on's is not given. */
+            /**
+             * @description Your own reference for it, when you are its source or linked to it; another add-on's is not
+             *     given.
+             */
             reference?: string | null;
             /** Format: date-time */
             retired_at?: string | null;
@@ -1996,6 +2052,11 @@ export interface components {
             kind: string;
             /** Format: uuid */
             kind_id: string;
+            /**
+             * @description The other add-ons linked to it, by name, each with the reference it knows it by: they
+             *     change nothing of it, and only supply live details and links.
+             */
+            linked_addons: components["schemas"]["LinkedAddon"][];
             /** @description Whether its kind moves with its holder; otherwise it stays at its own site. */
             moves_with_holder: boolean;
             name: string;
@@ -2368,6 +2429,12 @@ export interface components {
              *     left out for a requester with one address, and for a key requester, who keeps theirs.
              */
             contact_address?: string | null;
+        };
+        /** @description An add-on linked to an asset, which is not its source, with the reference it knows it by. */
+        LinkedAddon: {
+            addon: string;
+            /** @description The add-on's own reference for the asset, which is not an external reference. */
+            reference: string;
         };
         LinkedAsset: {
             /** Format: uuid */
@@ -3174,6 +3241,50 @@ export interface operations {
         };
     };
     retire_supplied_asset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The asset */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    unlink_asset: {
         parameters: {
             query?: never;
             header?: never;
@@ -4571,6 +4682,58 @@ export interface operations {
                 content?: never;
             };
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    accept_asset_link_proposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link proposal */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

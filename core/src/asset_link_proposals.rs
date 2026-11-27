@@ -30,6 +30,7 @@ pub enum MatchedBy {
 #[sqlx(type_name = "text", rename_all = "lowercase")]
 enum State {
     Open,
+    Accepted,
     Discarded,
 }
 
@@ -110,6 +111,14 @@ pub(crate) async fn proposed(
             .await?;
         return Ok(Some(read(tx, id).await?));
     }
+    // The open proposal for that reference may have been accepted, for another customer, while
+    // this was waiting for it: the reference then belongs to that customer's asset.
+    if crate::linked_addons::linked_by(tx, addon, reference)
+        .await?
+        .is_some()
+    {
+        return rule(reference_of_another_customer(reference));
+    }
     let discarded: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM asset_link_proposals
                         WHERE addon = $1 AND reference = $2 AND customer_id = $3
@@ -163,8 +172,8 @@ async fn read(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<AssetLinkP
         .await?)
 }
 
-/// The active asset of `customer` that `addon` is not the source of with the serial number, else
-/// the name, both ignoring case; the oldest when several have it.
+/// The active asset of `customer` that `addon` is neither the source of nor linked to with the
+/// serial number, else the name, both ignoring case; the oldest when several have it.
 async fn matching(
     tx: &mut Transaction<'_, Postgres>,
     addon: &str,
@@ -172,6 +181,15 @@ async fn matching(
     name: &str,
     serial_number: Option<&str>,
 ) -> Result<Option<(Uuid, MatchedBy)>> {
+    // Two assets in the add-on's system are two assets: one it is linked to is as its own.
+    let linked: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT l.asset_id FROM asset_linked_addons l JOIN assets a ON a.id = l.asset_id
+         WHERE l.addon = $1 AND a.customer_id = $2",
+    )
+    .bind(addon)
+    .bind(customer)
+    .fetch_all(&mut **tx)
+    .await?;
     let keys = serial_number
         .map(|serial| (AssetKey::SerialNumber, serial, MatchedBy::SerialNumber))
         .into_iter()
@@ -179,10 +197,9 @@ async fn matching(
     for (key, value, matched_by) in keys {
         let found = crate::catalog::assets_by(&mut **tx, customer, key, value).await?;
         // Active ones first, then by when they were created.
-        if let Some(asset) = found
-            .into_iter()
-            .find(|a| !a.retired && a.source_addon.as_deref() != Some(addon))
-        {
+        if let Some(asset) = found.into_iter().find(|a| {
+            !a.retired && a.source_addon.as_deref() != Some(addon) && !linked.contains(&a.id)
+        }) {
             return Ok(Some((asset.id, matched_by)));
         }
     }
@@ -200,37 +217,84 @@ pub async fn open_of(db: &PgPool, customer: Uuid) -> Result<Vec<AssetLinkProposa
     .await?)
 }
 
+/// Accepts an open link proposal, for `agent`: the add-on is linked to the asset it matched, with
+/// its reference, and from then on finds that asset by it, changing nothing of it. Refused when the
+/// asset was retired meanwhile, or when the add-on is linked to it already by another reference;
+/// agents do not change an offboarded customer's catalog.
+pub async fn accept(db: &PgPool, id: Uuid, agent: Uuid) -> Result<()> {
+    let mut tx = db.begin().await?;
+    let (addon, reference, asset) = lock_open(&mut tx, id).await?;
+    let stored = crate::catalog::lock_stored(&mut tx, asset).await?;
+    if stored.retired {
+        return rule(format!(
+            "{} is retired: an add-on is linked only to an active asset",
+            stored.name
+        ));
+    }
+    if let Some(other) = crate::linked_addons::reference_of(&mut tx, &addon, asset).await? {
+        return rule(format!(
+            "{addon} is linked to {} already, by the reference {other}: an add-on knows an asset \
+             by one reference",
+            stored.name
+        ));
+    }
+    crate::linked_addons::link(&mut tx, id, &addon, &reference, asset).await?;
+    decide(&mut tx, id, agent, State::Accepted).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Discards an open link proposal, for `agent`: the add-on's next attempt with its reference creates
 /// its own asset. Agents do not change an offboarded customer's catalog.
 pub async fn discard(db: &PgPool, id: Uuid, agent: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
+    lock_open(&mut tx, id).await?;
+    decide(&mut tx, id, agent, State::Discarded).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Locks the proposal's customer, refused when offboarded, then the proposal, refused unless it is
+/// open. Returns its add-on, its reference and the asset it matched.
+async fn lock_open(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<(String, String, Uuid)> {
     // A proposal never changes customer, so its customer can be read before it is locked; the
     // customer is locked first, as by supplying an asset.
     let customer: Uuid =
         sqlx::query_scalar("SELECT customer_id FROM asset_link_proposals WHERE id = $1")
             .bind(id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **tx)
             .await?
             .ok_or(Error::NotFound("link proposal"))?;
-    crate::customers::lock_active(&mut tx, customer).await?;
-    let state: State =
-        sqlx::query_scalar("SELECT state FROM asset_link_proposals WHERE id = $1 FOR UPDATE")
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await?;
+    crate::customers::lock_active(tx, customer).await?;
+    let (state, addon, reference, asset): (State, String, String, Uuid) = sqlx::query_as(
+        "SELECT state, addon, reference, asset_id FROM asset_link_proposals WHERE id = $1
+         FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_one(&mut **tx)
+    .await?;
     if state != State::Open {
         return rule("the link proposal is no longer open");
     }
+    Ok((addon, reference, asset))
+}
+
+/// Records that `agent` decided the open proposal, accepting or discarding it.
+async fn decide(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    agent: Uuid,
+    state: State,
+) -> Result<()> {
     sqlx::query(
         "UPDATE asset_link_proposals SET state = $3, decided_at = now(), decided_by = $2
          WHERE id = $1",
     )
     .bind(id)
     .bind(agent)
-    .bind(State::Discarded)
-    .execute(&mut *tx)
+    .bind(state)
+    .execute(&mut **tx)
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 

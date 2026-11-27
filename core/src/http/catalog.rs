@@ -23,6 +23,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(update_asset_kind))
         .routes(routes!(customer_assets, create_asset))
         .routes(routes!(customer_asset_link_proposals))
+        .routes(routes!(accept_asset_link_proposal))
         .routes(routes!(discard_asset_link_proposal))
         .routes(routes!(customer_services))
         .routes(routes!(update_asset))
@@ -128,6 +129,25 @@ async fn customer_asset_link_proposals(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<AssetLinkProposal>>, ApiError> {
     Ok(Json(asset_link_proposals::open_of(&state.db, id).await?))
+}
+
+/// Accepts an open link proposal: the add-on is linked to the asset it matched, with its
+/// reference, which from then on reaches that asset without changing anything of it. Refused when
+/// the asset was retired meanwhile or the add-on is linked to it already by another reference.
+/// Needs managing the catalog; an offboarded customer's proposals are not accepted.
+#[utoipa::path(post, path = "/api/asset-link-proposals/{id}/accept", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The link proposal")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = FORBIDDEN, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn accept_asset_link_proposal(
+    State(state): State<AppState>,
+    agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    agent.grant.require(Permission::ManageCatalog)?;
+    asset_link_proposals::accept(&state.db, id, agent.id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Discards an open link proposal: the add-on's next attempt with its reference creates its own
