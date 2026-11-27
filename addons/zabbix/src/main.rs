@@ -1,7 +1,11 @@
+use std::sync::Arc;
+
+use anyhow::Context;
 use clap::Parser;
-use hd_addon_sdk::Client;
+use hd_addon_sdk::{Client, Verifier};
 use hd_zabbix::check::{self, CheckArgs};
 use hd_zabbix::config::Config;
+use hd_zabbix::details::{self, Details};
 use hd_zabbix::sync::Syncer;
 use hd_zabbix::zabbix::Zabbix;
 use tracing_subscriber::EnvFilter;
@@ -57,6 +61,28 @@ async fn main() -> anyhow::Result<()> {
         interval_seconds = config.interval.as_secs(),
         "reading Zabbix's hosts now and at each interval"
     );
+    // The core's reads of live details are answered on their own, beside the rounds, with
+    // calls to Zabbix short enough for the core's 2 seconds.
+    let event_secret = config.event_secret.clone().context(
+        "set HD_ZABBIX_EVENT_SECRET or HD_ZABBIX_EVENT_SECRET_FILE: the core signs its reads of \
+         live details with the event secret `hd addon add` printed",
+    )?;
+    let details = Details::new(
+        Zabbix::new(&config.zabbix_url, &config.zabbix_token, details::DEADLINE)?,
+        &config.frontend_url,
+    );
+    let listener = tokio::net::TcpListener::bind(config.listen)
+        .await
+        .with_context(|| format!("listening on {}", config.listen))?;
+    tracing::info!(listen = %config.listen, "answering the core's reads of live details");
+    let server = tokio::spawn(
+        axum::serve(
+            listener,
+            details::router(Arc::new(details), Verifier::new(event_secret)),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .into_future(),
+    );
     let mut ticks = tokio::time::interval(config.interval);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let shutdown = shutdown_signal();
@@ -70,6 +96,7 @@ async fn main() -> anyhow::Result<()> {
             },
         }
     }
+    server.await??;
     Ok(())
 }
 

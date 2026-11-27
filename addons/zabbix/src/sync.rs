@@ -22,7 +22,7 @@ pub fn reference(host_id: &str, customer: Uuid) -> String {
 }
 
 /// The host a reference of [`reference`] is of.
-fn host_of(reference: &str) -> &str {
+pub fn host_of(reference: &str) -> &str {
     reference
         .split_once('@')
         .map_or(reference, |(host, _)| host)

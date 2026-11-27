@@ -1,7 +1,8 @@
 # The Zabbix add-on's configuration file, read from HD_ZABBIX_CONFIG (zabbix.toml in the working
-# directory by default). Its two secrets are not here: HD_ZABBIX_TOKEN (or HD_ZABBIX_TOKEN_FILE)
-# holds the token `hd addon add` printed, and HD_ZABBIX_API_TOKEN (or HD_ZABBIX_API_TOKEN_FILE)
-# an API token of the Zabbix user the add-on reads as.
+# directory by default). Its three secrets are not here: HD_ZABBIX_TOKEN (or HD_ZABBIX_TOKEN_FILE)
+# holds the token `hd addon add` printed, HD_ZABBIX_EVENT_SECRET (or HD_ZABBIX_EVENT_SECRET_FILE)
+# the event secret it printed, and HD_ZABBIX_API_TOKEN (or HD_ZABBIX_API_TOKEN_FILE) an API token
+# of the Zabbix user the add-on reads as.
 
 [core]
 # The help desk core's base URL.
@@ -12,8 +13,11 @@ url = "https://helpdesk.example.com"
 url = "https://zabbix.example.com"
 # The system's name as customers' external references name it (default Zabbix).
 system = "Zabbix"
-# Seconds a call to Zabbix may take (default 30).
+# Seconds a call to Zabbix may take (default 30); reads of live details take at most 1.5.
 timeout_seconds = 30
+# The frontend's base URL as agents' browsers reach it, for the links of live details, when the
+# add-on reaches Zabbix at another one (default url).
+# frontend_url = "https://zabbix.example.com"
 
 [sync]
 # Minutes between two reads of Zabbix's hosts, besides the one at startup (default 5).
@@ -57,6 +61,7 @@ tags = [{ tag = "service", value = "mail" }, { tag = "scope" }]
 outcome = "open"
 # low, normal, high or urgent.
 priority = "high"
+
 # Linked to the ticket when the customer uses it.
 service = "Hosted mail"
 # When the alert's problem recovers: resolve_if_not_worked_on (the default), resolve or note.
@@ -75,3 +80,8 @@ name = "High"
 min_severity = "high"
 outcome = "open"
 priority = "high"
+
+[addon]
+# Where the add-on answers the core's reads of live details: the URL `hd addon add --url` gave
+# (default 127.0.0.1:8091).
+listen = "127.0.0.1:8091"

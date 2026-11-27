@@ -178,12 +178,13 @@ cargo run -p hd-core -- addon add zabbix --url http://127.0.0.1:8091 \
   --scope directory:read --scope catalog:write --scope names:write --scope conflicts:write
 cp addons/zabbix/zabbix.example.toml zabbix.toml   # core.url http://127.0.0.1:8080,
                                                    # zabbix.url http://127.0.0.1:55180
-# in .env: HD_ZABBIX_TOKEN=… (printed above) and HD_ZABBIX_API_TOKEN=… (Zabbix's)
+# in .env: HD_ZABBIX_TOKEN=… and HD_ZABBIX_EVENT_SECRET=… (printed above) and
+# HD_ZABBIX_API_TOKEN=… (Zabbix's)
 cargo run -p hd-zabbix
 ```
 
 Its host groups then appear on a customer's page among the names to pick an external reference
-in `Zabbix` from.
+in `Zabbix` from, and the assets of its hosts show their live details from Zabbix.
 
 ## Tests
 

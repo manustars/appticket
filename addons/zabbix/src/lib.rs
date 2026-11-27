@@ -5,6 +5,7 @@ pub mod check;
 pub mod config;
 pub mod conflicts;
 pub mod coverage;
+pub mod details;
 pub mod kinds;
 pub mod rules;
 pub mod sync;

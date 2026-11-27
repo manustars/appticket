@@ -2,7 +2,8 @@
 
 The Zabbix add-on brings the hosts a Zabbix monitors into the help desk's catalog: the hosts of
 the host groups a customer has as external references become that customer's assets, with the
-add-on as their source ([ADR 0002](../../docs/adr/0002-core-owns-the-asset-catalog.md)). It talks to
+add-on as their source ([ADR 0002](../../docs/adr/0002-core-owns-the-asset-catalog.md)), and agents
+see the live details of those hosts beside their assets. It talks to
 Zabbix 7.0 LTS or later through `api_jsonrpc.php`, with an API token sent in
 `Authorization: Bearer`.
 
@@ -59,6 +60,44 @@ groups retires its asset at the old customer and becomes a new asset of the new 
 - Nothing is retired in a round where Zabbix or the core did not answer every read; the next
   round tries again.
 
+## Live details
+
+When agents look at the asset of a host, one it supplied or one it is linked to, the core asks the
+add-on for the asset's live details (`GET /assets/{reference}`, on `addon.listen`), and the add-on
+asks Zabbix then. Their labels are in English and Italian; their values are as Zabbix's English
+frontend words them, since the contract has values in one language only.
+
+| Field | Value |
+|---|---|
+| Availability (*Disponibilità*) | `Available`, `Partly available`, `Not available`, `Unknown`, or `Disabled` for a host Zabbix does not monitor; see below. |
+| Open problems (*Problemi aperti*) | How many problems of the host are open, leaving out suppressed ones and symptoms, as Zabbix's problem view does by default. |
+| Highest severity (*Gravità massima*) | The highest severity of those problems, by Zabbix's default names (`Not classified`, `Information`, `Warning`, `Average`, `High`, `Disaster`); none without problems. |
+| Main interface (*Interfaccia principale*) | The IP or DNS name Zabbix connects through, of the default interface of the agent, else SNMP, JMX or IPMI, as Zabbix's host list picks it; none without interfaces. |
+| OS (*Sistema operativo*) | The inventory's OS; none when the inventory is off or has none. |
+
+The state is **problem** when the host is not available or has an open High or Disaster problem,
+**warning** when it has other open problems or its availability is anything but available, and
+**ok** otherwise.
+
+Zabbix 7.0 keeps availability per interface, and for the agent's active checks; its host list
+shows a colour per interface type, counting the interfaces that an enabled item uses (all of them
+when no item uses any), with the active checks counted with the agent's when the host has an
+enabled one. The add-on applies the same rule to all of them together: available when all are,
+not available when none is, partly available when some are not and the others are or are unknown,
+and unknown otherwise or when there are none.
+
+The links open the host's page in Zabbix (*Inventory → Hosts*, `hostinventories.php`, with links
+to its latest data, graphs and configuration) and its open problems (*Monitoring → Problems* for
+the host), on `zabbix.frontend_url`. Agents open them as their own Zabbix user, whose role must
+allow those pages and who must be able to read the host; the configuration page also needs write
+access, which is why the host link is not it.
+
+The core waits 2 seconds: the add-on asks Zabbix its three questions at once (`host.get`,
+`item.get` and `problem.get`) and gives up after 1.5 seconds, answering with an error, so that the
+agents see the details as unavailable in time. Each read is answered on its own, beside the rounds
+of the catalog: one waiting for Zabbix holds up nothing else. A host Zabbix does not have, or that
+the add-on's user cannot read, has no live details.
+
 ## Registering it on the core
 
 ```sh
@@ -66,8 +105,11 @@ hd addon add zabbix --url http://127.0.0.1:8091 \
   --scope directory:read --scope catalog:write --scope names:write --scope conflicts:write
 ```
 
-The add-on receives no events and answers no reads yet, so `--url` is not called. The core prints
-a token once: put it in `HD_ZABBIX_TOKEN`, or in a file named by `HD_ZABBIX_TOKEN_FILE`.
+`--url` is where the core reaches the add-on's `addon.listen` for live details; the add-on receives
+no events yet. The core prints a token and an event secret once: put the token in
+`HD_ZABBIX_TOKEN`, or in a file named by `HD_ZABBIX_TOKEN_FILE`, and the event secret, with which
+the core signs its reads, in `HD_ZABBIX_EVENT_SECRET` or a file named by
+`HD_ZABBIX_EVENT_SECRET_FILE`.
 
 In Zabbix, give the add-on a user that can read the host groups of the customers, with an API
 token (*Users → API tokens*), and put that token in `HD_ZABBIX_API_TOKEN` or in a file named by
@@ -88,6 +130,8 @@ A TOML file, named by `HD_ZABBIX_CONFIG` (`zabbix.toml` in the working directory
 | `assets.default_kind` | required | The asset kind of a host no mapping matches, from the help desk's list. |
 | `assets.kinds` | none | Mappings, in order: each a `template` (its visible name) or a `tag` (with an optional `value`), and the `kind` it gives; names and values compared ignoring case. |
 | `alerts.rules` | the default list | The [rules for alerts](#alert-rules), in order. |
+| `zabbix.frontend_url` | `zabbix.url` | The base URL of Zabbix's frontend as agents' browsers reach it, for the links of the live details, when the add-on reaches Zabbix at another one. |
+| `addon.listen` | `127.0.0.1:8091` | Where the add-on answers the core's reads of live details. |
 
 A file that does not fit, such as an unknown setting, a mapping with both a template and a tag or
 an invalid rule, stops the add-on with a sentence naming it. A kind the help desk does not have is refused by the
@@ -102,6 +146,8 @@ parent:
 | `HD_ZABBIX_TOKEN_FILE` | A file holding `HD_ZABBIX_TOKEN`, such as a mounted secret. |
 | `HD_ZABBIX_API_TOKEN` | The Zabbix user's API token. |
 | `HD_ZABBIX_API_TOKEN_FILE` | A file holding `HD_ZABBIX_API_TOKEN`. |
+| `HD_ZABBIX_EVENT_SECRET` | The event secret printed by `hd addon add`. |
+| `HD_ZABBIX_EVENT_SECRET_FILE` | A file holding `HD_ZABBIX_EVENT_SECRET`. |
 | `HD_ZABBIX_CONFIG` | The configuration file. |
 | `HD_ZABBIX_LOG` | A `tracing` filter (default `info`). |
 
@@ -212,3 +258,7 @@ host groups and hosts under a prefix of their own and remove them at the end. A 
 is named by `HD_TEST_ZABBIX_URL` (default `http://127.0.0.1:55180`). CI runs them in the job
 `zabbix`. The test of `check` raises a real alert: it pushes a value to a trapper item with
 `history.push` until the server, once it has read the new item, opens the problem of its trigger.
+
+The tests of live details register the add-on at a port of their own, where they serve its reads,
+and raise problems the same way. One waits for Zabbix to
+mark an interface nobody answers at as not available, which takes a minute or two.
