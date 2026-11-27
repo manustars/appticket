@@ -13,10 +13,10 @@ use hd_addon_sdk::api::TicketState;
 use hd_addon_sdk::events::{Event as CoreEvent, StateChangedBy, TicketStateChanged};
 use hd_addon_sdk::server::{HandlerError, events_router};
 use hd_addon_sdk::{Envelope, Verifier};
-use time::OffsetDateTime;
+use uuid::Uuid;
 
 use super::Alerts;
-use crate::zabbix::Refused;
+use crate::zabbix::{Acknowledgement, Refused};
 
 /// How long the add-on takes at most to act on an event of the core: less than the 10 seconds
 /// the core waits, so that it answers a failure the core delivers again.
@@ -41,6 +41,9 @@ impl Done {
 /// An agent resolving or closing the ticket of a problem: what goes back to Zabbix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentChange {
+    /// The id of the core's event that told the change, the same each time the core delivers
+    /// it.
+    pub id: Uuid,
     pub ticket: i64,
     pub done: Done,
     /// The agent's name.
@@ -53,8 +56,9 @@ impl AgentChange {
     /// The change that goes back to Zabbix: an agent resolving or closing a ticket whose
     /// reference is a problem's event id. None for anything else: a change by the add-on itself
     /// or by a received message, another state, a ticket without a reference or one whose
-    /// reference is not an event id, such as a ticket of the add-on's own about itself.
-    pub fn of(changed: &TicketStateChanged) -> Option<AgentChange> {
+    /// reference is not an event id, such as a ticket of the add-on's own about itself. `id` is
+    /// the id of the core's event that told it.
+    pub fn of(changed: &TicketStateChanged, id: Uuid) -> Option<AgentChange> {
         let StateChangedBy::Agent { agent } = &changed.changed_by else {
             return None;
         };
@@ -68,6 +72,7 @@ impl AgentChange {
             return None;
         }
         Some(AgentChange {
+            id,
             ticket: changed.ticket_number,
             done,
             agent: agent.name.clone(),
@@ -81,8 +86,11 @@ impl AgentChange {
 pub enum Closing {
     /// The rule says so and the trigger allows it.
     Close,
-    /// The rule the alert meets now does not say so, or no rule opens it any more.
+    /// The rule the alert meets now does not say so.
     RuleKeepsOpen,
+    /// No rule opens the alert any more, such as after the rules changed: the default does not
+    /// close.
+    NoRule,
     /// The rule says so, but the trigger does not allow closing its problems by hand.
     TriggerKeepsOpen,
     /// Zabbix refused to close it, for this reason.
@@ -96,21 +104,39 @@ impl Closing {
     /// no rule opens it) and whether its trigger allows closing it by hand (asked only when the
     /// rule says to close it).
     pub fn decide(recovered: bool, close_in_zabbix: Option<bool>, manual_close: bool) -> Closing {
-        if recovered {
-            Closing::Recovered
-        } else if close_in_zabbix != Some(true) {
-            Closing::RuleKeepsOpen
-        } else if !manual_close {
-            Closing::TriggerKeepsOpen
-        } else {
-            Closing::Close
+        match close_in_zabbix {
+            _ if recovered => Closing::Recovered,
+            None => Closing::NoRule,
+            Some(false) => Closing::RuleKeepsOpen,
+            Some(true) if !manual_close => Closing::TriggerKeepsOpen,
+            Some(true) => Closing::Close,
         }
     }
 }
 
-/// The message the event is acknowledged with: the ticket, the agent, and what becomes of the
-/// problem in Zabbix.
+/// What ends the message of each acknowledgement, naming the change it acknowledges by the id of
+/// the core's event that told it: `[help desk change 6f1c…]`.
+fn change_key(id: Uuid) -> String {
+    format!("[help desk change {id}]")
+}
+
+/// Whether the add-on's own Zabbix user, `own_user_id`, already acknowledged the change with this
+/// id, whatever its message said besides, such as before the problem was closed or before Zabbix
+/// refused to close it.
+pub fn already_acknowledged(made: &[Acknowledgement], own_user_id: &str, id: Uuid) -> bool {
+    let key = change_key(id);
+    made.iter()
+        .any(|a| a.user_id == own_user_id && a.message.contains(&key))
+}
+
+/// The message the event is acknowledged with: the ticket, the agent, what becomes of the
+/// problem in Zabbix, and the change's key.
 pub fn acknowledgement(change: &AgentChange, closing: &Closing) -> String {
+    let text = said(change, closing);
+    format!("{text} {}", change_key(change.id))
+}
+
+fn said(change: &AgentChange, closing: &Closing) -> String {
     let done = format!(
         "Ticket {} was {} in the help desk by {}",
         change.ticket,
@@ -121,6 +147,7 @@ pub fn acknowledgement(change: &AgentChange, closing: &Closing) -> String {
     match closing {
         Closing::Close => format!("{done}: the problem is closed in Zabbix, as its rule says."),
         Closing::RuleKeepsOpen => format!("{done}; {stays}, since its rule does not close it."),
+        Closing::NoRule => format!("{done}; {stays}, since no rule opens its alert any more."),
         Closing::TriggerKeepsOpen => {
             format!("{done}; {stays}, since its trigger does not allow closing it by hand.")
         }
@@ -130,17 +157,17 @@ pub fn acknowledgement(change: &AgentChange, closing: &Closing) -> String {
 }
 
 impl Alerts {
-    /// A change of a ticket's state, made at `at`: an agent resolving or closing the ticket of a
-    /// problem acknowledges the problem's event, and closes it as [`Closing::decide`] says;
-    /// anything else, or a problem Zabbix does not have any more, sends nothing. An
-    /// acknowledgement the add-on already made for this change, such as when the core delivers it
-    /// again, is not made twice.
+    /// A change of a ticket's state, told by the core's event with the id `id`: an agent
+    /// resolving or closing the ticket of a problem acknowledges the problem's event, and closes
+    /// it as [`Closing::decide`] says; anything else, or a problem Zabbix does not have any more,
+    /// sends nothing. A change the add-on already acknowledged, such as one the core delivers
+    /// again after the add-on acted on it, is not acknowledged twice.
     pub async fn state_changed(
         &self,
         changed: &TicketStateChanged,
-        at: OffsetDateTime,
+        id: Uuid,
     ) -> anyhow::Result<()> {
-        let Some(change) = AgentChange::of(changed) else {
+        let Some(change) = AgentChange::of(changed, id) else {
             tracing::debug!(ticket = changed.ticket_number, ?changed.changed_by,
                 new_state = ?changed.new_state, "a change of state that does not go back to Zabbix");
             return Ok(());
@@ -155,6 +182,17 @@ impl Alerts {
                 "Zabbix has no problem of the ticket any more: nothing to acknowledge");
             return Ok(());
         };
+        let own = self.own_user().await?;
+        let made = self
+            .zabbix
+            .acknowledgements(&event.id)
+            .await
+            .context("reading the problem's acknowledgements")?;
+        if already_acknowledged(&made, &own.id, change.id) {
+            tracing::info!(event = %event.id, ticket = change.ticket, change = %change.id,
+                "the change was already acknowledged in Zabbix");
+            return Ok(());
+        }
         let recovered = event.recovery_id.is_some();
         let (close_in_zabbix, manual_close) = if recovered {
             (None, false)
@@ -173,38 +211,23 @@ impl Alerts {
         };
         let closing = Closing::decide(recovered, close_in_zabbix, manual_close);
         let message = acknowledgement(&change, &closing);
-        let own = self.own_user().await?;
-        let made = self
-            .zabbix
-            .acknowledgements(&event.id)
-            .await
-            .context("reading the problem's acknowledgements")?;
-        if made
-            .iter()
-            .any(|a| a.user_id == own.id && a.message == message && a.clock >= at.unix_timestamp())
-        {
-            tracing::info!(event = %event.id, ticket = change.ticket,
-                "the change was already acknowledged in Zabbix");
-            return Ok(());
-        }
         let close = closing == Closing::Close;
-        match self.zabbix.acknowledge(&event.id, close, &message).await {
-            Ok(()) => {}
-            Err(e) if close && e.downcast_ref::<Refused>().is_some() => {
-                let why = e
-                    .downcast_ref::<Refused>()
-                    .map(Refused::reason)
-                    .unwrap_or_default();
-                tracing::warn!(event = %event.id, ticket = change.ticket, %why,
-                    "Zabbix refused to close the problem: acknowledging it only");
-                let message = acknowledgement(&change, &Closing::Refused(why));
-                self.zabbix
-                    .acknowledge(&event.id, false, &message)
-                    .await
-                    .context("acknowledging the problem")?;
-                return Ok(());
-            }
-            Err(e) => return Err(e).context("acknowledging the problem"),
+        if let Err(e) = self.zabbix.acknowledge(&event.id, close, &message).await {
+            let refused = e
+                .downcast_ref::<Refused>()
+                .filter(|_| close)
+                .map(Refused::reason);
+            let Some(why) = refused else {
+                return Err(e).context("acknowledging the problem");
+            };
+            tracing::warn!(event = %event.id, ticket = change.ticket, %why,
+                "Zabbix refused to close the problem: acknowledging it only");
+            let message = acknowledgement(&change, &Closing::Refused(why));
+            self.zabbix
+                .acknowledge(&event.id, false, &message)
+                .await
+                .context("acknowledging the problem")?;
+            return Ok(());
         }
         tracing::info!(event = %event.id, ticket = change.ticket, ?closing,
             "the ticket's change acknowledged in Zabbix");
@@ -229,11 +252,7 @@ pub fn router(alerts: Arc<Alerts>, verifier: Verifier) -> Router {
                     return Ok(());
                 }
             };
-            match tokio::time::timeout(
-                DEADLINE,
-                alerts.state_changed(&changed, envelope.created_at),
-            )
-            .await
+            match tokio::time::timeout(DEADLINE, alerts.state_changed(&changed, envelope.id)).await
             {
                 Ok(Ok(())) => Ok(()),
                 Ok(Err(e)) => Err::<(), HandlerError>(format!("{e:#}").into()),
@@ -253,7 +272,6 @@ pub fn ignoring(verifier: Verifier) -> Router {
 mod tests {
     use super::*;
     use hd_addon_sdk::events::Agent;
-    use uuid::Uuid;
 
     fn changed(
         new_state: TicketState,
@@ -278,11 +296,18 @@ mod tests {
         }
     }
 
+    /// The id of the core's event that told the change.
+    const CHANGE: Uuid = Uuid::from_u128(0x6f1c2c1e_8d2a_4c4f_9a43_0d5b8f6e2a10);
+
     #[test]
     fn only_an_agent_resolving_or_closing_the_ticket_of_a_problem_goes_back_to_zabbix() {
         assert_eq!(
-            AgentChange::of(&changed(TicketState::Resolved, marco(), Some("4213"))),
+            AgentChange::of(
+                &changed(TicketState::Resolved, marco(), Some("4213")),
+                CHANGE
+            ),
             Some(AgentChange {
+                id: CHANGE,
                 ticket: 42,
                 done: Done::Resolved,
                 agent: "Marco Bellini".into(),
@@ -290,7 +315,8 @@ mod tests {
             })
         );
         assert_eq!(
-            AgentChange::of(&changed(TicketState::Closed, marco(), Some("4213"))).map(|c| c.done),
+            AgentChange::of(&changed(TicketState::Closed, marco(), Some("4213")), CHANGE)
+                .map(|c| c.done),
             Some(Done::Closed)
         );
         for (state, by, reference) in [
@@ -323,7 +349,7 @@ mod tests {
             (TicketState::Resolved, marco(), Some("42a")),
         ] {
             assert_eq!(
-                AgentChange::of(&changed(state, by.clone(), reference)),
+                AgentChange::of(&changed(state, by.clone(), reference), CHANGE),
                 None,
                 "{state:?} {by:?} {reference:?}"
             );
@@ -339,7 +365,7 @@ mod tests {
             (false, Some(false), true, RuleKeepsOpen),
             (false, Some(false), false, RuleKeepsOpen),
             // No rule opens its alert any more: the default does not close.
-            (false, None, true, RuleKeepsOpen),
+            (false, None, true, NoRule),
             (true, Some(true), true, Recovered),
             (true, None, false, Recovered),
         ] {
@@ -354,6 +380,7 @@ mod tests {
     #[test]
     fn the_acknowledgement_names_the_ticket_and_the_agent_and_says_what_becomes_of_the_problem() {
         let resolved = AgentChange {
+            id: CHANGE,
             ticket: 42,
             done: Done::Resolved,
             agent: "Marco Bellini".into(),
@@ -363,6 +390,7 @@ mod tests {
             done: Done::Closed,
             ..resolved.clone()
         };
+        let key = "[help desk change 6f1c2c1e-8d2a-4c4f-9a43-0d5b8f6e2a10]";
         for (change, closing, message) in [
             (
                 &resolved,
@@ -375,6 +403,12 @@ mod tests {
                 Closing::RuleKeepsOpen,
                 "Ticket 42 was resolved in the help desk by Marco Bellini; the problem stays open \
                  in Zabbix, since its rule does not close it.",
+            ),
+            (
+                &resolved,
+                Closing::NoRule,
+                "Ticket 42 was resolved in the help desk by Marco Bellini; the problem stays open \
+                 in Zabbix, since no rule opens its alert any more.",
             ),
             (
                 &closed,
@@ -395,7 +429,48 @@ mod tests {
                 "Ticket 42 was closed in the help desk by Marco Bellini.",
             ),
         ] {
-            assert_eq!(acknowledgement(change, &closing), message);
+            assert_eq!(
+                acknowledgement(change, &closing),
+                format!("{message} {key}")
+            );
         }
+    }
+
+    #[test]
+    fn a_change_is_acknowledged_once_whatever_its_message_said_then() {
+        let made = |user: &str, message: &str| Acknowledgement {
+            user_id: user.into(),
+            message: message.into(),
+        };
+        let key = "[help desk change 6f1c2c1e-8d2a-4c4f-9a43-0d5b8f6e2a10]";
+        // Said before the problem closed, or before Zabbix refused to close it: the same change.
+        for message in [
+            format!(
+                "Ticket 42 was resolved in the help desk by Marco Bellini: the problem is closed \
+                 in Zabbix, as its rule says. {key}"
+            ),
+            format!("Ticket 42 was resolved; Zabbix refused to close it: timeout {key}"),
+        ] {
+            assert!(already_acknowledged(
+                &[made("1", "Looking at it"), made("7", &message)],
+                "7",
+                CHANGE
+            ));
+        }
+        // Another change, or another user quoting the change.
+        let other = "[help desk change 00000000-0000-0000-0000-000000000001]";
+        assert!(!already_acknowledged(
+            &[
+                made("7", &format!("Ticket 42 was resolved {other}")),
+                made("3", &format!("Copied: {key}")),
+                made(
+                    "7",
+                    "Ticket 42 was resolved in the help desk by Marco Bellini."
+                ),
+            ],
+            "7",
+            CHANGE
+        ));
+        assert!(!already_acknowledged(&[], "7", CHANGE));
     }
 }

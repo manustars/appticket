@@ -106,7 +106,7 @@ impl Alerts {
     /// With the base URL of the help desk's UI, such as `https://helpdesk.example.com`: a
     /// problem's answer also gives the address of its ticket's page, in the tag `hd_ticket_url`.
     pub fn with_ui_url(mut self, ui_url: &str) -> Alerts {
-        self.ui_url = Some(ui_url.trim_end_matches('/').to_owned());
+        self.ui_url = Some(ui_url.to_owned());
         self
     }
 
@@ -278,17 +278,16 @@ impl Alerts {
         event: &Event,
         on_recovery: Recovery,
     ) -> anyhow::Result<()> {
+        // Without it, whether the add-on itself closed the problem cannot be told: a failure,
+        // so that Zabbix tries again, rather than a note and maybe a resolution.
         let recovery = match &event.recovery_id {
             None => None,
-            Some(recovery) => match self.zabbix.recovery_event(recovery).await {
-                Ok(recovery) => Some(recovery),
-                Err(e) => {
-                    tracing::warn!(event = %event.id, recovery = %recovery,
-                        error = format!("{e:#}"),
-                        "reading when the problem recovered: the note says it without the time");
-                    None
-                }
-            },
+            Some(recovery) => Some(
+                self.zabbix
+                    .recovery_event(recovery)
+                    .await
+                    .context("reading the problem's recovery")?,
+            ),
         };
         // The add-on itself closed the problem, since an agent resolved or closed its ticket:
         // nothing to note, and a ticket the agent reopened since stays open.

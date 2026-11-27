@@ -309,8 +309,6 @@ pub struct OwnUser {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Acknowledgement {
     pub user_id: String,
-    /// When it was made, in seconds since the Unix epoch.
-    pub clock: i64,
     /// Empty when it has none.
     pub message: String,
 }
@@ -508,13 +506,11 @@ impl Zabbix {
         Ok(event.related.manual_close == "1")
     }
 
-    /// The updates users made of the problem event with this id, such as acknowledgements,
-    /// oldest first.
+    /// The updates users made of the problem event with this id, such as acknowledgements.
     pub async fn acknowledgements(&self, event: &str) -> anyhow::Result<Vec<Acknowledgement>> {
         #[derive(Deserialize)]
         struct Raw {
             userid: String,
-            clock: String,
             #[serde(default)]
             message: String,
         }
@@ -527,20 +523,17 @@ impl Zabbix {
             .call(
                 "event.get",
                 json!({"eventids": [event], "output": ["eventid"],
-                       "selectAcknowledges": ["userid", "clock", "message"]}),
+                       "selectAcknowledges": ["userid", "message"]}),
             )
             .await?;
-        let mut made: Vec<Acknowledgement> = events
+        Ok(events
             .into_iter()
             .flat_map(|e| e.acknowledges)
             .map(|a| Acknowledgement {
                 user_id: a.userid,
-                clock: a.clock.parse().unwrap_or_default(),
                 message: a.message,
             })
-            .collect();
-        made.sort_by_key(|a| a.clock);
-        Ok(made)
+            .collect())
     }
 
     /// Acknowledges the problem event with this id with `message`, closing the problem when

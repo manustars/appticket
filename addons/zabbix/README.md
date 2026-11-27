@@ -235,11 +235,11 @@ reads the ticket and resolves it as that rule says (`on_recovery`): by default o
 has worked on it, always with `resolve`, never with `note`; and only an open or waiting ticket.
 When no rule opens the alert any more, such as after the rules changed, the default decides. When
 Zabbix does not answer, the add-on adds nothing and answers 502, so that Zabbix tries again,
-rather than guess what the rule would say; when only the recovery's time cannot be read, the note
-says the problem recovered without it, and the add-on logs why. The recovery of a problem the
-add-on itself closed, [back in Zabbix](#back-to-zabbix) once an agent resolved or closed its
-ticket, adds no note and resolves nothing: the agent's change is the ticket's, and a ticket they
-reopened since stays open.
+rather than guess what the rule would say. The recovery of a problem the add-on itself closed,
+[back in Zabbix](#back-to-zabbix) once an agent resolved or closed its ticket, adds no note and
+resolves nothing: the agent's change is the ticket's, and a ticket they reopened since stays open.
+Telling it apart takes the recovery's event, with its time and who closed the problem: when
+Zabbix does not give it, the add-on adds nothing and answers 502 too.
 
 `resolve` is the help desk's explicit choice, rule by rule, to override the default of
 [ADR 0010](../../docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md), by which the
@@ -290,19 +290,21 @@ A problem without a ticket, because none was opened for it, gets no note on reco
 
 When an agent resolves or closes the ticket of a problem, the core tells the add-on
 (`ticket.state_changed`, with the ticket's reference, the problem's event id), and the add-on
-acknowledges the problem's event in Zabbix with a message naming the ticket and the agent:
+acknowledges the problem's event in Zabbix with a message naming the ticket and the agent, and
+ending with the change's key, the id of the core's event that told it:
 
 ```text
-Ticket 42 was resolved in the help desk by Marco Bellini; the problem stays open in Zabbix, since its rule does not close it.
+Ticket 42 was resolved in the help desk by Marco Bellini; the problem stays open in Zabbix, since its rule does not close it. [help desk change 6f1c2c1e-8d2a-4c4f-9a43-0d5b8f6e2a10]
 ```
 
 It also closes the problem when two things hold: the rule the problem's alert meets now says so
-(`close_in_zabbix = true`; when no rule opens the alert any more, the default does not), and the
-problem's trigger allows closing it by hand (*Allow manual close*, `manual_close`). The message
-then says the problem is closed, and otherwise why it stays open: its rule, or its trigger. When
-Zabbix refuses to close it all the same, such as for a user whose role does not allow closing
-problems or who may only read its hosts, the add-on acknowledges it without closing, and the message gives Zabbix's reason. A
-problem that has already recovered is acknowledged with the ticket and the agent only.
+(`close_in_zabbix = true`), and the problem's trigger allows closing it by hand (*Allow manual
+close*, `manual_close`). The message then says the problem is closed, and otherwise why it stays
+open: its rule, no rule opening the alert any more (the default does not close), or its trigger.
+When Zabbix refuses to close it all the same, such as for a user whose role does not allow
+closing problems or who may only read its hosts, the add-on acknowledges it without closing, and
+the message gives Zabbix's reason. A problem that has already recovered is acknowledged with the
+ticket and the agent only.
 
 Nothing goes back to Zabbix for the add-on's own resolutions, on recovery, for a ticket moving to
 another state (open or waiting), nor for a ticket whose reference is no problem's event id, such
@@ -310,10 +312,19 @@ as one the add-on opens about itself. A problem Zabbix no longer has, such as on
 removed, is left alone. Zabbix sends the acknowledgement back to the webhook as an update of the
 add-on's own user, and the close as a recovery the add-on made: neither adds to the ticket.
 
-The add-on acts on the event within 8 seconds, less than the 10 the core waits; when Zabbix or the
-core did not answer, it answers a failure, and the core delivers the event again later, from 30
-seconds to an hour apart, twelve times in all. An acknowledgement the add-on already made for the
-same change is not made again.
+The add-on acts on the event within the core's request, taking 8 seconds at most, less than the
+10 the core waits. This departs from the contract's advice ([`sdk/README.md`](../../sdk/README.md))
+to answer at once and do the work in the background, on purpose: an event the add-on could not
+act on, because Zabbix or the core did not answer, is answered with a failure, and the core
+delivers it again, from 30 seconds to an hour apart, twelve times in all, so the add-on keeps no
+queue of its own and loses nothing when it restarts. The core delivers one event at a time, so a
+slow Zabbix holds the next event up to those 8 seconds. A change is acknowledged once: before
+acknowledging, the add-on looks for the change's key among its own user's acknowledgements of the
+problem, so an event the core delivers again after the add-on acted on it, such as after an
+answer that came too late, adds none, whatever the problem became since.
+
+Problems opened before the add-on answered `hd_ticket_url` (before this version) do not have the
+tag, so their events show no menu entry; Zabbix takes tags only from the webhook's answer.
 
 ## Alert rules
 
