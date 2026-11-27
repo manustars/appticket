@@ -404,6 +404,10 @@ export interface Messages {
   "assets.retired": { plural: false; placeholders: "date"; tags: never }
   "assets.confirmRetire": { plural: false; placeholders: "name"; tags: never }
   "assets.confirmRetireHeld": { plural: false; placeholders: "holder" | "name"; tags: never }
+  "assets.fromAddon": { plural: false; placeholders: "addon"; tags: never }
+  "assets.setHolder": { plural: false; placeholders: never; tags: never }
+  "assets.setHolderNamed": { plural: false; placeholders: "name"; tags: never }
+  "assets.suppliedHint": { plural: false; placeholders: never; tags: never }
   "kinds.title": { plural: false; placeholders: never; tags: never }
   "kinds.hint": { plural: false; placeholders: never; tags: never }
   "kinds.empty": { plural: false; placeholders: never; tags: never }
