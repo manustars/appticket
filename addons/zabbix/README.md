@@ -7,11 +7,12 @@ see the live details of those hosts beside their assets. It talks to
 Zabbix 7.0 LTS or later through `api_jsonrpc.php`, with an API token sent in
 `Authorization: Bearer`.
 
-The [rules for alerts](#alert-rules) are read and checked at startup, and the
-[`check` command](#checking-an-alert-against-the-rules) tells which rule an alert meets; the
-alerts themselves, the tickets they open and what goes back to Zabbix
-([ADR 0010](../../docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md)) come in later
-versions.
+Zabbix sends its alerts to the add-on's [webhook](#alerts), through the media type shipped here,
+and the [rules for alerts](#alert-rules) decide which open a ticket
+([ADR 0010](../../docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md)); the
+[`check` command](#checking-an-alert-against-the-rules) tells which rule an alert meets. The
+safety limit on the tickets opened, and what goes back to Zabbix besides the ticket's number, come
+in later versions.
 
 ## What it does
 
@@ -109,11 +110,17 @@ unavailable.
 
 ```sh
 hd addon add zabbix --url http://127.0.0.1:8091 \
-  --scope directory:read --scope catalog:write --scope names:write --scope conflicts:write
+  --scope directory:read --scope catalog:write --scope names:write --scope conflicts:write \
+  --scope tickets:read --scope tickets:write
 ```
 
 `--url` is where the core reaches the add-on's `addon.listen` for live details; the add-on receives
-no events yet. The core prints a token and an event secret once: put the token in
+no events of the core yet. `tickets:write` opens, notes and resolves the tickets of alerts, and
+`tickets:read` finds them by their problem and reads, before resolving one, whether an agent has
+worked on it. The core has no command that changes the scopes of an add-on registered before
+alerts came in: without the two, each alert fails with the core's sentence on the missing scope,
+in the add-on's log and in Zabbix's (*Reports → Action log*), until the add-on is registered with
+them. The core prints a token and an event secret once: put the token in
 `HD_ZABBIX_TOKEN`, or in a file named by `HD_ZABBIX_TOKEN_FILE`, and the event secret, with which
 the core signs its reads, in `HD_ZABBIX_EVENT_SECRET` or a file named by
 `HD_ZABBIX_EVENT_SECRET_FILE`.
@@ -148,7 +155,8 @@ A TOML file, named by `HD_ZABBIX_CONFIG` (`zabbix.toml` in the working directory
 | `assets.kinds` | none | Mappings, in order: each a `template` (its visible name) or a `tag` (with an optional `value`), and the `kind` it gives; names and values compared ignoring case. |
 | `alerts.rules` | the default list | The [rules for alerts](#alert-rules), in order. |
 | `zabbix.frontend_url` | `zabbix.url` | The base URL of Zabbix's frontend as agents' browsers reach it, for the links of the live details, when the add-on reaches Zabbix at another one. |
-| `addon.listen` | `127.0.0.1:8091` | Where the add-on answers the core's reads of live details. |
+| `addon.listen` | `127.0.0.1:8091` | Where the add-on answers the core's reads of live details and receives Zabbix's alerts on its [webhook](#alerts) (`/webhook`). |
+| `webhook.secret_file` | none | The file holding the webhook's secret, of 16 characters or more, which Zabbix's media type sends; without a `[webhook]` section, the add-on receives no alerts and says so at startup. |
 
 A file that does not fit, such as an unknown setting, a mapping with both a template and a tag or
 an invalid rule, stops the add-on with a sentence naming it. A kind the help desk does not have is refused by the
@@ -170,7 +178,80 @@ parent:
 
 A secret's file is used with the surrounding whitespace (such as a final newline) removed.
 Setting a variable and its `_FILE` together, or naming a missing or empty file, stops the add-on
-with a message saying which.
+with a message saying which. The webhook's secret is read the same way from the file
+`webhook.secret_file` names (a relative path from the working directory); a missing or empty file,
+or a secret shorter than 16 characters, stops the add-on. Make one with, for example,
+`openssl rand -hex 32 > webhook-secret`.
+
+## Alerts
+
+Zabbix sends the problems of triggers, their recoveries and their updates to the add-on's webhook
+(`POST /webhook` on `addon.listen`), through the webhook media type
+[`zabbix-media-type.yaml`](zabbix-media-type.yaml). The add-on acts on each within the request and
+answers in less than 20 seconds, within the media type's 30: a request without the webhook's
+secret is refused (401), and one it could not act on, because Zabbix or the core did not answer or
+the core refused, is answered 502 with the reason, which Zabbix shows in its action log
+(*Reports → Action log*), trying three times in all, 10 seconds apart.
+
+**A problem.** The add-on reads the problem's event from Zabbix (severity, name, tags, operational
+data, start, hosts) and the host's groups, finds the customer whose asset the host is, as a round
+does, and asks the [rules](#alert-rules). When they say `open`, it opens one ticket, with the
+problem's event id as its ticket reference, and answers its number, which Zabbix adds to the
+problem as the tag `hd_ticket`:
+
+- for the customer of the host's asset, without a requester, so replies go to the customer's key
+  requesters, and linked to that asset;
+- with the rule's priority, and its service when the customer uses it; otherwise without, and the
+  description says so;
+- titled with the host's visible name and the event's name, the one the rules' `trigger_contains`
+  is matched against: `SRV-01: Mail queue of SRV-01 is too long`;
+- described, in its first note, with the problem's id, the rule that opened it, the severity, the
+  start time (UTC), the tags and the operational data.
+
+The same event sent again, by Zabbix trying again or by an escalation step, gets the same ticket.
+A host that is not imported (no customer covers its groups, two do, or an offboarded customer does)
+opens no ticket, nor does a problem the rules ignore: the add-on logs why. A host the catalog does
+not have as an asset yet, such as one added to Zabbix since the last round, gets its ticket
+without the asset, and the description says so. A trigger on the items of several hosts opens
+the ticket of the first of them, in Zabbix's order, that is an asset of a customer and whose alert
+a rule opens.
+
+**A recovery.** The add-on adds a note with the time the problem recovered, then reads the ticket
+and resolves it as the rule that opens the alert says (`on_recovery`, with the ticket's customer):
+by default only when no agent has worked on it, always with `resolve`, never with `note`; and only
+an open or waiting ticket. When no rule opens the alert any more, such as after the rules changed,
+the default decides.
+
+**An update.** An update with a message, such as an acknowledgement with a comment, adds a note
+with the Zabbix user, what they did and the message:
+`Olga Operator (olga) updated the problem in Zabbix (acknowledged and commented): Looking at it`.
+Updates without a message, and those of the add-on's own Zabbix user (the one of
+`HD_ZABBIX_API_TOKEN`), add none.
+
+A problem without a ticket, because none was opened for it, gets no note on recovery or update.
+
+### Setting it up in Zabbix
+
+1. Import the media type: *Alerts → Media types → Import*, the file `zabbix-media-type.yaml`.
+   Zabbix 7.0 or later.
+2. In the media type **Help desk**, set the parameter `url` to the add-on's webhook as the Zabbix
+   server reaches it, such as `https://hd-zabbix.example.com/webhook`; `addon.listen` must then be
+   an address the server reaches (`0.0.0.0:8091` behind a proxy with HTTPS, for one). Set
+   `http_proxy` if the server goes through one.
+3. Give the webhook's secret to the media type: create the global macro `{$HD_WEBHOOK_SECRET}`
+   (*Administration → Macros*) of type *Secret text*, with the content of `webhook.secret_file`.
+   The parameter `secret` sends it; a secret written in the parameter itself would work too, but
+   it would show to those who can read media types.
+4. Give a user the media type as a media (*Users → Users → Media*), with any *Send to*, such as
+   `helpdesk`. That user must be able to read the hosts whose problems it receives.
+5. Create a trigger action (*Alerts → Actions → Trigger actions*) with the conditions that select
+   the problems for the help desk, such as their host groups, and:
+   - an operation that sends a message to that user through **Help desk**;
+   - a recovery operation *Notify all involved*;
+   - an update operation *Notify all involved*.
+
+   The rules still decide which problems open a ticket; the action only decides which reach the
+   add-on.
 
 ## Alert rules
 
@@ -279,3 +360,14 @@ is named by `HD_TEST_ZABBIX_URL` (default `http://127.0.0.1:55180`). CI runs the
 The tests of live details register the add-on at a port of their own, where they serve its reads,
 and raise problems the same way. One waits for Zabbix to
 mark an interface nobody answers at as not available, which takes a minute or two.
+
+The tests of alerts raise problems the same way and serve the add-on's webhook on a port of their
+own, bound on `HD_TEST_WEBHOOK_LISTEN` (default `0.0.0.0:0`, every address, so that Zabbix's
+server reaches it from its container). Most post the media type's events to it themselves; one
+imports `zabbix-media-type.yaml` under a name of its own, with a user and an action of its own,
+and lets Zabbix send them. The server reaches the test at the host named by
+`HD_TEST_ZABBIX_WEBHOOK_HOST`, by default `host.docker.internal`, which `compose.yaml` maps to the
+host for the server. With Podman on Windows or macOS that name reaches the machine's virtual
+machine, not the host where the test runs: give the host's address as the virtual machine sees
+it, such as the address after `default via` in `podman machine ssh ip route` with WSL, and
+allow the test's binary through the host's firewall if it asks.

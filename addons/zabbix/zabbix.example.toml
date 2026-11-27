@@ -82,6 +82,14 @@ outcome = "open"
 priority = "high"
 
 [addon]
-# Where the add-on answers the core's reads of live details: the URL `hd addon add --url` gave
-# (default 127.0.0.1:8091).
+# Where the add-on answers the core's reads of live details, at the URL `hd addon add --url` gave,
+# and receives Zabbix's alerts on /webhook (default 127.0.0.1:8091): an address the Zabbix server
+# reaches, when it is on another host.
 listen = "127.0.0.1:8091"
+
+# Zabbix's alerts, sent by the media type zabbix-media-type.yaml to http://<listen>/webhook.
+# Without this section the add-on receives none.
+# [webhook]
+# The file holding the webhook's secret, of 16 characters or more, which Zabbix sends from the
+# global macro {$HD_WEBHOOK_SECRET}; a relative path is from the working directory.
+# secret_file = "/run/secrets/hd-zabbix-webhook"
