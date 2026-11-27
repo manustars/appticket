@@ -158,7 +158,9 @@ pub async fn update(db: &PgPool, addon: &str, id: Uuid, details: &SuppliedDetail
     if known == Known::Linked {
         // What it sends changes nothing, retired or not.
         let checked = checked(&mut tx, customer, details).await?;
-        return unchanged_by_linked(&asset, addon, &checked);
+        unchanged_by_linked(&asset, addon, &checked)?;
+        tx.commit().await?;
+        return Ok(());
     }
     if asset.retired {
         return rule(format!(
@@ -213,10 +215,10 @@ async fn lock_known(
     id: Uuid,
 ) -> Result<(Uuid, StoredAsset, Known)> {
     let (customer, asset) = lock_with_customer(tx, id).await?;
-    if asset.source_addon.as_deref() != Some(addon)
-        && crate::linked_addons::reference_of(tx, addon, id)
-            .await?
-            .is_some()
+    // The database links no add-on to an asset it is the source of.
+    if crate::linked_addons::reference_of(tx, addon, id)
+        .await?
+        .is_some()
     {
         return Ok((customer, asset, Known::Linked));
     }
@@ -245,9 +247,16 @@ pub(crate) async fn lock_with_customer(
 /// Refuses what an add-on linked to the asset sends when it differs from what the asset has: it
 /// changes nothing of it.
 fn unchanged_by_linked(asset: &StoredAsset, addon: &str, checked: &Checked) -> Result<()> {
+    // Names and serial numbers ignoring case, as they matched, and as kinds and sites are named:
+    // the add-on sending again what it sent when the link was proposed changes nothing.
+    let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+    let same_serial = match (&asset.serial_number, &checked.serial_number) {
+        (Some(a), Some(b)) => same(a, b),
+        (a, b) => a == b,
+    };
     if asset.kind_id == checked.kind
-        && asset.name == checked.name
-        && asset.serial_number == checked.serial_number
+        && same(&asset.name, &checked.name)
+        && same_serial
         && asset.site_id == checked.site
     {
         return Ok(());

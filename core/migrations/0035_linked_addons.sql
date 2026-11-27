@@ -37,20 +37,65 @@ CREATE TRIGGER asset_linked_addons_stay
     BEFORE UPDATE ON asset_linked_addons
     FOR EACH ROW EXECUTE FUNCTION asset_linked_addons_stay();
 
--- An add-on is not linked to an asset it is the source of, and a reference names one asset of an
--- add-on, whether the add-on is its source or linked to it. Raised with a constraint's name, so
--- that the core can tell this refusal apart.
-CREATE FUNCTION asset_linked_addons_fit() RETURNS trigger LANGUAGE plpgsql AS $$
+-- An accepted proposal stays accepted, so that the links it made keep a reason.
+CREATE FUNCTION asset_link_proposals_accepted_stay() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF EXISTS (SELECT 1 FROM assets WHERE id = NEW.asset_id AND source_addon = NEW.addon) THEN
+    IF OLD.state = 'accepted' AND NEW.state <> OLD.state THEN
+        RAISE EXCEPTION 'an accepted link proposal stays accepted'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER asset_link_proposals_accepted_stay
+    BEFORE UPDATE OF state ON asset_link_proposals
+    FOR EACH ROW EXECUTE FUNCTION asset_link_proposals_accepted_stay();
+
+-- An add-on is not linked to an asset it is the source of, and a reference names one asset of an
+-- add-on, whether the add-on is its source or linked to it; checked after a link is made or an
+-- asset gets a source, refused with a constraint's name so that the core can tell the refusals
+-- apart.
+--
+-- The rows each check looks for may be written by a transaction not yet committed, which no row
+-- lock reaches: so the check first takes advisory locks on the add-on's reference and on the
+-- add-on at the asset, always in this order, and a transaction linking and one giving a source at
+-- the same time wait for each other; the later then sees what the earlier committed, since each
+-- statement here reads afresh.
+CREATE FUNCTION addon_references_fit(p_addon text, p_asset uuid, p_reference text)
+    RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_advisory_xact_lock(
+        hashtextextended('addon reference ' || p_addon || ' ' || p_reference, 0));
+    PERFORM pg_advisory_xact_lock(
+        hashtextextended('addon asset ' || p_addon || ' ' || p_asset::text, 0));
+    IF EXISTS (SELECT 1 FROM assets a
+               JOIN asset_linked_addons l ON l.asset_id = a.id AND l.addon = a.source_addon
+               WHERE a.id = p_asset AND a.source_addon = p_addon) THEN
         RAISE EXCEPTION 'an add-on is not linked to an asset it is the source of'
             USING ERRCODE = 'check_violation', CONSTRAINT = 'asset_linked_addons_not_the_source';
     END IF;
-    IF EXISTS (SELECT 1 FROM assets WHERE source_addon = NEW.addon AND source_ref = NEW.reference)
-    THEN
+    IF EXISTS (SELECT 1 FROM assets a
+               JOIN asset_linked_addons l ON l.addon = a.source_addon AND l.reference = a.source_ref
+               WHERE a.source_addon = p_addon AND a.source_ref = p_reference) THEN
         RAISE EXCEPTION 'a reference of an add-on names one asset'
             USING ERRCODE = 'check_violation', CONSTRAINT = 'addon_reference_names_one_asset';
     END IF;
+END;
+$$;
+
+-- A link is made only as an accepted proposal proposed it (the foreign key says what it proposed;
+-- its state is checked here, the proposal locked against being decided meanwhile), and fits the
+-- add-on's other references.
+CREATE FUNCTION asset_linked_addons_fit() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM 1 FROM asset_link_proposals WHERE id = NEW.proposal_id AND state = 'accepted'
+        FOR SHARE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'a link is made by accepting the link proposal that proposed it'
+            USING ERRCODE = 'check_violation', CONSTRAINT = 'asset_linked_addons_accepted';
+    END IF;
+    PERFORM addon_references_fit(NEW.addon, NEW.asset_id, NEW.reference);
     RETURN NULL;
 END;
 $$;
@@ -59,21 +104,11 @@ CREATE TRIGGER asset_linked_addons_fit
     AFTER INSERT ON asset_linked_addons
     FOR EACH ROW EXECUTE FUNCTION asset_linked_addons_fit();
 
--- The same rules seen from the asset: its source is not linked to it, and the reference its source
--- knows it by names no asset the source is linked to.
+-- The same rules seen from an asset given a source.
 CREATE FUNCTION assets_source_not_linked() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF NEW.source_addon IS NOT NULL AND EXISTS (
-        SELECT 1 FROM asset_linked_addons
-        WHERE addon = NEW.source_addon AND asset_id = NEW.id) THEN
-        RAISE EXCEPTION 'an add-on is not linked to an asset it is the source of'
-            USING ERRCODE = 'check_violation', CONSTRAINT = 'asset_linked_addons_not_the_source';
-    END IF;
-    IF NEW.source_addon IS NOT NULL AND EXISTS (
-        SELECT 1 FROM asset_linked_addons
-        WHERE addon = NEW.source_addon AND reference = NEW.source_ref) THEN
-        RAISE EXCEPTION 'a reference of an add-on names one asset'
-            USING ERRCODE = 'check_violation', CONSTRAINT = 'addon_reference_names_one_asset';
+    IF NEW.source_addon IS NOT NULL THEN
+        PERFORM addon_references_fit(NEW.source_addon, NEW.id, NEW.source_ref);
     END IF;
     RETURN NULL;
 END;
@@ -82,3 +117,4 @@ $$;
 CREATE TRIGGER assets_source_not_linked
     AFTER INSERT OR UPDATE OF source_addon, source_ref ON assets
     FOR EACH ROW EXECUTE FUNCTION assets_source_not_linked();
+

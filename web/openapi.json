@@ -212,7 +212,7 @@
         "tags": [
           "add-ons"
         ],
-        "summary": "Unlinks the add-on from an asset it is linked to, when the asset leaves the add-on's system:\nthe asset stays as it was, retired or not, and the add-on's reference no longer reaches it.\nUnlinking again changes nothing; the asset's source is refused, which retires it instead, as is\nan asset of an offboarded customer. Scope `catalog:write`.",
+        "summary": "Unlinks the add-on from an asset it is linked to, when the asset leaves the add-on's system:\nthe asset stays as it was, retired or not, and the add-on's reference no longer reaches it.\nUnlinking again changes nothing; an add-on that never was linked to the asset is refused, its\nsource included, which retires it instead, as is an asset of an offboarded customer. Scope\n`catalog:write`.",
         "operationId": "unlink_asset",
         "parameters": [
           {

@@ -218,15 +218,18 @@ own reference to it, such as a server one integration monitors and another reach
 linked add-on changes nothing of the asset: it only supplies live details and links.
 
 - From then on the add-on's reference reaches the linked asset. `POST /api/addon/assets` with it
-  answers 200 with the asset, changing nothing, when it sends what the asset has (its kind, name,
-  serial number and site); any change to them is refused (409), and so is a change sent with
-  `PUT /api/addon/assets/{id}`. It never brings back a retired asset: only its source does. So an
-  add-on resending its whole inventory should leave out the assets it is linked to, which it
-  recognises in a customer's asset list by its `reference` when it is not their `source_addon`.
+  answers 200 with the asset, changing nothing, when it sends what the asset has: its kind, name,
+  serial number and site, names and serial numbers compared ignoring case as when they matched,
+  so that sending again what produced the proposal is safe. Any other change is refused (409), and
+  so is one sent with `PUT /api/addon/assets/{id}`. It never brings back a retired asset: only its
+  source does. An add-on whose own name for the asset differs (when the serial number matched)
+  should leave the assets it is linked to out of its inventory, recognising them in a customer's
+  asset list by its `reference` when it is not their `source_addon`.
 - `POST /api/addon/assets/{id}/retire` is refused (409) to a linked add-on. When the asset leaves
-  its system it unlinks itself with `POST /api/addon/assets/{id}/unlink` (204, also when it is no
-  longer linked): the asset stays as it was, and the reference no longer reaches it. The asset's
-  source is refused (409), and so is an asset of an offboarded customer.
+  its system it unlinks itself with `POST /api/addon/assets/{id}/unlink` (204, also when it has
+  already unlinked itself): the asset stays as it was, and the reference no longer reaches it. An
+  add-on that never was linked to the asset is refused (409), its source included, and so is an
+  asset of an offboarded customer.
 - After unlinking, the add-on's next attempt with that reference is treated as new: when the asset
   still matches, the core records a new link proposal for the agents.
 

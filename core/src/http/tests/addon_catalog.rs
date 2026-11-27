@@ -609,6 +609,16 @@ async fn a_link_proposal_is_accepted_and_the_linked_addon_unlinks_itself_through
         .call("POST", &format!("/api/addon/assets/{srv}/unlink"), None)
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    let scanner = addon(&db, &cataloguer, "scanner", &[CATALOG_WRITE]).await;
+    let (status, json) = scanner
+        .call("POST", &format!("/api/addon/assets/{srv}/unlink"), None)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert_eq!(
+        json["error"],
+        "Scanner is not linked to SRV-01: an add-on unlinks itself only from an asset it is \
+         linked to."
+    );
     let (status, _) = watchtower
         .call(
             "POST",
