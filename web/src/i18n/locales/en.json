@@ -63,7 +63,7 @@
   "permission.customers.manage": "Manage customers",
   "permissionHint.customers.manage": "Add customers, correct their details, offboard them and bring them back; their mail domains, sites, external references and requesters.",
   "permission.catalog.manage": "Manage the catalog",
-  "permissionHint.catalog.manage": "Add and change asset kinds; add, change and retire assets and services; which customers use a service and which assets it runs on.",
+  "permissionHint.catalog.manage": "Add and change asset kinds; add, change and retire assets and services; accept and discard the add-ons' link proposals; which customers use a service and which assets it runs on.",
   "permission.agents.manage": "Manage agents",
   "permissionHint.agents.manage": "Add agents, change their role, reset their password, deactivate and reactivate them.",
   "permission.roles.manage": "Manage roles",

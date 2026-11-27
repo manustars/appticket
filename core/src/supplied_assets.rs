@@ -1,7 +1,7 @@
 //! The assets an add-on supplies (docs/domain-rules.md, "Add-ons"; ADR 0002): an add-on with the
 //! scope `catalog:write` creates, updates and retires the assets it is the source of, each known by
 //! the add-on's own reference, and nothing else: never a holder, an asset entered by hand or one
-//! another add-on supplied.
+//! another add-on supplied, even when it is linked to it (see linked_addons).
 
 use serde::Deserialize;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -31,7 +31,8 @@ pub struct SuppliedDetails {
 /// What supplying an asset did.
 #[derive(Debug)]
 pub enum Supplied {
-    /// It created the asset, or updated the one the add-on supplied before with that reference.
+    /// It created the asset, or updated the one the add-on supplied before with that reference, or
+    /// reached unchanged the one the add-on is linked to by it.
     Asset {
         /// The asset as stored.
         asset: Asset,
@@ -46,6 +47,8 @@ pub enum Supplied {
 /// Creates the asset of `customer` that `addon` knows by `reference`, or, when the add-on already
 /// supplied one with that reference, updates it with `details`; so the add-on can send its whole
 /// inventory again safely. An asset it retired comes back. The asset's holder is left as it is.
+/// When the add-on is linked to an asset by that reference, it reaches that asset, which `details`
+/// do not change: what differs from what it has is refused.
 pub async fn supply(
     db: &PgPool,
     addon: &str,
@@ -147,7 +150,8 @@ pub async fn supply(
 
 /// Updates an asset the add-on is the source of with `details`, as [`supply`] does, except that a
 /// retired asset is refused: what the add-on sends about it may be older than the retirement, and
-/// only supplying it again with its reference brings it back.
+/// only supplying it again with its reference brings it back. An asset the add-on is linked to is
+/// reached as by [`supply`]: what differs from what it has is refused.
 pub async fn update(db: &PgPool, addon: &str, id: Uuid, details: &SuppliedDetails) -> Result<()> {
     let mut tx = db.begin().await?;
     let (customer, asset, known) = lock_known(&mut tx, addon, id).await?;

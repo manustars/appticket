@@ -338,6 +338,59 @@ mod tests {
     }
 
     #[sqlx::test]
+    async fn a_linked_reference_brings_back_no_retired_asset_and_stays_with_its_customer(
+        db: PgPool,
+    ) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        testing::addon(&db, "watchtower").await;
+        testing::addon(&db, "netscope").await;
+        let carla = testing::agent(&db, "carla@northgate.test").await;
+        testing::asset_kind(&db, "Laptop").await;
+        let server = details("Laptop", "SRV-01", Some("SN-1"), None);
+        let srv = supply(&db, "netscope", brightfield, "n-1", &server)
+            .await
+            .unwrap()
+            .asset()
+            .id;
+        let proposed = proposal(
+            supply(&db, "watchtower", brightfield, "host-1", &server)
+                .await
+                .unwrap(),
+        );
+        asset_link_proposals::accept(&db, proposed.id, carla)
+            .await
+            .unwrap();
+
+        // Only its source brings a retired asset back: the linked add-on sending what it has
+        // answers it as it is, retired.
+        supplied_assets::retire(&db, "netscope", srv).await.unwrap();
+        let reached = supply(&db, "watchtower", brightfield, "host-1", &server)
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                reached.asset().id,
+                reached.created(),
+                reached.asset().retired_at.is_some()
+            ),
+            (srv, false, true)
+        );
+        supplied_assets::update(&db, "watchtower", srv, &server)
+            .await
+            .unwrap();
+        let after = crate::catalog::asset(&db, srv).await.unwrap();
+        assert!(after.retired_at.is_some(), "still retired");
+
+        // A reference names one asset of one customer, linked or not.
+        assert_eq!(
+            refusal(supply(&db, "watchtower", harbor, "host-1", &server).await),
+            "the reference host-1 belongs to another customer: a reference names one asset of one \
+             customer"
+        );
+    }
+
+    #[sqlx::test]
     async fn a_linked_addon_unlinks_itself_and_the_asset_stays_as_it_was(db: PgPool) {
         let brightfield = testing::customer(&db, "Brightfield").await;
         let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;

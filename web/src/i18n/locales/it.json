@@ -63,7 +63,7 @@
   "permission.customers.manage": "Gestire i clienti",
   "permissionHint.customers.manage": "Aggiungere clienti, correggerne i dettagli, dismetterli e riattivarli; i loro domini di posta, sedi, riferimenti esterni e richiedenti.",
   "permission.catalog.manage": "Gestire il catalogo",
-  "permissionHint.catalog.manage": "Aggiungere e modificare i tipi di asset; aggiungere, modificare e dismettere asset e servizi; quali clienti usano un servizio e su quali asset gira.",
+  "permissionHint.catalog.manage": "Aggiungere e modificare i tipi di asset; aggiungere, modificare e dismettere asset e servizi; accettare e scartare le proposte di collegamento degli add-on; quali clienti usano un servizio e su quali asset gira.",
   "permission.agents.manage": "Gestire gli operatori",
   "permissionHint.agents.manage": "Aggiungere operatori, cambiarne il ruolo, reimpostarne la password, disattivarli e riattivarli.",
   "permission.roles.manage": "Gestire i ruoli",
