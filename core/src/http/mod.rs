@@ -125,13 +125,16 @@ fn live_details() -> utoipa::openapi::path::Operation {
     };
     OperationBuilder::new()
         .summary(Some("The live details of an asset"))
-        .description(Some(
-            "Asked as `GET <url>/assets/{reference}` of the add-on an asset comes from, with \
-             the add-on's reference for it, whenever agents look at the asset. The core waits \
-             2 seconds at most; an add-on that does not answer in time, answers with another \
-             status or with something that is not live details has its details shown as \
-             unavailable. A label may also be a single string, taken as English.",
-        ))
+        .description(Some(format!(
+            "Asked as `GET <url>/assets/{{reference}}` of the add-on an asset comes from, with \
+             the add-on's reference for it, whenever agents look at the asset; at most {} reads \
+             of one add-on at once. The core waits {} seconds at most; an add-on that does not \
+             answer in time, answers another status (404 too) or something that is not live \
+             details has its details shown as unavailable. A label may also be a single string, \
+             taken as English.",
+            crate::live_details::READS_PER_ADDON,
+            crate::live_details::TIMEOUT.as_secs(),
+        )))
         .parameter(parameter(
             "reference",
             ParameterIn::Path,
@@ -160,10 +163,6 @@ fn live_details() -> utoipa::openapi::path::Operation {
                 )
                 .build(),
         )
-        .response(
-            "404",
-            Response::new("The add-on has no live details of the asset: agents see none."),
-        )
         .build()
 }
 
@@ -184,14 +183,14 @@ pub struct AppState {
     /// What signing in through the identity provider last did, when one is configured.
     pub identity_provider_activity: Option<crate::mail_status::Tracker>,
     /// The client the core asks add-ons for the live details of assets with.
-    pub addons: reqwest::Client,
+    pub addon_client: reqwest::Client,
 }
 
 #[cfg(test)]
 impl AppState {
     pub fn for_tests(db: &PgPool) -> AppState {
         AppState {
-            addons: crate::addons::http_client().expect("an HTTP client"),
+            addon_client: crate::live_details::http_client().expect("an HTTP client"),
             db: db.clone(),
             sender: Some(crate::testing::sender()),
             mail: MailStatus::default(),

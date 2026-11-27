@@ -258,6 +258,8 @@ pub enum Answer {
     Status(axum::http::StatusCode),
     /// 200 with a body that is not JSON.
     Garbage,
+    /// 307 to this URL.
+    Redirect(String),
 }
 
 /// The references a fake add-on was asked for, with the headers of each request.
@@ -285,6 +287,9 @@ pub async fn fake_addon(
                     }
                     Answer::Status(status) => status.into_response(),
                     Answer::Garbage => "<html>not live details</html>".into_response(),
+                    Answer::Redirect(to) => {
+                        axum::response::Redirect::temporary(&to).into_response()
+                    }
                 }
             }
         }),

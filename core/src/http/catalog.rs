@@ -121,12 +121,12 @@ async fn create_asset(
 }
 
 /// The live details of the customer's active assets, from the add-on each comes from, asked
-/// when this is read. Each add-on is asked within 2 seconds, all at once; one that does not
-/// answer in time, answers with an error or is switched off has `details` null, and one that has
-/// no live details of an asset (it answered 404) is left out.
+/// when this is read. The add-ons are asked all at once, a few assets at a time each, within one
+/// 2-second deadline; an add-on that does not answer by then, answers anything but its live
+/// details or is switched off has `details` null.
 #[utoipa::path(get, path = "/api/customers/{id}/assets/live-details", tag = "catalog",
     params(("id" = Uuid, Path, description = "The customer")),
-    responses((status = OK, body = Vec<AssetLiveDetails>),
+    responses((status = OK, body = Vec<AssetLiveDetails>), (status = NOT_FOUND, body = Problem),
         (status = UNAUTHORIZED, body = Problem)))]
 async fn customer_asset_live_details(
     State(state): State<AppState>,
@@ -134,7 +134,7 @@ async fn customer_asset_live_details(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<AssetLiveDetails>>, ApiError> {
     Ok(Json(
-        live_details::of_customer(&state.db, &state.addons, id).await?,
+        live_details::of_customer(&state.db, &state.addon_client, id).await?,
     ))
 }
 
@@ -149,7 +149,7 @@ async fn ticket_asset_live_details(
     Path(number): Path<i64>,
 ) -> Result<Json<Vec<AssetLiveDetails>>, ApiError> {
     Ok(Json(
-        live_details::of_ticket(&state.db, &state.addons, number).await?,
+        live_details::of_ticket(&state.db, &state.addon_client, number).await?,
     ))
 }
 

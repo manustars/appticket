@@ -47,7 +47,8 @@ let app = events_router(verifier.clone(), move |envelope| async move {
     Ok(())
 })
 .merge(live_details_router(verifier, move |reference| async move {
-    // Answer within 2 seconds, from what the add-on already knows; None answers 404.
+    // Answer within 2 seconds, from what the add-on already knows; None answers 404, which
+    // agents see as unavailable: answer for every asset the add-on supplies.
     Ok(None)
 }));
 ```

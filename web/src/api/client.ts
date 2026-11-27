@@ -531,20 +531,20 @@ export async function retireAsset(id: string): Promise<void> {
   await call('POST', `${assetPath(id)}/retire`)
 }
 
-/** The open link proposals on the customer's assets, oldest first. */
 /**
  * The live details of the customer's active assets, asked of the add-on each comes from now: the
- * core waits 2 seconds at most for each, so this may come after the assets themselves.
+ * core waits up to 2 seconds for them, so they may come after the assets themselves.
  */
 export function listCustomerAssetLiveDetails(customerId: string): Promise<AssetLiveDetails[]> {
   return json('GET', `${customerPath(customerId)}/assets/live-details`)
 }
 
-/** The live details of the ticket's active assets, as for a customer's. */
+/** The live details of the ticket's active assets, asked as a customer's are. */
 export function listTicketAssetLiveDetails(number: number): Promise<AssetLiveDetails[]> {
   return json('GET', `${ticketPath(number)}/assets/live-details`)
 }
 
+/** The open link proposals on the customer's assets, oldest first. */
 export function listAssetLinkProposals(customerId: string): Promise<AssetLinkProposal[]> {
   return json('GET', `${customerPath(customerId)}/asset-link-proposals`)
 }

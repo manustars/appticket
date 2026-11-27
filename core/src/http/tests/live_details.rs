@@ -39,6 +39,22 @@ async fn agents_read_the_live_details_of_a_customer_s_assets(db: PgPool) {
             }
         }])
     );
+
+    let (status, _) = api
+        .call(
+            "GET",
+            &format!(
+                "/api/customers/{}/assets/live-details",
+                uuid::Uuid::new_v4()
+            ),
+            None,
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a customer that does not exist"
+    );
 }
 
 /// On a ticket agents read the live details of the ticket's assets only. One add-on that answers
@@ -137,7 +153,7 @@ async fn only_agents_read_live_details(db: PgPool) {
 
 /// The specification describes the call the core makes to an add-on for live details, as a
 /// webhook beside the events: `GET <url>/assets/{reference}`, signed, answered with the state,
-/// fields and links, or 404.
+/// fields and links.
 #[test]
 fn the_specification_describes_the_live_details_an_addon_serves() {
     let spec = serde_json::to_value(crate::http::openapi()).unwrap();
@@ -159,5 +175,4 @@ fn the_specification_describes_the_live_details_an_addon_serves() {
         .collect();
     fields.sort();
     assert_eq!(fields, ["fields", "links", "state"]);
-    assert!(operation["responses"]["404"].is_object());
 }

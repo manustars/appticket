@@ -1,8 +1,8 @@
 //! The live details of an asset (docs/domain-rules.md, "Add-ons"; ADR 0005): when agents look at
 //! assets, the core asks each add-on an asset comes from `GET <url>/assets/{reference}`, with
-//! the reference that add-on knows it by, all at once and each within [`TIMEOUT`]. An add-on
-//! that does not answer in time, answers with an error or something that is not live details, or
-//! is switched off, has its details unavailable; nothing else waits for it.
+//! the reference that add-on knows it by, all at once and within [`TIMEOUT`]. An add-on that
+//! does not answer in time, answers anything but a 200 with live details, or is switched off,
+//! has its details unavailable; nothing else waits for it.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -77,8 +77,19 @@ pub const MAX_VALUE: usize = 500;
 /// The longest link, in characters.
 pub const MAX_URL: usize = 2000;
 
+/// The most reads of one add-on under way at once for one request of the agents: the others wait
+/// for a free one, within the same deadline.
+pub const READS_PER_ADDON: usize = 8;
+
+/// The client the core asks add-ons for live details with. It follows no redirect: the signature
+/// is for the add-on's own URL, not for wherever that sends it.
+pub fn http_client() -> anyhow::Result<reqwest::Client> {
+    crate::http_client::http_client(reqwest::redirect::Policy::none())
+}
+
 /// An add-on to ask for the live details of an asset, with the reference it knows the asset by.
-#[derive(Debug, Clone, sqlx::FromRow)]
+/// Not `Debug`: it holds the add-on's event secret.
+#[derive(Clone, sqlx::FromRow)]
 pub struct ToAsk {
     pub asset_id: Uuid,
     pub addon: String,
@@ -110,64 +121,72 @@ pub async fn addons_to_ask(db: &PgPool, assets: &[Uuid]) -> Result<Vec<ToAsk>> {
 }
 
 /// The live details of `assets`, from every add-on to ask for each, in the order of `assets`.
-/// The add-ons are asked all at once, so the answer comes within [`TIMEOUT`] however many are
-/// slow. An add-on that answers 404 has no live details of that asset: it is left out.
+/// Every add-on is asked at the same time, each for at most [`READS_PER_ADDON`] assets at once,
+/// and every read ends within one deadline [`TIMEOUT`] away, so the answer comes within it however
+/// slow the add-ons are; a read not answered by then is unavailable.
 pub async fn of_assets(
     db: &PgPool,
     client: &reqwest::Client,
     assets: &[Uuid],
 ) -> Result<Vec<AssetLiveDetails>> {
+    use futures_util::StreamExt;
     // Read first: no connection is held while the add-ons are asked.
     let to_ask = addons_to_ask(db, assets).await?;
-    let answers = futures_util::future::join_all(to_ask.iter().map(|one| async move {
-        if !one.enabled {
-            return Some(None);
-        }
-        match tokio::time::timeout(TIMEOUT, ask(client, one)).await {
-            Ok(Ok(answer)) => answer.map(Some),
-            Ok(Err(why)) => {
-                tracing::warn!(addon = %one.addon, asset = %one.asset_id, %why,
-                    "live details unavailable");
-                Some(None)
-            }
-            Err(_) => {
-                tracing::warn!(addon = %one.addon, asset = %one.asset_id,
-                    "live details unavailable: no answer within 2 seconds");
-                Some(None)
-            }
-        }
-    }))
-    .await;
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    let mut by_addon: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (i, one) in to_ask.iter().enumerate() {
+        by_addon.entry(&one.addon).or_default().push(i);
+    }
+    let each_addon = by_addon.into_values().map(|reads| {
+        futures_util::stream::iter(reads)
+            .map(|i| {
+                let one = &to_ask[i];
+                async move { (i, read(client, one, deadline).await) }
+            })
+            .buffer_unordered(READS_PER_ADDON)
+            .collect::<Vec<_>>()
+    });
+    let mut details: Vec<Option<LiveDetails>> = vec![None; to_ask.len()];
+    for (i, answer) in futures_util::future::join_all(each_addon)
+        .await
+        .into_iter()
+        .flatten()
+    {
+        details[i] = answer;
+    }
     Ok(to_ask
         .into_iter()
-        .zip(answers)
-        .filter_map(|(one, answer)| {
-            answer.map(|details| AssetLiveDetails {
-                asset_id: one.asset_id,
-                addon: one.addon,
-                details,
-            })
+        .zip(details)
+        .map(|(one, details)| AssetLiveDetails {
+            asset_id: one.asset_id,
+            addon: one.addon,
+            details,
         })
         .collect())
 }
 
-/// The live details of a customer's assets, in the order agents see them.
+/// The live details of a customer's active assets.
 pub async fn of_customer(
     db: &PgPool,
     client: &reqwest::Client,
     customer: Uuid,
 ) -> Result<Vec<AssetLiveDetails>> {
-    let assets: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT a.id FROM assets a JOIN asset_kinds k ON k.id = a.kind_id
-         WHERE a.customer_id = $1 AND a.retired_at IS NULL ORDER BY lower(k.name), a.name",
-    )
-    .bind(customer)
-    .fetch_all(db)
-    .await?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM customers WHERE id = $1)")
+        .bind(customer)
+        .fetch_one(db)
+        .await?;
+    if !exists {
+        return Err(crate::error::Error::NotFound("customer"));
+    }
+    let assets: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM assets WHERE customer_id = $1 AND retired_at IS NULL")
+            .bind(customer)
+            .fetch_all(db)
+            .await?;
     of_assets(db, client, &assets).await
 }
 
-/// The live details of the assets a ticket links, in the order the ticket lists them.
+/// The live details of the assets a ticket links.
 pub async fn of_ticket(
     db: &PgPool,
     client: &reqwest::Client,
@@ -178,12 +197,15 @@ pub async fn of_ticket(
         .fetch_optional(db)
         .await?
         .ok_or(crate::error::Error::NotFound("ticket"))?;
-    let assets: Vec<Uuid> = crate::catalog::ticket_links(db, ticket)
-        .await?
-        .0
-        .into_iter()
-        .map(|a| a.id)
-        .collect();
+    let assets: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT ta.asset_id FROM ticket_assets ta
+         JOIN assets a ON a.id = ta.asset_id
+         JOIN asset_kinds k ON k.id = a.kind_id
+         WHERE ta.ticket_id = $1 ORDER BY lower(k.name), a.name",
+    )
+    .bind(ticket)
+    .fetch_all(db)
+    .await?;
     of_assets(db, client, &assets).await
 }
 
@@ -194,19 +216,37 @@ pub fn signed_read(reference: &str) -> String {
     format!("GET /assets/{reference}")
 }
 
-type Why = std::result::Result<Option<LiveDetails>, String>;
+/// One read, ended by `deadline`: the live details, or none when they are unavailable, with the
+/// reason in the log. A switched-off add-on is not asked.
+async fn read(
+    client: &reqwest::Client,
+    one: &ToAsk,
+    deadline: tokio::time::Instant,
+) -> Option<LiveDetails> {
+    if !one.enabled {
+        return None;
+    }
+    let why = match tokio::time::timeout_at(deadline, ask(client, one)).await {
+        Ok(Ok(details)) => return Some(details),
+        Ok(Err(why)) => why,
+        Err(_) => anyhow::anyhow!("no answer within {} seconds", TIMEOUT.as_secs()),
+    };
+    tracing::warn!(addon = %one.addon, asset = %one.asset_id, why = format!("{why:#}"),
+        "live details unavailable");
+    None
+}
 
-/// Asks one add-on. `Ok(None)` when it has no live details of the asset (404).
-async fn ask(client: &reqwest::Client, one: &ToAsk) -> Why {
-    let mut url = url::Url::parse(&one.url).map_err(|e| format!("the add-on's URL: {e}"))?;
+/// Asks one add-on; anything but a 200 with live details is an error.
+async fn ask(client: &reqwest::Client, one: &ToAsk) -> anyhow::Result<LiveDetails> {
+    use anyhow::{Context, bail};
+    let mut url = url::Url::parse(&one.url).context("the add-on's URL")?;
     url.path_segments_mut()
-        .map_err(|()| "the add-on's URL cannot have a path".to_owned())?
+        .map_err(|()| anyhow::anyhow!("the add-on's URL cannot have a path"))?
         .pop_if_empty()
         .push("assets")
         .push(&one.reference);
     let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
+        .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
     let signature = crate::addons::signature(
         &one.event_secret,
@@ -219,24 +259,18 @@ async fn ask(client: &reqwest::Client, one: &ToAsk) -> Why {
         .header(crate::addons::HEADER_TIMESTAMP, timestamp.to_string())
         .header(crate::addons::HEADER_SIGNATURE, signature)
         .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
-    }
-    if !response.status().is_success() {
-        return Err(format!("the add-on answered {}", response.status()));
+        .await?;
+    if response.status() != reqwest::StatusCode::OK {
+        bail!("the add-on answered {}", response.status());
     }
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|e| format!("{e:#}"))? {
+    while let Some(chunk) = response.chunk().await? {
         if body.len() + chunk.len() > MAX_ANSWER_BYTES {
-            return Err(format!(
-                "the answer is larger than {MAX_ANSWER_BYTES} bytes"
-            ));
+            bail!("the answer is larger than {MAX_ANSWER_BYTES} bytes");
         }
         body.extend_from_slice(&chunk);
     }
-    parse(&body).map(Some)
+    parse(&body).map_err(anyhow::Error::msg)
 }
 
 /// A label as an add-on sends it: one per language, or a single one taken as English.
@@ -373,7 +407,7 @@ mod tests {
         let brightfield = testing::customer(&db, "Brightfield").await;
         let srv = supplied(&db, brightfield, "SRV-01", "watchtower", "host 10/42").await;
 
-        let client = crate::addons::http_client().unwrap();
+        let client = http_client().unwrap();
         let details = of_assets(&db, &client, &[srv]).await.unwrap();
         assert_eq!(
             details,
@@ -465,34 +499,131 @@ mod tests {
         let srv = supplied(&db, brightfield, "SRV-01", "watchtower", "host 10/42").await;
         let unknown = supplied(&db, brightfield, "SRV-02", "watchtower", "host-7").await;
 
-        let client = crate::addons::http_client().unwrap();
+        let client = http_client().unwrap();
         let details = of_assets(&db, &client, &[srv, unknown]).await.unwrap();
         assert_eq!(
             details,
-            [AssetLiveDetails {
-                asset_id: srv,
-                addon: "watchtower".into(),
-                details: Some(LiveDetails {
-                    state: DetailState::Problem,
-                    fields: vec![DetailField {
-                        label: label(&[("en", "Disk /var")]),
-                        value: "100% full".into(),
-                    }],
-                    links: vec![DetailLink {
-                        label: label(&[("en", "Open")]),
-                        url: "https://watchtower.example.com/hosts/1042".into(),
-                    }],
-                }),
-            }],
-            "the add-on has no live details of host-7"
+            [
+                AssetLiveDetails {
+                    asset_id: srv,
+                    addon: "watchtower".into(),
+                    details: Some(LiveDetails {
+                        state: DetailState::Problem,
+                        fields: vec![DetailField {
+                            label: label(&[("en", "Disk /var")]),
+                            value: "100% full".into(),
+                        }],
+                        links: vec![DetailLink {
+                            label: label(&[("en", "Open")]),
+                            url: "https://watchtower.example.com/hosts/1042".into(),
+                        }],
+                    }),
+                },
+                AssetLiveDetails {
+                    asset_id: unknown,
+                    addon: "watchtower".into(),
+                    details: None,
+                },
+            ],
+            "the add-on answers 404 for host-7, which agents see as unavailable"
         );
     }
 
-    /// An add-on that answers late, with an error status, with something that is not live
-    /// details or more than 64 KiB, or that nothing answers for, has its details unavailable,
-    /// and a switched-off one is not even asked; they are
-    /// asked all at once, so one slow add-on does not hold up the others, and the answer comes
-    /// within the timeout. An add-on that answers 404 has no live details of that asset.
+    /// The core waits 2 seconds for an add-on: an answer after 1.5 seconds is shown, one after
+    /// 2.5 seconds is not, and the whole read takes no longer than the bound.
+    #[sqlx::test]
+    async fn the_core_waits_two_seconds_for_an_answer(db: PgPool) {
+        let (url, _) = fake_addon(|reference| match reference {
+            "in-time" => Answer::Late(Duration::from_millis(1500), healthy()),
+            _ => Answer::Late(Duration::from_millis(2500), healthy()),
+        })
+        .await;
+        addon_at(&db, "watchtower", &url).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let in_time = supplied(&db, brightfield, "SRV-01", "watchtower", "in-time").await;
+        let too_late = supplied(&db, brightfield, "SRV-02", "watchtower", "too-late").await;
+
+        let started = std::time::Instant::now();
+        let details = of_assets(&db, &http_client().unwrap(), &[in_time, too_late])
+            .await
+            .unwrap();
+        let took = started.elapsed();
+        assert!(took < Duration::from_secs(3), "took {took:?}");
+        let shown: Vec<(Uuid, bool)> = details
+            .iter()
+            .map(|d| (d.asset_id, d.details.is_some()))
+            .collect();
+        assert_eq!(shown, [(in_time, true), (too_late, false)]);
+    }
+
+    /// The core asks one add-on for at most 8 assets at a time, all within one 2-second deadline:
+    /// with 24 assets answered in 0.7 seconds each, the first 16 are shown and the last 8, not
+    /// answered by the deadline, are unavailable.
+    #[sqlx::test]
+    async fn an_addon_is_asked_a_few_assets_at_a_time_within_one_deadline(db: PgPool) {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // Counts the reads it is answering at once, and the most it answered at once.
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let most = Arc::new(AtomicUsize::new(0));
+        let app = axum::Router::new().route(
+            "/assets/{reference}",
+            axum::routing::get({
+                let (in_flight, most) = (in_flight.clone(), most.clone());
+                move || async move {
+                    let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    most.fetch_max(now, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(700)).await;
+                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                    axum::Json(healthy())
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        addon_at(&db, "watchtower", &url).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let mut assets = Vec::new();
+        for n in 0..24 {
+            let name = format!("SRV-{n:02}");
+            assets.push(supplied(&db, brightfield, &name, "watchtower", &name).await);
+        }
+
+        let started = std::time::Instant::now();
+        let details = of_assets(&db, &http_client().unwrap(), &assets)
+            .await
+            .unwrap();
+        let took = started.elapsed();
+        assert!(took < Duration::from_secs(3), "took {took:?}");
+        assert_eq!(details.len(), 24);
+        assert_eq!(details.iter().filter(|d| d.details.is_some()).count(), 16);
+        assert_eq!(most.load(Ordering::SeqCst), READS_PER_ADDON);
+    }
+
+    /// The core does not follow an add-on's redirect: the signature is for that add-on only.
+    #[sqlx::test]
+    async fn a_redirect_is_not_followed(db: PgPool) {
+        let (elsewhere, elsewhere_asked) = fake_addon(|_| Answer::Json(healthy())).await;
+        let (url, _) = fake_addon(move |reference| {
+            Answer::Redirect(format!("{elsewhere}/assets/{reference}"))
+        })
+        .await;
+        addon_at(&db, "watchtower", &url).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let srv = supplied(&db, brightfield, "SRV-01", "watchtower", "host-1042").await;
+
+        let details = of_assets(&db, &http_client().unwrap(), &[srv])
+            .await
+            .unwrap();
+        assert_eq!(details[0].details, None);
+        assert!(elsewhere_asked.lock().unwrap().is_empty());
+    }
+
+    /// An add-on that answers late, with an error status (404 too), with something that is not
+    /// live details or more than 64 KiB, or that nothing answers for, has its details
+    /// unavailable, and a switched-off one is not even asked; the add-ons are asked all at once,
+    /// so one slow add-on does not hold up the others, and the answer comes within the timeout.
     #[sqlx::test]
     async fn an_addon_that_does_not_answer_in_time_or_well_has_its_details_unavailable(db: PgPool) {
         let (url, asked) = fake_addon(|reference| match reference {
@@ -538,7 +669,7 @@ mod tests {
         let down = supplied(&db, brightfield, "PRN-01", "printers", "prn-1").await;
         assets.push(down);
 
-        let client = crate::addons::http_client().unwrap();
+        let client = http_client().unwrap();
         let started = std::time::Instant::now();
         let details = of_assets(&db, &client, &assets).await.unwrap();
         let took = started.elapsed();
@@ -554,7 +685,7 @@ mod tests {
             (assets[2], "watchtower", false),
             (assets[3], "watchtower", false),
             (assets[4], "watchtower", false),
-            // assets[5]: no live details of it.
+            (assets[5], "watchtower", false),
             (assets[6], "watchtower", true),
             (off, "inventory", false),
             (too_large, "watchtower", false),
@@ -591,7 +722,7 @@ mod tests {
             .unwrap();
         let active = supplied(&db, brightfield, "SRV-01", "watchtower", "host-1").await;
 
-        let client = crate::addons::http_client().unwrap();
+        let client = http_client().unwrap();
         let details = of_assets(&db, &client, &[by_hand, retired, gone, active])
             .await
             .unwrap();
