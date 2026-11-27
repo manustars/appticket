@@ -21,13 +21,15 @@ pub const MESSAGE_RECEIVED: &str = "message.received";
 pub const TICKET_OPENED: &str = "ticket.opened";
 
 /// What an add-on's token may do.
-pub const SCOPES: &[&str] = &[DIRECTORY_READ, TICKETS_READ, PROPOSALS_WRITE];
+pub const SCOPES: &[&str] = &[DIRECTORY_READ, TICKETS_READ, PROPOSALS_WRITE, CATALOG_WRITE];
 /// Read customers and their assets.
 pub const DIRECTORY_READ: &str = "directory:read";
 /// Read tickets.
 pub const TICKETS_READ: &str = "tickets:read";
 /// Make proposals.
 pub const PROPOSALS_WRITE: &str = "proposals:write";
+/// Create, update and retire the assets the add-on is the source of.
+pub const CATALOG_WRITE: &str = "catalog:write";
 
 /// After this many failed attempts a delivery stops being retried.
 pub const MAX_ATTEMPTS: i32 = 12;
