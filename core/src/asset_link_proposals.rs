@@ -11,7 +11,6 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::catalog::AssetKey;
 use crate::error::{Error, Result, rule};
 use crate::supplied_assets::reference_of_another_customer;
 
@@ -183,25 +182,40 @@ async fn matching(
     serial_number: Option<&str>,
 ) -> Result<Option<(Uuid, MatchedBy)>> {
     // Two assets in the add-on's system are two assets: one it is linked to is as its own.
-    let linked: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT l.asset_id FROM asset_linked_addons l JOIN assets a ON a.id = l.asset_id
-         WHERE l.addon = $1 AND a.customer_id = $2",
-    )
-    .bind(addon)
-    .bind(customer)
-    .fetch_all(&mut **tx)
-    .await?;
+    macro_rules! oldest_with {
+        ($column:literal) => {
+            concat!(
+                "SELECT a.id FROM assets a
+                 WHERE a.customer_id = $1 AND lower(a.",
+                $column,
+                ") = lower($2) AND a.retired_at IS NULL
+                   AND a.source_addon IS DISTINCT FROM $3
+                   AND NOT EXISTS (SELECT 1 FROM asset_linked_addons l
+                                   WHERE l.asset_id = a.id AND l.addon = $3)
+                 ORDER BY a.created_at, a.id
+                 LIMIT 1"
+            )
+        };
+    }
     let keys = serial_number
-        .map(|serial| (AssetKey::SerialNumber, serial, MatchedBy::SerialNumber))
+        .map(|serial| {
+            (
+                oldest_with!("serial_number"),
+                serial,
+                MatchedBy::SerialNumber,
+            )
+        })
         .into_iter()
-        .chain([(AssetKey::Name, name, MatchedBy::Name)]);
-    for (key, value, matched_by) in keys {
-        let found = crate::catalog::assets_by(&mut **tx, customer, key, value).await?;
-        // Active ones first, then by when they were created.
-        if let Some(asset) = found.into_iter().find(|a| {
-            !a.retired && a.source_addon.as_deref() != Some(addon) && !linked.contains(&a.id)
-        }) {
-            return Ok(Some((asset.id, matched_by)));
+        .chain([(oldest_with!("name"), name, MatchedBy::Name)]);
+    for (query, value, matched_by) in keys {
+        let found: Option<Uuid> = sqlx::query_scalar(query)
+            .bind(customer)
+            .bind(value)
+            .bind(addon)
+            .fetch_optional(&mut **tx)
+            .await?;
+        if let Some(asset) = found {
+            return Ok(Some((asset, matched_by)));
         }
     }
     Ok(None)
@@ -224,23 +238,26 @@ pub async fn open_of(db: &PgPool, customer: Uuid) -> Result<Vec<AssetLinkProposa
 /// agents do not change an offboarded customer's catalog.
 pub async fn accept(db: &PgPool, id: Uuid, agent: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
-    let (addon, reference, asset) = lock_open(&mut tx, id).await?;
-    let stored = crate::catalog::lock_stored(&mut tx, asset).await?;
+    let open = lock_open(&mut tx, id).await?;
+    let stored = crate::catalog::lock_stored(&mut tx, open.asset).await?;
     if stored.retired {
         return rule(format!(
             "{} is retired: an add-on is linked only to an active asset",
             stored.name
         ));
     }
-    if let Some(other) = crate::linked_addons::reference_of(&mut tx, &addon, asset).await? {
+    if let Some(other) =
+        crate::linked_addons::reference_of(&mut tx, &open.addon, open.asset).await?
+    {
         return rule(format!(
-            "{addon} is linked to {} already, by the reference {other}: an add-on knows an asset \
-             by one reference",
-            stored.name
+            "{} is linked to {} already, by the reference {other}: an add-on knows an asset by \
+             one reference",
+            open.addon, stored.name
         ));
     }
-    crate::linked_addons::link(&mut tx, id, &addon, &reference, asset).await?;
+    // Accepted first: the database makes a link only for an accepted proposal.
     decide(&mut tx, id, agent, State::Accepted).await?;
+    crate::linked_addons::link(&mut tx, id, &open.addon, &open.reference, &stored).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -255,9 +272,19 @@ pub async fn discard(db: &PgPool, id: Uuid, agent: Uuid) -> Result<()> {
     Ok(())
 }
 
+/// An open proposal, locked: its add-on, the reference it would supply an asset with, and the asset
+/// it matched.
+#[derive(sqlx::FromRow)]
+struct OpenProposal {
+    state: State,
+    addon: String,
+    reference: String,
+    asset: Uuid,
+}
+
 /// Locks the proposal's customer, refused when offboarded, then the proposal, refused unless it is
-/// open. Returns its add-on, its reference and the asset it matched.
-async fn lock_open(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<(String, String, Uuid)> {
+/// open.
+async fn lock_open(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<OpenProposal> {
     // A proposal never changes customer, so its customer can be read before it is locked; the
     // customer is locked first, as by supplying an asset.
     let customer: Uuid =
@@ -267,17 +294,18 @@ async fn lock_open(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<(Stri
             .await?
             .ok_or(Error::NotFound("link proposal"))?;
     crate::customers::lock_active(tx, customer).await?;
-    let (state, addon, reference, asset): (State, String, String, Uuid) = sqlx::query_as(
-        "SELECT state, addon, reference, asset_id FROM asset_link_proposals WHERE id = $1
+    let proposal: OpenProposal = sqlx::query_as(
+        "SELECT state, addon, reference, asset_id AS asset FROM asset_link_proposals
+         WHERE id = $1
          FOR UPDATE",
     )
     .bind(id)
     .fetch_one(&mut **tx)
     .await?;
-    if state != State::Open {
+    if proposal.state != State::Open {
         return rule("the link proposal is no longer open");
     }
-    Ok((addon, reference, asset))
+    Ok(proposal)
 }
 
 /// Records that `agent` decided the open proposal, accepting or discarding it.

@@ -92,8 +92,9 @@ export interface paths {
         /**
          * Unlinks the add-on from an asset it is linked to, when the asset leaves the add-on's system:
          *     the asset stays as it was, retired or not, and the add-on's reference no longer reaches it.
-         *     Unlinking again changes nothing; the asset's source is refused, which retires it instead, as is
-         *     an asset of an offboarded customer. Scope `catalog:write`.
+         *     Unlinking again changes nothing; an add-on that never was linked to the asset is refused, its
+         *     source included, which retires it instead, as is an asset of an offboarded customer. Scope
+         *     `catalog:write`.
          */
         post: operations["unlink_asset"];
         delete?: never;

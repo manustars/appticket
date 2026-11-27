@@ -30,7 +30,7 @@ reqwest = { version = "0.13.5", default-features = false, features = ["json", "r
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
-sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "uuid", "time", "tls-rustls"] }
+sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "uuid", "time", "json", "tls-rustls"] }
 time = { version = "0.3.55", features = ["serde", "serde-well-known"] }
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "signal", "net", "time"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }

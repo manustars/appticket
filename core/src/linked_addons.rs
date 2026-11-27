@@ -4,16 +4,17 @@
 //! change nothing of it: it only supplies live details and links, and unlinks itself when the asset
 //! leaves its system, which retires nothing.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::catalog::StoredAsset;
 use crate::error::{Error, Result, rule};
 use crate::supplied_assets::reference_of_another_customer;
 
 /// An add-on linked to an asset, which is not its source, with the reference it knows it by.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct LinkedAddon {
     pub addon: String,
     /// The add-on's own reference for the asset, which is not an external reference.
@@ -51,39 +52,59 @@ pub(crate) async fn reference_of(
     .await?)
 }
 
-/// Links `addon` to the asset with `reference`, as the accepted `proposal` proposed. The caller has
-/// locked the asset's customer and checked the asset.
+/// Links `addon` to the asset with `reference`, as the `proposal`, accepted in this transaction,
+/// proposed. The caller has locked the asset's customer and the asset, and checked it; what the
+/// database still refuses, such as an asset given that add-on as its source meanwhile, is refused
+/// with a sentence.
 pub(crate) async fn link(
     tx: &mut Transaction<'_, Postgres>,
     proposal: Uuid,
     addon: &str,
     reference: &str,
-    asset: Uuid,
+    asset: &StoredAsset,
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO asset_linked_addons (asset_id, addon, reference, proposal_id)
          VALUES ($1, $2, $3, $4)",
     )
-    .bind(asset)
+    .bind(asset.id)
     .bind(addon)
     .bind(reference)
     .bind(proposal)
     .execute(&mut **tx)
     .await
-    .map_err(|e| match e {
-        // The reference linked meanwhile to an asset of another customer, whose lock does not keep
-        // this one out.
-        sqlx::Error::Database(d) if d.constraint() == Some("asset_linked_addons_pkey") => {
-            Error::Rule(reference_of_another_customer(reference))
-        }
-        other => other.into(),
+    .map_err(|e| {
+        let why = match &e {
+            sqlx::Error::Database(d) => match d.constraint() {
+                // The reference linked meanwhile to an asset of another customer, whose lock does
+                // not keep this one out.
+                Some("asset_linked_addons_pkey") => reference_of_another_customer(reference),
+                Some("addon_reference_names_one_asset") => format!(
+                    "{addon} knows another asset by the reference {reference}: a reference names \
+                     one asset"
+                ),
+                Some("asset_linked_addons_not_the_source") => format!(
+                    "{addon} is the source of {}: an add-on is not linked to an asset it is the \
+                     source of",
+                    asset.name
+                ),
+                Some("asset_linked_addons_asset_id_addon_key") => format!(
+                    "{addon} is linked to {} already: an add-on knows an asset by one reference",
+                    asset.name
+                ),
+                _ => return e.into(),
+            },
+            _ => return e.into(),
+        };
+        Error::Rule(why)
     })?;
     Ok(())
 }
 
 /// Unlinks `addon` from the asset, when the asset leaves the add-on's system: the asset stays as it
-/// was, and the add-on's reference no longer reaches it. Unlinking again changes nothing; the
-/// asset's source is refused, which retires it instead, as is an asset of an offboarded customer.
+/// was, and the add-on's reference no longer reaches it. Unlinking again changes nothing. Refused
+/// for an add-on that never was linked to the asset, its source included, which retires it instead,
+/// and for an asset of an offboarded customer.
 pub async fn unlink(db: &PgPool, addon: &str, asset: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
     let (_, stored) = crate::supplied_assets::lock_with_customer(&mut tx, asset).await?;
@@ -94,11 +115,31 @@ pub async fn unlink(db: &PgPool, addon: &str, asset: Uuid) -> Result<()> {
             stored.name
         ));
     }
-    sqlx::query("DELETE FROM asset_linked_addons WHERE asset_id = $1 AND addon = $2")
+    let unlinked =
+        sqlx::query("DELETE FROM asset_linked_addons WHERE asset_id = $1 AND addon = $2")
+            .bind(asset)
+            .bind(addon)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+    if unlinked == 0 {
+        // Unlinking again: an accepted proposal says it was linked.
+        let was_linked: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM asset_link_proposals
+                            WHERE asset_id = $1 AND addon = $2 AND state = 'accepted')",
+        )
         .bind(asset)
         .bind(addon)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await?;
+        if !was_linked {
+            return rule(format!(
+                "{addon} is not linked to {}: an add-on unlinks itself only from an asset it is \
+                 linked to",
+                stored.name
+            ));
+        }
+    }
     tx.commit().await?;
     Ok(())
 }
@@ -209,26 +250,32 @@ mod tests {
 
         // From then on its reference reaches the asset: sending what the asset has changes
         // nothing and answers it, while any change to what it has is refused.
-        let same = details("laptop", " PC-0042 ", Some("SN-0042"), Some("head office"));
-        let reached = supply(&db, "watchtower", brightfield, "host-1", &same)
-            .await
-            .unwrap();
-        assert_eq!(
-            (reached.asset().id, reached.created()),
-            (pc, false),
-            "the linked asset, not a new one"
-        );
-        supplied_assets::update(&db, "watchtower", pc, &same)
-            .await
-            .expect("its id reaches it too");
+        // Names, kinds, sites and serial numbers are compared ignoring case, as they matched.
+        for same in [
+            details("laptop", " PC-0042 ", Some("SN-0042"), Some("head office")),
+            details("Laptop", "pc-0042", Some("sn-0042"), Some("Head office")),
+        ] {
+            let reached = supply(&db, "watchtower", brightfield, "host-1", &same)
+                .await
+                .unwrap();
+            assert_eq!(
+                (reached.asset().id, reached.created()),
+                (pc, false),
+                "the linked asset, not a new one: {same:?}"
+            );
+            supplied_assets::update(&db, "watchtower", pc, &same)
+                .await
+                .expect("its id reaches it too");
+        }
         let refused = "PC-0042 was entered by hand: watchtower is linked to it, and an add-on \
                        changes only the assets it is the source of";
         for changed in [
             sent,
+            details("Laptop", "PC-0043", Some("SN-0042"), Some("Head office")),
             details("Server", "PC-0042", Some("SN-0042"), Some("Head office")),
             details("Laptop", "PC-0042", None, Some("Head office")),
+            details("Laptop", "PC-0042", Some("SN-0043"), Some("Head office")),
             details("Laptop", "PC-0042", Some("SN-0042"), None),
-            details("Laptop", "pc-0042", Some("SN-0042"), Some("Head office")),
         ] {
             assert_eq!(
                 refusal(supply(&db, "watchtower", brightfield, "host-1", &changed).await),
@@ -390,6 +437,128 @@ mod tests {
         );
     }
 
+    /// What the database refuses beyond the core's own checks, such as an asset given its source
+    /// by hand meanwhile, is refused with a sentence too.
+    #[sqlx::test]
+    async fn accepting_what_the_database_refuses_is_refused_with_a_sentence(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        testing::addon(&db, "watchtower").await;
+        let carla = testing::agent(&db, "carla@northgate.test").await;
+        let pc = by_hand(&db, brightfield, "PC-0042", None, None).await;
+        by_hand(&db, brightfield, "PRN-01", None, None).await;
+        let other = by_hand(&db, brightfield, "PC-0099", None, None).await;
+        let on_pc = proposal(
+            supply(
+                &db,
+                "watchtower",
+                brightfield,
+                "host-1",
+                &details("Laptop", "PC-0042", None, None),
+            )
+            .await
+            .unwrap(),
+        );
+        let on_printer = proposal(
+            supply(
+                &db,
+                "watchtower",
+                brightfield,
+                "host-2",
+                &details("Laptop", "PRN-01", None, None),
+            )
+            .await
+            .unwrap(),
+        );
+        let set_source = |asset: Uuid, reference: &'static str| {
+            let db = db.clone();
+            async move {
+                sqlx::query(
+                    "UPDATE assets SET source_addon = 'watchtower', source_ref = $2 WHERE id = $1",
+                )
+                .bind(asset)
+                .bind(reference)
+                .execute(&db)
+                .await
+                .unwrap();
+            }
+        };
+        set_source(pc, "host-9").await;
+        set_source(other, "host-2").await;
+
+        assert_eq!(
+            refusal(asset_link_proposals::accept(&db, on_pc.id, carla).await),
+            "watchtower is the source of PC-0042: an add-on is not linked to an asset it is the \
+             source of"
+        );
+        assert_eq!(
+            refusal(asset_link_proposals::accept(&db, on_printer.id, carla).await),
+            "watchtower knows another asset by the reference host-2: a reference names one asset"
+        );
+        assert_eq!(
+            asset_link_proposals::open_of(&db, brightfield)
+                .await
+                .unwrap()
+                .len(),
+            2,
+            "both stay open"
+        );
+    }
+
+    /// Two transactions at once, one linking an add-on with a reference and one giving an asset
+    /// that add-on and reference as its source, do not both commit: the later waits for the
+    /// earlier and is refused.
+    #[sqlx::test]
+    async fn a_reference_is_not_linked_and_made_a_source_at_once(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        testing::addon(&db, "watchtower").await;
+        let carla = testing::agent(&db, "carla@northgate.test").await;
+        let pc = by_hand(&db, brightfield, "PC-0042", None, None).await;
+        let printer = by_hand(&db, brightfield, "PRN-01", None, None).await;
+        let proposal = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO asset_link_proposals (id, addon, reference, customer_id, asset_id,
+                                               matched_by, name, state, decided_at, decided_by)
+             VALUES ($1, 'watchtower', 'host-1', $2, $3, 'name', 'PC-0042', 'accepted', now(),
+                     $4)",
+        )
+        .bind(proposal)
+        .bind(brightfield)
+        .bind(pc)
+        .bind(carla)
+        .execute(&db)
+        .await
+        .unwrap();
+
+        let mut linking = db.begin().await.unwrap();
+        sqlx::query(
+            "INSERT INTO asset_linked_addons (asset_id, addon, reference, proposal_id)
+             VALUES ($1, 'watchtower', 'host-1', $2)",
+        )
+        .bind(pc)
+        .bind(proposal)
+        .execute(&mut *linking)
+        .await
+        .unwrap();
+        let sourcing = tokio::spawn({
+            let db = db.clone();
+            async move {
+                sqlx::query(
+                    "UPDATE assets SET source_addon = 'watchtower', source_ref = 'host-1'
+                     WHERE id = $1",
+                )
+                .bind(printer)
+                .execute(&db)
+                .await
+            }
+        });
+        assert!(testing::some_statement_waits_for_a_lock(&db).await);
+        linking.commit().await.unwrap();
+        assert!(
+            sourcing.await.unwrap().is_err(),
+            "refused once the link is in"
+        );
+    }
+
     #[sqlx::test]
     async fn a_linked_addon_unlinks_itself_and_the_asset_stays_as_it_was(db: PgPool) {
         let brightfield = testing::customer(&db, "Brightfield").await;
@@ -463,6 +632,13 @@ mod tests {
             Err(Error::NotFound("asset"))
         ));
 
+        testing::addon(&db, "scanner").await;
+        assert_eq!(
+            refusal(unlink(&db, "scanner", srv).await),
+            "scanner is not linked to SRV-01: an add-on unlinks itself only from an asset it is \
+             linked to"
+        );
+
         unlink(&db, "watchtower", srv).await.unwrap();
         unlink(&db, "watchtower", srv)
             .await
@@ -519,25 +695,35 @@ mod tests {
         .execute(&db)
         .await
         .unwrap();
-        let proposal = |addon: &'static str, reference: &'static str, asset: Uuid| {
-            let db = db.clone();
-            async move {
-                let id = Uuid::new_v4();
-                sqlx::query(
+        // A proposal accepted by Carla, unless it is to be left open.
+        let proposal_in =
+            |state: &'static str, addon: &'static str, reference: &'static str, asset: Uuid| {
+                let db = db.clone();
+                async move {
+                    let id = Uuid::new_v4();
+                    sqlx::query(
                     "INSERT INTO asset_link_proposals (id, addon, reference, customer_id, asset_id,
-                                                       matched_by, name)
-                     VALUES ($1, $2, $3, $4, $5, 'name', 'PC-0042')",
+                                                       matched_by, name, state, decided_at,
+                                                       decided_by)
+                     VALUES ($1, $2, $3, $4, $5, 'name', 'PC-0042', $6,
+                             CASE WHEN $6 = 'open' THEN NULL ELSE now() END,
+                             CASE WHEN $6 = 'open' THEN NULL ELSE $7 END)",
                 )
                 .bind(id)
                 .bind(addon)
                 .bind(reference)
                 .bind(brightfield)
                 .bind(asset)
+                .bind(state)
+                .bind(carla)
                 .execute(&db)
                 .await
                 .unwrap();
-                id
-            }
+                    id
+                }
+            };
+        let proposal = |addon: &'static str, reference: &'static str, asset: Uuid| {
+            proposal_in("accepted", addon, reference, asset)
         };
         let link = |proposal: Uuid, addon: &'static str, reference: &'static str, asset: Uuid| {
             let db = db.clone();
@@ -555,28 +741,46 @@ mod tests {
             }
         };
 
-        let first = proposal("watchtower", "host-1", pc).await;
+        let first = proposal_in("open", "watchtower", "host-1", pc).await;
         assert!(
-            link(first, "watchtower", "host-2", pc).await.is_err(),
-            "a link the proposal did not propose"
+            link(first, "watchtower", "host-1", pc).await.is_err(),
+            "a proposal not accepted"
         );
-        assert!(link(first, "watchtower", "host-1", pc).await.is_ok());
-        let accept = |by: Option<Uuid>| {
+        let decide = |state: &'static str, by: Option<Uuid>| {
             let db = db.clone();
             async move {
                 sqlx::query(
-                    "UPDATE asset_link_proposals SET state = 'accepted', decided_at = now(),
-                            decided_by = $2
+                    "UPDATE asset_link_proposals
+                     SET state = $2,
+                         decided_at = CASE WHEN $2 = 'open' THEN NULL ELSE now() END,
+                         decided_by = $3
                      WHERE id = $1",
                 )
                 .bind(first)
+                .bind(state)
                 .bind(by)
                 .execute(&db)
                 .await
             }
         };
-        assert!(accept(None).await.is_err(), "accepted by nobody");
-        assert!(accept(Some(carla)).await.is_ok());
+        assert!(
+            decide("accepted", None).await.is_err(),
+            "accepted by nobody"
+        );
+        assert!(decide("accepted", Some(carla)).await.is_ok());
+        assert!(
+            link(first, "watchtower", "host-2", pc).await.is_err(),
+            "a link the proposal did not propose"
+        );
+        assert!(link(first, "watchtower", "host-1", pc).await.is_ok());
+        assert!(
+            decide("open", None).await.is_err(),
+            "an accepted proposal is not opened again"
+        );
+        assert!(
+            decide("discarded", Some(carla)).await.is_err(),
+            "nor discarded"
+        );
 
         let second = proposal("watchtower", "host-2", pc).await;
         assert!(

@@ -237,7 +237,7 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
 - Accepting a link proposal links the add-on to that asset, if it is still active, with its
   reference; an add-on is linked to an asset at most once, and never to one it is the source of.
   From then on the reference reaches that asset, and any change the add-on sends to its kind,
-  name, serial number or site is refused. A linked add-on unlinks itself when the asset leaves its
+  name, serial number or site is refused (names and serial numbers compared ignoring case). A linked add-on unlinks itself when the asset leaves its
   system, which never retires the asset; an asset lists its source and its linked add-ons.
 - Agents who manage customers set a customer's external references in an add-on's system,
   choosing from the names the add-on lists; the add-on only reads them. A name maps its subgroups

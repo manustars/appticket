@@ -71,8 +71,7 @@ struct AssetRow {
     at_site_name: Option<String>,
     source_addon: Option<String>,
     source_ref: Option<String>,
-    linked_addons: Vec<String>,
-    linked_references: Vec<String>,
+    linked_addons: sqlx::types::Json<Vec<LinkedAddon>>,
     retired_at: Option<OffsetDateTime>,
 }
 
@@ -99,12 +98,7 @@ impl From<AssetRow> for Asset {
             at_site: site(row.at_site_id, row.at_site_name),
             source_addon: row.source_addon,
             reference: row.source_ref,
-            linked_addons: row
-                .linked_addons
-                .into_iter()
-                .zip(row.linked_references)
-                .map(|(addon, reference)| LinkedAddon { addon, reference })
-                .collect(),
+            linked_addons: row.linked_addons.0,
             retired_at: row.retired_at,
         }
     }
@@ -124,10 +118,11 @@ macro_rules! select_assets {
                      ORDER BY ha.created_at, ha.address LIMIT 1) AS holder_address,
                     w.site_id AS at_site_id, ws.name AS at_site_name,
                     a.source_addon, a.source_ref,
-                    ARRAY(SELECT l.addon FROM asset_linked_addons l WHERE l.asset_id = a.id
-                          ORDER BY l.addon) AS linked_addons,
-                    ARRAY(SELECT l.reference FROM asset_linked_addons l WHERE l.asset_id = a.id
-                          ORDER BY l.addon) AS linked_references,
+                    coalesce((SELECT json_agg(json_build_object('addon', l.addon,
+                                                                'reference', l.reference)
+                                              ORDER BY l.addon)
+                              FROM asset_linked_addons l WHERE l.asset_id = a.id),
+                             '[]') AS linked_addons,
                     a.retired_at
              FROM assets a
              JOIN customers c ON c.id = a.customer_id

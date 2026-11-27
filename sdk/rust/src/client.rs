@@ -312,8 +312,8 @@ impl Client {
 
     /// Unlinks the add-on from an asset it is linked to, when the asset leaves the add-on's system:
     /// the asset stays as it was, and the add-on's reference no longer reaches it. Unlinking again
-    /// changes nothing; the asset's source is refused (409), which retires it instead. Scope
-    /// `catalog:write`.
+    /// changes nothing; an add-on that never was linked to the asset is refused (409), its source
+    /// included, which retires it instead. Scope `catalog:write`.
     pub async fn unlink_asset(&self, id: Uuid) -> Result<(), Error> {
         let response = self
             .http
