@@ -69,7 +69,7 @@ pub struct Asset {
 /// its customer, which never changes, and its holder, whom agents choose. What is left out is
 /// cleared.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AssetDetails {
+pub struct SuppliedDetails {
     /// The name of an asset kind of the help desk's list, compared ignoring case: the add-on maps
     /// its own kinds to that list.
     pub kind: String,
@@ -87,7 +87,7 @@ pub struct SuppliedAsset {
     pub reference: String,
     pub customer_id: Uuid,
     #[serde(flatten)]
-    pub details: AssetDetails,
+    pub details: SuppliedDetails,
 }
 
 /// The asset an add-on supplied, as the core stored it.

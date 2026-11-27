@@ -36,7 +36,8 @@ export interface paths {
         };
         get?: never;
         /**
-         * Updates an asset the add-on is the source of, as supplying it again does; an asset entered by
+         * Updates an asset the add-on is the source of, as supplying it again does, but refuses a retired
+         *     one, which only supplying it again with its reference brings back; an asset entered by
          *     hand or supplied by another add-on is refused. Scope `catalog:write`.
          */
         put: operations["update_supplied_asset"];
@@ -1857,6 +1858,8 @@ export interface components {
             /** @description Whether its kind moves with its holder; otherwise it stays at its own site. */
             moves_with_holder: boolean;
             name: string;
+            /** @description The reference that add-on knows it by, which is not an external reference. */
+            reference?: string | null;
             /** Format: date-time */
             retired_at?: string | null;
             serial_number?: string | null;
@@ -1866,8 +1869,6 @@ export interface components {
              *     name, serial number and site, and retires it.
              */
             source_addon?: string | null;
-            /** @description That add-on's own reference for it. */
-            source_ref?: string | null;
         };
         /** @description What agents who manage the catalog set on an asset. */
         AssetFields: {

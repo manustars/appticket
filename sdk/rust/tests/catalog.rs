@@ -8,7 +8,7 @@ use axum::{
     http::StatusCode,
     routing::{post, put},
 };
-use hd_addon_sdk::api::{AssetDetails, SuppliedAsset};
+use hd_addon_sdk::api::{SuppliedAsset, SuppliedDetails};
 use hd_addon_sdk::{Client, Error};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -84,8 +84,8 @@ async fn fake_core() -> (String, Seen) {
     (url, seen)
 }
 
-fn laptop() -> AssetDetails {
-    AssetDetails {
+fn laptop() -> SuppliedDetails {
+    SuppliedDetails {
         kind: "Laptop".into(),
         name: "PC-0042".into(),
         serial_number: Some("SN-0042".into()),
@@ -122,7 +122,7 @@ async fn an_addon_supplies_its_assets_in_the_core_shape() {
     assert!(!again.created, "200: updated");
 
     let id = first.asset.id;
-    let renamed = AssetDetails {
+    let renamed = SuppliedDetails {
         name: "PC-0043".into(),
         serial_number: None,
         site: None,

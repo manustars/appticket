@@ -162,7 +162,7 @@ impl AddonAsset {
     /// The asset as `caller` reads it.
     pub(super) fn seen_by(a: Asset, caller: &Caller) -> AddonAsset {
         let reference = a
-            .source_ref
+            .reference
             .filter(|_| a.source_addon.as_deref() == Some(caller.name.as_str()));
         AddonAsset {
             id: a.id,

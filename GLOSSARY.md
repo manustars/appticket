@@ -136,7 +136,8 @@ _Avoid_: Configuration item, CI, device, item, target
 
 **Source**:
 The add-on an asset comes from; only its source changes what it supplied, while other add-ons
-linked to the asset only show their live details.
+linked to the asset only show their live details. The source identifies the asset by a reference
+of its own, which is not an External reference (a customer's name in another system).
 _Avoid_: Origin, owner, provider
 
 **Alert**:

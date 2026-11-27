@@ -37,7 +37,7 @@ export function AssetSource({ asset: a }: { asset: Asset }) {
   return (
     <>
       {' '}
-      <span className="marker source" title={a.source_ref ?? undefined}>
+      <span className="marker source" title={a.reference ?? undefined}>
         {t('assets.fromAddon', { addon: a.source_addon })}
       </span>
     </>

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::{
-    Asset, AssetDetails, Customer, Identity, Service, Supplied, SuppliedAsset, Ticket,
+    Asset, Customer, Identity, Service, Supplied, SuppliedAsset, SuppliedDetails, Ticket,
     TicketSummary,
 };
 use crate::proposals::{Content, Rationale, Target};
@@ -267,7 +267,7 @@ impl Client {
 
     /// Updates an asset the add-on is the source of; the core refuses (409) one entered by hand or
     /// supplied by another add-on. Scope `catalog:write`.
-    pub async fn update_asset(&self, id: Uuid, details: &AssetDetails) -> Result<Asset, Error> {
+    pub async fn update_asset(&self, id: Uuid, details: &SuppliedDetails) -> Result<Asset, Error> {
         let response = self
             .http
             .put(self.url(&format!("/assets/{id}")))
