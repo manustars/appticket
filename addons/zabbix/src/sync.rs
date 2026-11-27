@@ -11,7 +11,7 @@ use hd_addon_sdk::api::{Supplied, SuppliedAsset, SuppliedDetails};
 use uuid::Uuid;
 
 use crate::conflicts::{self, HostConflict};
-use crate::coverage::{Coverage, Placement};
+use crate::coverage::{Covered, Placement};
 use crate::kinds::Kinds;
 use crate::zabbix::{Host, Zabbix};
 
@@ -82,18 +82,10 @@ impl Syncer {
             .whoami()
             .await
             .context("asking the core who the add-on is")?;
-        let groups = self.zabbix.host_groups().await?;
-        let customers = self
-            .core
-            .customers()
-            .await
-            .context("reading the customers")?;
-        let offboarded = self
-            .core
-            .offboarded_references()
-            .await
-            .context("reading the offboarded customers' external references")?;
-        let coverage = Coverage::new(&self.system, &groups, &customers, &offboarded);
+        let Covered {
+            coverage,
+            customers,
+        } = Covered::read(&self.zabbix, &self.core, &self.system).await?;
 
         let list = coverage.name_list();
         round.names = list.names.len();

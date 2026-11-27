@@ -58,6 +58,68 @@ pub enum Placement {
     Conflict(Vec<CoveredGroup>),
 }
 
+impl Placement {
+    /// Why a host placed so is not imported, as a sentence goes on after "not imported, since";
+    /// none for a customer's.
+    pub fn why_not_imported(&self) -> Option<&'static str> {
+        match self {
+            Placement::Customer(_) => None,
+            Placement::Uncovered => Some("no customer covers its groups"),
+            Placement::Offboarded => Some("an offboarded customer covers its groups"),
+            Placement::Conflict(_) => Some("two customers or more cover its groups"),
+        }
+    }
+}
+
+/// The coverage of Zabbix's host groups with the active customers, as a round, `check` and an
+/// alert read them: Zabbix's host groups, and the customers and the offboarded customers'
+/// external references from the core.
+#[derive(Debug)]
+pub struct Covered {
+    pub coverage: Coverage,
+    pub customers: Vec<Customer>,
+}
+
+impl Covered {
+    /// Reads them, with the external references in `system`.
+    pub async fn read(
+        zabbix: &crate::zabbix::Zabbix,
+        core: &hd_addon_sdk::Client,
+        system: &str,
+    ) -> anyhow::Result<Covered> {
+        use anyhow::Context;
+        let groups = zabbix.host_groups().await?;
+        let customers = core
+            .customers()
+            .await
+            .context("reading the customers from the core")?;
+        let offboarded = core
+            .offboarded_references()
+            .await
+            .context("reading the offboarded customers' external references from the core")?;
+        Ok(Covered {
+            coverage: Coverage::new(system, &groups, &customers, &offboarded),
+            customers,
+        })
+    }
+
+    /// The active customer whose asset a host in the groups with these ids is; otherwise why
+    /// it is not imported, as a sentence goes on after "not imported, since".
+    pub fn customer_of<'a>(
+        &self,
+        group_ids: impl IntoIterator<Item = &'a str>,
+    ) -> Result<&Customer, &'static str> {
+        match self.coverage.place(group_ids) {
+            Placement::Customer(id) => self
+                .customers
+                .iter()
+                .find(|c| c.id == id)
+                .ok_or("the customer covering its groups is not among those the core lists"),
+            placement => Err(placement.why_not_imported().unwrap_or_default()),
+        }
+    }
+}
+
 /// The host groups of Zabbix with the customer covering each.
 #[derive(Debug)]
 pub struct Coverage {

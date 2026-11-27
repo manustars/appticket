@@ -88,3 +88,15 @@ async fn an_event_the_add_on_cannot_act_on_is_answered_with_a_failure_so_that_za
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert!(why.contains("event.get"), "{why}");
 }
+
+#[tokio::test]
+async fn an_update_without_a_message_needs_neither_zabbix_nor_the_core() {
+    let url = webhook().await;
+    let update = json!({"event_id": "26", "event_value": "1", "event_update_status": "1",
+                        "event_source": "0", "user": "Olga Operator (olga)",
+                        "action": "acknowledged", "message": "{EVENT.UPDATE.MESSAGE}"});
+    assert_eq!(
+        post(&url, Some(&format!("Bearer {SECRET}")), update).await,
+        (StatusCode::OK, r#"{"tags":{}}"#.to_owned())
+    );
+}

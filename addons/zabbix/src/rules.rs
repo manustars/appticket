@@ -7,6 +7,7 @@ use hd_addon_sdk::api::Priority;
 use serde::Deserialize;
 
 use crate::text::{has_tag, list, same};
+use crate::zabbix::{Event, HostWithGroups};
 
 /// An alert as the rules see it, already resolved from Zabbix and the core.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +22,38 @@ pub struct Alert {
     pub tags: Vec<(String, String)>,
     /// The trigger's name, with its macros resolved, as Zabbix's event has it.
     pub trigger: String,
+}
+
+impl Alert {
+    /// The alert with this severity, tags and trigger name on `host`, an asset of `customer`
+    /// (by name) when it is one.
+    pub fn new(
+        severity: Severity,
+        host: &HostWithGroups,
+        customer: Option<&str>,
+        tags: Vec<(String, String)>,
+        trigger: String,
+    ) -> Alert {
+        Alert {
+            severity,
+            customer: customer.map(str::to_owned),
+            host_groups: host.groups.iter().map(|g| g.name.clone()).collect(),
+            tags,
+            trigger,
+        }
+    }
+
+    /// The alert of Zabbix's problem `event` on `host`, an asset of `customer` (by name) when it
+    /// is one.
+    pub fn of(event: &Event, host: &HostWithGroups, customer: Option<&str>) -> Alert {
+        Alert::new(
+            event.severity,
+            host,
+            customer,
+            event.tags.clone(),
+            event.name.clone(),
+        )
+    }
 }
 
 /// Zabbix's severities, from the lowest.

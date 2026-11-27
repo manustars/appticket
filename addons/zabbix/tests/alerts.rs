@@ -385,7 +385,92 @@ async fn a_recovery_adds_a_note_and_resolves_as_the_rule_says_and_an_update_with
         ]
     );
 
+    // A problem that reaches the add-on after it recovered, as when Zabbix sent the recovery
+    // before the add-on had a ticket for it: the ticket opens, noted and resolved at once.
+    let (item, trigger) = trapped(&zabbix, &host, "late", "Late by default", 4, json!({})).await;
+    let event = zabbix.raise(&item, &trigger, "500").await;
+    let recovery = zabbix.recover(&item, &event, "1").await;
+    let answer = common::post_event(&url, SECRET, common::recovery_sent(&event)).await;
+    assert_eq!(
+        answer,
+        (StatusCode::OK, json!({"tags": {}})),
+        "no ticket yet"
+    );
+    let (status, answer) = common::post_event(&url, SECRET, common::problem_sent(&event)).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let number: i64 = answer["tags"]["hd_ticket"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no ticket in {answer}"))
+        .parse()
+        .unwrap();
+    let recovered: Vec<Value> = zabbix
+        .admin
+        .call(
+            "event.get",
+            json!({"eventids": [recovery], "output": ["clock"]}),
+        )
+        .await
+        .unwrap();
+    let at = hd_zabbix::alerts::utc(recovered[0]["clock"].as_str().unwrap().parse().unwrap());
+    let notes = core.addon_notes(number).await;
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert_eq!(
+        notes[1],
+        format!("The problem recovered in Zabbix at {at}.")
+    );
+    assert_eq!(core.ticket(number).await["state"], "resolved");
+    // Sent again, it changes nothing more.
+    let again = common::post_event(&url, SECRET, common::problem_sent(&event)).await;
+    assert_eq!(again, (StatusCode::OK, answer));
+    assert_eq!(core.addon_notes(number).await.len(), 2);
+
     zabbix.clean_up().await;
+}
+
+/// The rules of the test of a recovery Zabbix cannot be read for: none resolves.
+const NOTE_RULES: &str = r#"
+[[alerts.rules]]
+outcome = "open"
+priority = "normal"
+on_recovery = "note"
+"#;
+
+#[tokio::test]
+#[ignore = "needs the test database"]
+async fn a_recovery_zabbix_cannot_be_read_for_resolves_nothing_and_is_answered_with_a_failure() {
+    let core = Core::start().await;
+    let brightfield = core.customer("Brightfield").await;
+    let opened = core
+        .addon()
+        .open_ticket(&hd_addon_sdk::NewTicket {
+            reference: Some("4213".into()),
+            ..hd_addon_sdk::NewTicket::new(brightfield, "SRV-01: Mail queue is too long")
+        })
+        .await
+        .unwrap();
+    // A Zabbix nobody answers at.
+    let alerts = hd_zabbix::webhook::Alerts::new(
+        core.addon(),
+        hd_zabbix::zabbix::Zabbix::new(
+            "http://127.0.0.1:9",
+            "zabbix-token",
+            Duration::from_secs(2),
+        )
+        .unwrap(),
+        "Zabbix",
+        common::rules(NOTE_RULES),
+    );
+    let (listener, url, _) = common::webhook_listener().await;
+    common::serve_webhook(listener, alerts, SECRET);
+
+    let (status, why) = common::post_event(&url, SECRET, common::recovery_sent("4213")).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{why}");
+    let ticket = core.ticket(opened.number).await;
+    assert_eq!(
+        ticket["state"], "open",
+        "the rule says note: never resolved"
+    );
+    assert_eq!(core.addon_notes(opened.number).await, Vec::<String>::new());
 }
 
 #[tokio::test]

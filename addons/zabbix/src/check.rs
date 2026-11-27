@@ -4,13 +4,11 @@
 //! read from the core with the add-on's token as a round of the add-on reads them; nothing is
 //! written anywhere.
 
-use std::collections::HashMap;
-
 use anyhow::Context;
 use hd_addon_sdk::Client;
 
 use crate::config::Config;
-use crate::coverage::{Coverage, Placement};
+use crate::coverage::Covered;
 use crate::rules::{Alert, Matched, OpenTicket, Outcome, Recovery, Rules, Severity};
 use crate::text::list;
 use crate::zabbix::{Event, HostWithGroups, Zabbix};
@@ -64,12 +62,9 @@ fn parse_tag(written: &str) -> Result<(String, String), String> {
 pub enum Import {
     /// An asset of this customer, by name.
     Customer(String),
-    /// No customer covers its groups.
-    Uncovered,
-    /// An offboarded customer covers its groups.
-    Offboarded,
-    /// Two customers or more cover its groups.
-    Conflict,
+    /// Not imported, for this reason, as a sentence goes on after "not imported, since", such as
+    /// [`Placement::why_not_imported`] gives.
+    NotImported(&'static str),
 }
 
 /// The alert as Zabbix or the command line gives it, before its hosts' customers are known.
@@ -133,36 +128,25 @@ pub async fn run(config: &Config, args: CheckArgs) -> anyhow::Result<String> {
     let core = Client::new(&config.core_url, &config.core_token)?;
     let given = Given::read(&zabbix, args).await?;
 
-    let groups = zabbix.host_groups().await?;
-    let customers = core
-        .customers()
-        .await
-        .context("reading the customers from the core")?;
-    let offboarded = core
-        .offboarded_references()
-        .await
-        .context("reading the offboarded customers' external references from the core")?;
-    let coverage = Coverage::new(&config.system, &groups, &customers, &offboarded);
-    let names: HashMap<_, _> = customers.iter().map(|c| (c.id, c.name.as_str())).collect();
+    let covered = Covered::read(&zabbix, &core, &config.system).await?;
 
     let mut reports = Vec::with_capacity(given.hosts.len());
     for host in &given.hosts {
-        let import = match coverage.place(host.groups.iter().map(|g| g.id.as_str())) {
-            Placement::Customer(id) => Import::Customer(names[&id].to_owned()),
-            Placement::Uncovered => Import::Uncovered,
-            Placement::Offboarded => Import::Offboarded,
-            Placement::Conflict(_) => Import::Conflict,
+        let import = match covered.customer_of(host.groups.iter().map(|g| g.id.as_str())) {
+            Ok(customer) => Import::Customer(customer.name.clone()),
+            Err(why) => Import::NotImported(why),
         };
-        let alert = Alert {
-            severity: given.severity,
-            customer: match &import {
-                Import::Customer(name) => Some(name.clone()),
-                _ => None,
-            },
-            host_groups: host.groups.iter().map(|g| g.name.clone()).collect(),
-            tags: given.tags.clone(),
-            trigger: given.trigger.clone(),
+        let customer = match &import {
+            Import::Customer(name) => Some(name.as_str()),
+            Import::NotImported(_) => None,
         };
+        let alert = Alert::new(
+            given.severity,
+            host,
+            customer,
+            given.tags.clone(),
+            given.trigger.clone(),
+        );
         reports.push(report(
             given.event.as_deref(),
             host,
@@ -197,16 +181,9 @@ pub fn report(
     };
     let imported = match import {
         Import::Customer(name) => format!("an asset of {name}."),
-        Import::Uncovered => {
-            "not imported, since no customer covers its groups: its alerts open no ticket."
-                .to_owned()
+        Import::NotImported(why) => {
+            format!("not imported, since {why}: its alerts open no ticket.")
         }
-        Import::Offboarded => "not imported, since an offboarded customer covers its groups: \
-                               its alerts open no ticket."
-            .to_owned(),
-        Import::Conflict => "not imported, since two customers or more cover its groups: its \
-                             alerts open no ticket."
-            .to_owned(),
     };
     let tags = match alert.tags.as_slice() {
         [] => "no tags".to_owned(),
@@ -291,7 +268,7 @@ fn outcome(matched: &Matched<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coverage::HostGroup;
+    use crate::coverage::{HostGroup, Placement};
 
     fn host(groups: &[&str]) -> HostWithGroups {
         HostWithGroups {
@@ -391,7 +368,7 @@ close_in_zabbix = true
             report(
                 None,
                 &host(&["Lab"]),
-                &Import::Uncovered,
+                &Import::NotImported(Placement::Uncovered.why_not_imported().unwrap()),
                 &alert(None, &["Lab"]),
                 &rules
             ),
@@ -403,11 +380,11 @@ close_in_zabbix = true
         );
         for (import, sentence) in [
             (
-                Import::Offboarded,
+                Import::NotImported(Placement::Offboarded.why_not_imported().unwrap()),
                 "not imported, since an offboarded customer covers its groups",
             ),
             (
-                Import::Conflict,
+                Import::NotImported(Placement::Conflict(vec![]).why_not_imported().unwrap()),
                 "not imported, since two customers or more cover its groups",
             ),
         ] {
@@ -425,7 +402,7 @@ close_in_zabbix = true
         let printed = report(
             None,
             &host(&["Lab"]),
-            &Import::Uncovered,
+            &Import::NotImported(Placement::Uncovered.why_not_imported().unwrap()),
             &alert(None, &["Lab"]),
             &any_high,
         );
