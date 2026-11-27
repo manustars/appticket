@@ -11,6 +11,7 @@ import {
   listCustomerAssets,
   listCustomerServices,
   listExternalSystems,
+  listNameLists,
   listServices,
   markKeyRequester,
   offboardCustomer,
@@ -23,6 +24,7 @@ import {
   updateCustomer,
   updateSite,
   type CustomerDetail,
+  type NameList,
 } from './api/client'
 import { CustomerAssets } from './Assets'
 import { countries, countryName } from './countries'
@@ -394,8 +396,19 @@ function Domains({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
   )
 }
 
+/** What a name of a list is indented by for each level it is nested in: no-break spaces, which
+ * an option keeps, where ordinary spaces would collapse. */
+const INDENT = '\u00a0\u00a0\u00a0'
+
+/** How deep each name of a list is nested, its parent being listed before it. */
+function depths(list: NameList): Map<string, number> {
+  const depth = new Map<string, number>()
+  for (const n of list.names) depth.set(n.name, n.parent ? (depth.get(n.parent) ?? 0) + 1 : 0)
+  return depth
+}
+
 function ExternalReferences({ customer: c, readOnly, onChanged, onSignedOut }: PartProps) {
-  const { t } = useI18n()
+  const { t, formatTime } = useI18n()
   const action = useAction(onSignedOut)
   const [system, setSystem] = useState('')
   const [name, setName] = useState('')
@@ -403,6 +416,29 @@ function ExternalReferences({ customer: c, readOnly, onChanged, onSignedOut }: P
   // The systems in use across all customers, offered so that the same one is spelled alike.
   const systems = useLoad(listExternalSystems, onSignedOut)
   const { reload: reloadSystems } = systems
+  // The names add-ons list of their systems: in such a system a name is picked, not typed.
+  const lists = useLoad(listNameLists, onSignedOut)
+  const { reload: reloadLists } = lists
+  const listOf = (typed: string) =>
+    (lists.data ?? []).find((l) => l.system.toLowerCase() === typed.trim().toLowerCase())
+  const list = listOf(system)
+  const nesting = useMemo(() => (list ? depths(list) : new Map<string, number>()), [list])
+  // Listed systems first, spelled as their add-on spells them, then the others in use.
+  const offered = useMemo(() => {
+    const seen = new Set<string>()
+    return [...(lists.data ?? []).map((l) => l.system), ...(systems.data ?? [])].filter((s) => {
+      const key = s.toLowerCase()
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [lists.data, systems.data])
+
+  // A name typed for one system is no name picked from another's list, nor the other way round.
+  function chooseSystem(typed: string) {
+    if (listOf(typed) !== list) setName('')
+    setSystem(typed)
+  }
 
   function add(event: FormEvent) {
     event.preventDefault()
@@ -410,13 +446,13 @@ function ExternalReferences({ customer: c, readOnly, onChanged, onSignedOut }: P
     void action.run(() => addExternalReference(c.id, system.trim(), name.trim())).then(async (ok) => {
       if (!ok) return
       setName('')
-      await Promise.all([onChanged(), reloadSystems()])
+      await Promise.all([onChanged(), reloadSystems(), reloadLists()])
     })
   }
 
   function remove(referenceId: string) {
     void action.run(() => removeExternalReference(referenceId)).then(async (ok) => {
-      if (ok) await Promise.all([onChanged(), reloadSystems()])
+      if (ok) await Promise.all([onChanged(), reloadSystems(), reloadLists()])
     })
   }
 
@@ -457,17 +493,43 @@ function ExternalReferences({ customer: c, readOnly, onChanged, onSignedOut }: P
         <form className="inline-form" onSubmit={add}>
           <label>
             {t('externalReferences.system')}
-            <input required value={system} list={`${id}-systems`} onChange={(e) => setSystem(e.target.value)} />
+            <input required value={system} list={`${id}-systems`} onChange={(e) => chooseSystem(e.target.value)} />
           </label>
           <datalist id={`${id}-systems`}>
-            {(systems.data ?? []).map((s) => <option key={s} value={s} />)}
+            {offered.map((s) => <option key={s} value={s} />)}
           </datalist>
           <label>
             {t('externalReferences.name')}
-            <input required value={name} onChange={(e) => setName(e.target.value)} />
+            {list ? (
+              <select required value={name} onChange={(e) => setName(e.target.value)}>
+                <option value="">{t('externalReferences.chooseName')}</option>
+                {list.names.map((n) => {
+                  const indent = INDENT.repeat(nesting.get(n.name) ?? 0)
+                  return (
+                    <option key={n.name} value={n.name} disabled={!!n.customer}>
+                      {indent}
+                      {!n.customer
+                        ? n.name
+                        : n.customer.id === c.id
+                          ? t('externalReferences.nameOfThisCustomer', { name: n.name })
+                          : t('externalReferences.nameOf', { name: n.name, customer: n.customer.name })}
+                    </option>
+                  )
+                })}
+              </select>
+            ) : (
+              <input required value={name} onChange={(e) => setName(e.target.value)} />
+            )}
           </label>
           <button type="submit" disabled={action.busy || !system.trim() || !name.trim()}>{t('externalReferences.add')}</button>
         </form>
+      )}
+      {!readOnly && list && (
+        <p className="hint">
+          {list.names.length === 0
+            ? t('externalReferences.listedNone', { addon: list.addon, system: list.system, time: formatTime(list.updated_at) })
+            : t('externalReferences.listedBy', { addon: list.addon, system: list.system, time: formatTime(list.updated_at) })}
+        </p>
       )}
       <Problem error={action.error} />
     </section>

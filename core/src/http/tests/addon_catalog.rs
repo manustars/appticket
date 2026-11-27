@@ -6,18 +6,9 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::Client;
+use super::{Client, addon};
 use crate::addons::{CATALOG_WRITE, DIRECTORY_READ};
 use crate::testing;
-
-/// A client calling with the token of a new add-on called `name` that has `scopes`.
-async fn addon(db: &PgPool, api: &Client, name: &str, scopes: &[&str]) -> Client {
-    let scopes: Vec<String> = scopes.iter().map(|s| (*s).to_owned()).collect();
-    let registered = crate::addons::register(db, name, "http://127.0.0.1:9", &[], &scopes)
-        .await
-        .unwrap();
-    Client::new_with_token(db, &registered.token, api.agent)
-}
 
 #[sqlx::test]
 async fn an_addon_supplies_updates_and_retires_its_assets_through_the_api(db: PgPool) {

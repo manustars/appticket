@@ -28,6 +28,7 @@ export type InboxMessage = Schemas['InboxMessage']
 export type MailState = Schemas['MailState']
 export type Moved = Schemas['Moved']
 export type MovePreview = Schemas['MovePreview']
+export type NameList = Schemas['NameList']
 export type Permission = Schemas['Permission']
 export type Priority = Schemas['Priority']
 export type Proposal = Schemas['ProposalView']
@@ -390,6 +391,11 @@ export async function addExternalReference(customer: string, system: string, nam
 /** The systems external references are in, across all customers, one spelling each. */
 export function listExternalSystems(): Promise<string[]> {
   return json('GET', '/api/external-references/systems')
+}
+
+/** The latest list of names each add-on sent of its system, with the customer each name names. */
+export function listNameLists(): Promise<NameList[]> {
+  return json('GET', '/api/external-references/names')
 }
 
 /** What importing `files` would create, update and leave out; nothing changes. */

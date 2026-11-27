@@ -240,9 +240,19 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   name, serial number or site is refused (names and serial numbers compared ignoring case). A linked add-on unlinks itself when the asset leaves its
   system, which never retires the asset; an asset lists its source and its linked add-ons.
 - Agents who manage customers set a customer's external references in an add-on's system,
-  choosing from the names the add-on lists; the add-on only reads them. A name maps its subgroups
-  too, unless a subgroup is mapped to another customer. Anything of the external system that maps
-  to no customer, or to two, is not imported and is listed in the add-on's state.
+  choosing from the add-on's name list; the add-on only reads them. The add-on replaces its whole
+  name list, with the nesting of its names (each name once ignoring case, nested in another of
+  the list or at the top, never in itself), under its system's name; the core keeps the latest
+  list, also while the add-on is switched off, and a system's names come from one add-on. In that
+  system a new external reference, typed or imported, is one of the listed names, spelled as the
+  list spells it and its system, and a name that is already an external reference of a customer
+  cannot be picked for another. Replacing the list changes no external reference: those typed by
+  hand before, and those whose name left the list, stay. A list sent under another system's name
+  renames nothing: the references picked before stay under the old name, which no add-on lists
+  any more, so names can be typed there again, and the add-on no longer finds them under its
+  system. An external reference covers the names nested in it too, unless one of them is an
+  external reference of another customer. Anything of the external system that no external
+  reference covers, or that two cover, is not imported and is listed in the add-on's state.
 - The live details of an asset come from its source and each add-on it is linked to, asked with
   that add-on's reference when the asset is shown, and only for an active asset of a customer
   that is not offboarded; when an add-on does not answer within 2 seconds, answers with an error

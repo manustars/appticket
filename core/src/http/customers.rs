@@ -16,6 +16,7 @@ use crate::auth::SignedIn;
 use crate::customers::{self, CustomerDetail, CustomerDetails, CustomerSummary};
 use crate::external_references;
 use crate::key_requesters;
+use crate::name_lists::{self, NameList};
 use crate::requesters;
 use crate::roles::Permission;
 use crate::sites;
@@ -43,6 +44,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(add_external_reference))
         .routes(routes!(remove_external_reference))
         .routes(routes!(external_systems))
+        .routes(routes!(listed_names))
         .routes(routes!(offboard))
         .routes(routes!(bring_back))
 }
@@ -466,7 +468,9 @@ pub struct CreatedExternalReference {
 }
 
 /// Gives the customer an external reference: a name another system uses for it. A name names
-/// exactly one customer within its system, ignoring case: one already in use is refused.
+/// exactly one customer within its system, ignoring case: one already in use is refused. In a
+/// system an add-on lists the names of, the name is one of them, and the reference is spelled as
+/// the list spells the system and the name.
 #[utoipa::path(post, path = "/api/customers/{id}/external-references", tag = "customers",
     params(("id" = Uuid, Path, description = "The customer")), request_body = NewExternalReference,
     responses((status = CREATED, body = CreatedExternalReference),
@@ -495,6 +499,18 @@ async fn external_systems(
     _agent: SignedIn,
 ) -> Result<Json<Vec<String>>, ApiError> {
     Ok(Json(external_references::systems(&state.db).await?))
+}
+
+/// The latest list of names each add-on sent of its system, by system, with the customer each
+/// name is an external reference of. In a system an add-on lists, a new external reference is
+/// one of its names, picked when no other customer has it; references typed by hand before stay.
+#[utoipa::path(get, path = "/api/external-references/names", tag = "customers",
+    responses((status = OK, body = Vec<NameList>), (status = UNAUTHORIZED, body = Problem)))]
+async fn listed_names(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+) -> Result<Json<Vec<NameList>>, ApiError> {
+    Ok(Json(name_lists::all(&state.db).await?))
 }
 
 /// Takes an external reference from its customer; its name is free again in its system.

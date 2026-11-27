@@ -157,6 +157,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/addon/names": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replaces the name list of the add-on's system
+         * @description Replaces the name list of the add-on's system that agents who manage customers pick external references from, such as its host groups, with their nesting: the core keeps the latest list, also while the add-on is switched off. At most 10000 names, each at most 255 characters once trimmed, the system's name at most 100, neither blank nor with control characters, in at most 21 MiB of JSON (413 above), which the largest list fits written as UTF-8. A list with a name twice (ignoring case), nested in a name it does not list or in itself, or under a system another add-on lists, is refused whole. The customers' external references stay as they are, also those whose name leaves the list. Scope `names:write`.
+         */
+        put: operations["replace_names"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/addon/proposals": {
         parameters: {
             query?: never;
@@ -871,7 +891,9 @@ export interface paths {
         put?: never;
         /**
          * Gives the customer an external reference: a name another system uses for it. A name names
-         *     exactly one customer within its system, ignoring case: one already in use is refused.
+         *     exactly one customer within its system, ignoring case: one already in use is refused. In a
+         *     system an add-on lists the names of, the name is one of them, and the reference is spelled as
+         *     the list spells the system and the name.
          */
         post: operations["add_external_reference"];
         delete?: never;
@@ -945,6 +967,27 @@ export interface paths {
         put?: never;
         /** Adds a site to the customer; the customer's active sites have different names. */
         post: operations["add_site"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/external-references/names": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The latest list of names each add-on sent of its system, by system, with the customer each
+         *     name is an external reference of. In a system an add-on lists, a new external reference is
+         *     one of its names, picked when no other customer has it; references typed by hand before stay.
+         */
+        get: operations["listed_names"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2583,6 +2626,14 @@ export interface components {
             id: string;
             name: string;
         };
+        /** @description A name of a name list, as agents read it. */
+        ListedName: {
+            customer?: components["schemas"]["CustomerRef"] | null;
+            /** @description The name, as the add-on spells it. */
+            name: string;
+            /** @description The name it is nested in, listed before it; none at the top. */
+            parent?: string | null;
+        };
         /** @description What an add-on says of an asset now. */
         LiveDetails: {
             fields: components["schemas"]["DetailField"][];
@@ -2666,6 +2717,26 @@ export interface components {
         NameInSystem: {
             name: string;
             system: string;
+        };
+        /**
+         * @description An add-on's latest name list: the names of its system, as agents read them to pick a
+         *     customer's external references.
+         */
+        NameList: {
+            /** @description The add-on that lists them. */
+            addon: string;
+            /**
+             * @description Every name followed by those nested in it; the names of one level by name, ignoring case
+             *     and accents.
+             */
+            names: components["schemas"]["ListedName"][];
+            /** @description The system external references picked from the list are in. */
+            system: string;
+            /**
+             * Format: date-time
+             * @description When the add-on last sent the list.
+             */
+            updated_at: string;
         };
         NewAddress: {
             address: string;
@@ -3139,6 +3210,26 @@ export interface components {
         Switch: {
             enabled: boolean;
         };
+        /**
+         * @description A name of the add-on's system as the add-on sends it, such as a host group of a monitoring
+         *     tool: trimmed, it is not blank, holds no control character, is no longer than the core takes
+         *     and appears once in the list, ignoring case.
+         */
+        SystemName: {
+            name: string;
+            /** @description The name it is nested in, another of the list's, compared ignoring case; none at the top. */
+            parent?: string | null;
+        };
+        /** @description The whole name list of the add-on's system, as the add-on sends it. */
+        SystemNames: {
+            /** @description The names, in any order. */
+            names: components["schemas"]["SystemName"][];
+            /**
+             * @description The add-on's system, such as a monitoring tool: the external references picked from the
+             *     list are in it. A system's names come from one add-on, compared ignoring case.
+             */
+            system: string;
+        };
         TicketCustomer: {
             /** Format: uuid */
             id: string;
@@ -3589,6 +3680,50 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Problem"];
                 };
+            };
+        };
+    };
+    replace_names: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SystemNames"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A body over the limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -5772,6 +5907,33 @@ export interface operations {
                 };
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listed_names: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NameList"][];
+                };
+            };
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
