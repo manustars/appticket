@@ -1,5 +1,5 @@
-//! The `check` command against the Zabbix in containers and the real core: a problem raised on a
-//! trapper item, given by its event id or by its fields, meets the rule of the configuration
+//! The `check` command against the Zabbix in containers and the real core: an alert raised on a
+//! trapper item, given by Zabbix's event id or by its fields, meets the rule of the configuration
 //! file it should. Ignored by default, since it needs Zabbix (`HD_TEST_ZABBIX_URL`), the test
 //! database server (`DATABASE_URL`) and the core's binary (`cargo build -p hd-core`); CI runs it.
 
@@ -55,7 +55,7 @@ fn check(dir: &Path, core: &Core, zabbix: &TestZabbix, args: &[&str]) -> Result<
 
 #[tokio::test]
 #[ignore = "needs the Zabbix in containers and the test database"]
-async fn check_tells_the_rule_a_problem_of_zabbix_meets_by_event_id_or_by_its_fields() {
+async fn check_tells_the_rule_an_alert_of_zabbix_meets_by_event_id_or_by_its_fields() {
     let core = Core::start().await;
     let mut zabbix = TestZabbix::connect().await;
     let brightfield = core.customer("Brightfield").await;
@@ -142,7 +142,7 @@ async fn check_tells_the_rule_a_problem_of_zabbix_meets_by_event_id_or_by_its_fi
         check(&dir, &core, &zabbix, &["--event", &event]).unwrap(),
         format!(
             "Host \"{visible}\", in the host group \"{}\": an asset of Brightfield.\n\
-             Problem: event {event}, severity high, trigger \"Mail queue of {visible} is too \
+             Alert: Zabbix's event {event}, severity high, trigger \"Mail queue of {visible} is too \
              long\", the tags \"component=queue\", \"service=mail\" and \"site=north\".\n\
              Rule 2 (\"Mail\") matches: a ticket opened with priority high, linking the service \
              \"Hosted mail\" when the customer uses it; on recovery, a note, and the ticket \
@@ -171,7 +171,7 @@ async fn check_tells_the_rule_a_problem_of_zabbix_meets_by_event_id_or_by_its_fi
     .unwrap();
     assert!(
         by_fields.ends_with(
-            "Problem: severity warning, trigger \"Mail queue is too long\", the tags \
+            "Alert: severity warning, trigger \"Mail queue is too long\", the tags \
              \"service=mail\".\nNo rule matches: the alert is ignored.\n"
         ),
         "{by_fields}"
@@ -205,6 +205,8 @@ async fn check_tells_the_rule_a_problem_of_zabbix_meets_by_event_id_or_by_its_fi
             &format!("{}-lab-02", zabbix.prefix),
             "--severity",
             "high",
+            "--trigger",
+            "Backup failed",
         ],
     )
     .unwrap();
@@ -215,6 +217,13 @@ async fn check_tells_the_rule_a_problem_of_zabbix_meets_by_event_id_or_by_its_fi
             zabbix.prefix,
             p("Lab")
         )),
+        "{lab_check}"
+    );
+    assert!(
+        lab_check.ends_with(
+            "\nRule 1 (\"Backups\") would match once the host is imported, an asset of a \
+             customer: the alert is ignored.\n"
+        ),
         "{lab_check}"
     );
 
@@ -246,7 +255,7 @@ async fn check_tells_the_rule_a_problem_of_zabbix_meets_by_event_id_or_by_its_fi
     );
     let unknown = check(&dir, &core, &zabbix, &["--event", "999999999"]).unwrap_err();
     assert!(
-        unknown.contains("Zabbix has no problem event 999999999 of a trigger"),
+        unknown.contains("Zabbix has no event 999999999 of a trigger's problem"),
         "{unknown}"
     );
     // An invalid rule stops it, as it stops the add-on.

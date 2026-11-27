@@ -6,7 +6,7 @@ pub mod config;
 pub mod conflicts;
 pub mod coverage;
 pub mod kinds;
-pub mod problems;
 pub mod rules;
 pub mod sync;
+pub mod text;
 pub mod zabbix;
