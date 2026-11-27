@@ -423,6 +423,11 @@ export interface Messages {
   "assets.discardLink": { plural: false; placeholders: never; tags: never }
   "assets.discardLinkNamed": { plural: false; placeholders: "name"; tags: never }
   "assets.confirmDiscardLink": { plural: false; placeholders: "addon" | "asset" | "name"; tags: never }
+  "liveDetails.asking": { plural: false; placeholders: "addon"; tags: never }
+  "liveDetails.unavailable": { plural: false; placeholders: "addon"; tags: never }
+  "liveDetails.ok": { plural: false; placeholders: never; tags: never }
+  "liveDetails.warning": { plural: false; placeholders: never; tags: never }
+  "liveDetails.problem": { plural: false; placeholders: never; tags: never }
   "kinds.title": { plural: false; placeholders: never; tags: never }
   "kinds.hint": { plural: false; placeholders: never; tags: never }
   "kinds.empty": { plural: false; placeholders: never; tags: never }

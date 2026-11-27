@@ -1,7 +1,7 @@
 // Proposals of add-ons such as the Assistant: suggestions an agent accepts or discards. They are
 // marked as suggestions and carry the add-on's reason, so they never pass for the agent's own work.
 import { useId, type ReactNode } from 'react'
-import { addonName, rationaleIn } from './addon'
+import { addonName, inLanguage } from './addon'
 import { acceptProposal, discardProposal, type Permission, type Proposal, type TicketDetail } from './api/client'
 import { useI18n } from './i18n/context'
 import { Problem } from './Problem'
@@ -68,7 +68,7 @@ function ProposalItem({ proposal, busy, onAccept, onDiscard, extra }: {
   const canAccept = can(needs(proposal, true))
   const canDiscard = can(needs(proposal, false))
   // Follows the language the agent picks, as the add-on wrote it for that language.
-  const rationale = rationaleIn(proposal.rationale, locale)
+  const rationale = inLanguage(proposal.rationale, locale)
   return (
     <li className="proposal">
       <div className="proposal-what"><ProposalWhat proposal={proposal} /></div>

@@ -389,6 +389,13 @@ ul.plain { list-style: none; margin: 0; padding: 0; }
   vertical-align: 0.1em;
 }
 .marker.offboarded, .marker.retired, .marker.departed { border-style: dashed; color: var(--closed); }
+/* What an add-on says of an asset now, beside the asset. */
+.live-details { display: grid; gap: 0.2rem; margin-top: 0.25rem; font-size: 0.85rem; flex-basis: 100%; }
+.live { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.75rem; white-space: normal; }
+.marker.live-ok { color: var(--accent); border-color: var(--accent); }
+.marker.live-warning { color: var(--waiting); border-color: var(--waiting); }
+.marker.live-problem { color: var(--danger); border-color: var(--danger); }
+.marker.unavailable { border-style: dashed; }
 tr.offboarded td, tr.retired td { color: var(--muted); }
 
 .inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem 0.75rem; }
