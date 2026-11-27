@@ -27,6 +27,17 @@ Lena, Otto and Piet are in the group `helpdesk-agents`, which the client sends i
 `groups` claim; Nadia is not.
 These are for development and CI only. `podman compose up -d keycloak` starts it alone.
 
+A test Zabbix 7.0, for the Zabbix add-on, starts only with its profile:
+
+```sh
+podman compose --profile zabbix up -d    # its frontend and API on 127.0.0.1:55180
+```
+
+Its server, frontend and database are three containers (`zabbix-server`, `zabbix-web`,
+`zabbix-db`); at the first start the server sets up the database, which takes a minute or two
+before the API answers. Sign in as `Admin` with the password `zabbix`. Nothing is kept once the
+containers are removed (`podman compose --profile zabbix down -v`).
+
 ## Configuration
 
 Create `.env` at the repository root (it is ignored by git):
@@ -155,12 +166,35 @@ often a single GPU shared with other work; a hosted provider gets four.
 `HD_ASSISTANT_MODEL_CONCURRENCY` changes that. A model that thinks before answering can take tens
 of seconds per message, so proposals appear accordingly later.
 
+## The Zabbix add-on
+
+The Zabbix add-on (`addons/zabbix`, details in its README) makes the hosts of the host groups
+customers have into their assets. With the test Zabbix above, make an API token for `Admin` in
+its frontend (*Users → API tokens*), then:
+
+```sh
+cargo run -p hd-core -- addon add zabbix --url http://127.0.0.1:8091 \
+  --scope directory:read --scope catalog:write --scope names:write --scope conflicts:write
+cp addons/zabbix/zabbix.example.toml zabbix.toml   # core.url http://127.0.0.1:8080,
+                                                   # zabbix.url http://127.0.0.1:55180
+# in .env: HD_ZABBIX_TOKEN=… (printed above) and HD_ZABBIX_API_TOKEN=… (Zabbix's)
+cargo run -p hd-zabbix
+```
+
+Its host groups then appear on a customer's page among the names to pick an external reference
+in `Zabbix` from.
+
 ## Tests
 
 ```sh
 cargo test                    # needs the database: each test gets a fresh one from sqlx
-cargo test -- --ignored       # tests that also need the test mail server, Keycloak and the TLS test database
+cargo test -- --ignored       # tests that also need the test mail server, Keycloak, the TLS test
+                              # database and the test Zabbix
 ```
+
+The Zabbix add-on's ignored tests start the core's binary, so build it first
+(`cargo build -p hd-core`), and reach the test Zabbix at `HD_TEST_ZABBIX_URL` (default
+`http://127.0.0.1:55180`); CI runs them in a job of their own.
 
 The help desk supports PostgreSQL 16 and later: CI runs the core's tests on 16 and on 18, the
 version of `compose.yaml`. To run them on 16 locally, start a server of that version on a port of

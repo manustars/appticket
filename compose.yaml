@@ -48,5 +48,43 @@ services:
     volumes:
       - ./dev/keycloak:/opt/keycloak/data/import:ro
 
+  # Test Zabbix for the Zabbix add-on (addons/zabbix), for development and CI only, started only
+  # with its profile: `podman compose --profile zabbix up -d`. The frontend and its API are on
+  # host port 55180 (http://127.0.0.1:55180/api_jsonrpc.php), with the user Admin and the password
+  # zabbix of a fresh Zabbix. At its first start the server sets up its database, which takes a
+  # minute or two; nothing is kept once the containers are removed.
+  zabbix-db:
+    image: docker.io/library/postgres:16
+    profiles: [zabbix]
+    environment:
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: zabbix
+      POSTGRES_DB: zabbix
+
+  zabbix-server:
+    image: docker.io/zabbix/zabbix-server-pgsql:alpine-7.0.32
+    profiles: [zabbix]
+    init: true
+    environment:
+      DB_SERVER_HOST: zabbix-db
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: zabbix
+      POSTGRES_DB: zabbix
+    depends_on: [zabbix-db]
+
+  zabbix-web:
+    image: docker.io/zabbix/zabbix-web-nginx-pgsql:alpine-7.0.32
+    profiles: [zabbix]
+    environment:
+      ZBX_SERVER_HOST: zabbix-server
+      DB_SERVER_HOST: zabbix-db
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: zabbix
+      POSTGRES_DB: zabbix
+      PHP_TZ: UTC
+    ports:
+      - "127.0.0.1:55180:8080"
+    depends_on: [zabbix-server]
+
 volumes:
   db-data:

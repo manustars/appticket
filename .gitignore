@@ -5,3 +5,5 @@ dist/
 .env.*
 !.env.example
 *.local
+# The Zabbix add-on's local configuration (addons/zabbix/zabbix.example.toml is the example).
+/zabbix.toml

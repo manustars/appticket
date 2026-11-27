@@ -449,6 +449,47 @@
         }
       }
     },
+    "/api/addon/external-references/offboarded": {
+      "get": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "The external references of offboarded customers, by system and name, without the customers,\nwhich add-ons do not read: those names stay covered, and so do the names nested in them, even\ninside an active customer's name, so that an add-on imports nothing of them for either\ncustomer. Scope `directory:read`.",
+        "operationId": "offboarded_references",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NameInSystem"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/addon/names": {
       "put": {
         "tags": [

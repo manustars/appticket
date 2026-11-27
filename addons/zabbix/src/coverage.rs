@@ -82,9 +82,10 @@ impl Coverage {
         let mut spelled: HashMap<String, String> = HashMap::new();
         let mut kept: Vec<&str> = Vec::new();
         for group in &sorted {
-            let lower = group.name.to_lowercase();
-            if !spelled.contains_key(&lower) {
-                spelled.insert(lower, group.name.clone());
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                spelled.entry(group.name.to_lowercase())
+            {
+                entry.insert(group.name.clone());
                 kept.push(&group.name);
             }
         }

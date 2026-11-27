@@ -1,0 +1,35 @@
+# The Zabbix add-on's configuration file, read from HD_ZABBIX_CONFIG (zabbix.toml in the working
+# directory by default). Its two secrets are not here: HD_ZABBIX_TOKEN (or HD_ZABBIX_TOKEN_FILE)
+# holds the token `hd addon add` printed, and HD_ZABBIX_API_TOKEN (or HD_ZABBIX_API_TOKEN_FILE)
+# an API token of the Zabbix user the add-on reads as.
+
+[core]
+# The help desk core's base URL.
+url = "https://helpdesk.example.com"
+
+[zabbix]
+# The base URL of Zabbix's frontend; the API is <url>/api_jsonrpc.php.
+url = "https://zabbix.example.com"
+# The system's name as customers' external references name it (default Zabbix).
+system = "Zabbix"
+# Seconds a call to Zabbix may take (default 30).
+timeout_seconds = 30
+
+[sync]
+# Minutes between two reads of Zabbix's hosts, besides the one at startup (default 5).
+interval_minutes = 5
+
+[assets]
+# The asset kind of a host no mapping below matches: one of the help desk's list.
+default_kind = "Server"
+
+# The first mapping that matches a host decides its kind: by a template it is linked to (its
+# visible name), or by a tag, with or without a value; names and values compared ignoring case.
+[[assets.kinds]]
+tag = "device"
+value = "printer"
+kind = "Printer"
+
+[[assets.kinds]]
+template = "Windows by Zabbix agent"
+kind = "Desktop"

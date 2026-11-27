@@ -177,6 +177,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/addon/external-references/offboarded": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The external references of offboarded customers, by system and name, without the customers,
+         *     which add-ons do not read: those names stay covered, and so do the names nested in them, even
+         *     inside an active customer's name, so that an add-on imports nothing of them for either
+         *     customer. Scope `directory:read`.
+         */
+        get: operations["offboarded_references"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/addon/names": {
         parameters: {
             query?: never;
@@ -3862,6 +3884,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Service"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    offboarded_references: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NameInSystem"][];
                 };
             };
             401: {

@@ -13,7 +13,8 @@ Apache-2.0, like the rest of `sdk/`.
 - `signature`: `Verifier` checks `hd-signature` (HMAC-SHA-256 over `<hd-timestamp>.<raw body>`) in
   constant time and refuses timestamps more than five minutes off; its clock can be replaced in
   tests. `sign` computes the header, for testing an add-on.
-- `Client`: the add-on API (`whoami`, `customers`, `customer_assets`, `customer_services`,
+- `Client`: the add-on API (`whoami`, `customers`, `offboarded_references` for the external
+  references of offboarded customers, without the customers, `customer_assets`, `customer_services`,
   `open_tickets_of_requester`, `open_tickets_of_customer`, `ticket`, `propose`, `open_ticket`,
   `ticket_by_reference`, `opened_tickets`, `add_note` and `resolve_ticket` for the tickets the
   add-on opens, `supply_asset`,
