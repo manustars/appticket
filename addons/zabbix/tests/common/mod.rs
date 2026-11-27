@@ -324,10 +324,27 @@ impl Drop for Core {
     }
 }
 
+/// Zabbix's API as its administrator. Zabbix can fail one of two writes made at the same time
+/// ("Database error occurred"), so the tests' calls take turns.
+pub struct Admin(Zabbix);
+
+static TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+impl Admin {
+    pub async fn call<T: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> anyhow::Result<T> {
+        let _turn = TURN.lock().await;
+        self.0.call(method, params).await
+    }
+}
+
 /// The Zabbix of the tests, signed in as its default administrator, with a prefix of the test's
 /// own for what it creates there.
 pub struct TestZabbix {
-    pub admin: Zabbix,
+    pub admin: Admin,
     /// An API token made for the test, which the add-on uses.
     pub api_token: String,
     token_id: String,
@@ -346,14 +363,14 @@ impl TestZabbix {
             .await
             .unwrap_or_else(|e| panic!("no Zabbix at {url} (HD_TEST_ZABBIX_URL): {e:#}"));
         eprintln!("Zabbix {version} at {url}");
-        let session: String = anonymous
+        let session: String = Admin(anonymous)
             .call(
                 "user.login",
                 json!({"username": "Admin", "password": "zabbix"}),
             )
             .await
             .unwrap();
-        let admin = Zabbix::new(&url, &session, Duration::from_secs(30)).unwrap();
+        let admin = Admin(Zabbix::new(&url, &session, Duration::from_secs(30)).unwrap());
         let prefix = format!("T{}", &Uuid::new_v4().simple().to_string()[..8]);
         let users: Vec<Value> = admin
             .call(

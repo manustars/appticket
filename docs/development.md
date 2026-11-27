@@ -36,7 +36,8 @@ podman compose --profile zabbix up -d    # its frontend and API on 127.0.0.1:551
 Its server, frontend and database are three containers (`zabbix-server`, `zabbix-web`,
 `zabbix-db`); at the first start the server sets up the database, which takes a minute or two
 before the API answers. Sign in as `Admin` with the password `zabbix`. Nothing is kept once the
-containers are removed (`podman compose --profile zabbix down -v`).
+containers are removed with `podman compose --profile zabbix rm -sfv zabbix-web zabbix-server
+zabbix-db` (not `down -v`, which would also remove the help desk's own database volume).
 
 ## Configuration
 
