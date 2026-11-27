@@ -88,6 +88,13 @@ async fn fake_core() -> (String, Posted) {
         .route(
             "/api/addon/tickets/{number}",
             get(|Path(number): Path<i64>| async move {
+                if number == 31 {
+                    return (StatusCode::OK, Json(json!({"number": 31,
+                        "title": "SRV-01: disk almost full", "state": "open", "priority": "high",
+                        "customer": {"id": CUSTOMER, "name": "Brightfield"}, "requester": null,
+                        "opened_by_addon": "watchtower", "worked_on_by_agent": false,
+                        "timeline": []})));
+                }
                 if number != 12 {
                     return problem(StatusCode::NOT_FOUND, "Ticket not found.");
                 }
@@ -164,6 +171,23 @@ async fn fake_core() -> (String, Posted) {
                     Ok(StatusCode::CREATED)
                 }
             }),
+        )
+        .route(
+            "/api/addon/tickets/{number}/resolve",
+            post({
+                let posted = posted.clone();
+                move |Path(number): Path<i64>| async move {
+                    if number != 31 {
+                        return Err(problem(
+                            StatusCode::CONFLICT,
+                            "The add-on watchtower did not open the ticket #12: an add-on \
+                             resolves only the tickets it opened.",
+                        ));
+                    }
+                    posted.lock().unwrap().push(json!({"resolved": number}));
+                    Ok(StatusCode::NO_CONTENT)
+                }
+            }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -214,6 +238,10 @@ async fn reads_what_an_addon_needs_and_ignores_the_rest() {
     let ticket = client.ticket(12).await.unwrap();
     assert_eq!(ticket.priority, Priority::High);
     assert_eq!(ticket.opened_by_addon, None, "from a core that predates it");
+    assert!(
+        ticket.worked_on_by_agent,
+        "a core that does not say counts as worked on"
+    );
     assert_eq!(ticket.services[0].name, "Posta ospitata");
     let requester = ticket.requester.unwrap();
     assert_eq!(requester.email, "ada@brightfield.test");
@@ -366,4 +394,24 @@ async fn tickets_are_opened_and_noted_in_the_core_shape() {
         posted[2],
         json!({"ticket": 31, "note": {"body": "Back to 60%."}})
     );
+}
+
+#[tokio::test]
+async fn an_addon_resolves_a_ticket_nobody_worked_on() {
+    let (url, posted) = fake_core().await;
+    let client = Client::new(&url, TOKEN).unwrap();
+
+    let ticket = client.ticket(31).await.unwrap();
+    assert_eq!(ticket.opened_by_addon.as_deref(), Some("watchtower"));
+    assert!(!ticket.worked_on_by_agent);
+    client.resolve_ticket(31).await.unwrap();
+    let refused = client.resolve_ticket(12).await.unwrap_err();
+    assert_eq!(refused.status(), Some(409));
+    assert_eq!(
+        refused.to_string(),
+        "the core answered 409: The add-on watchtower did not open the ticket #12: an add-on \
+         resolves only the tickets it opened."
+    );
+
+    assert_eq!(posted.lock().unwrap()[..], [json!({"resolved": 31})]);
 }

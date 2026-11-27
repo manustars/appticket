@@ -90,9 +90,9 @@ closed ticket never moves again.
 |---|---|---|
 | `agent` | An agent moved the ticket by hand, with a reply (to the state they picked), by attaching an inbox message to it (which reopens a waiting or resolved ticket), or by resolving the children of a parent ticket (one event per child that changed). | `agent`: the agent's `id` and `name`. |
 | `message` | A received message joined the ticket and reopened it. Its sender is not always the ticket's requester: a key requester's answer, for one, joins the ticket too. | `message_id`: the message, which `message.received` announces too. |
+| `addon` | An add-on resolved a ticket it opened, with `POST /api/addon/tickets/{number}/resolve`; `new_state` is then `resolved`. | `addon`: the add-on's name, as in `opened_by_addon`. |
 
-More kinds may come, such as an add-on once add-ons resolve the tickets they opened: skip a
-`kind` you do not know. Receiving the event needs no scope; reading the ticket afterwards needs
+More kinds may come: skip a `kind` you do not know. Receiving the event needs no scope; reading the ticket afterwards needs
 `tickets:read`. A ticket being opened is no change of state: it is announced by `ticket.opened`
 or `message.received`.
 
@@ -159,7 +159,7 @@ sentence saying which scope is missing.
 | `GET /api/addon/customers/{id}/assets` | `directory:read` | A customer's active assets. |
 | `GET /api/addon/customers/{id}/services` | `directory:read` | The active services a customer uses. |
 | `GET /api/addon/tickets?requester_email=…` or `?customer=…` | `tickets:read` | Tickets that are not closed, of the requester the address belongs to (any of their addresses) or of a customer. |
-| `GET /api/addon/tickets/{number}` | `tickets:read` | A ticket with its messages, links and open proposals; internal notes and announcements are never given to add-ons. |
+| `GET /api/addon/tickets/{number}` | `tickets:read` | A ticket with its messages, links and open proposals, and whether an agent has worked on it; internal notes and announcements are never given to add-ons. |
 | `POST /api/addon/proposals` | `proposals:write` | Proposes something to the agents. |
 | `POST /api/addon/assets` | `catalog:write` | Creates an asset of a customer known by the add-on's reference, or updates the one the add-on supplied with that reference; proposes a link instead when the customer already has a matching asset. |
 | `PUT /api/addon/assets/{id}` | `catalog:write` | Updates an asset the add-on is the source of. |
@@ -167,6 +167,7 @@ sentence saying which scope is missing.
 | `POST /api/addon/assets/{id}/unlink` | `catalog:write` | Unlinks the add-on from an asset it is linked to, which stays as it was. |
 | `POST /api/addon/tickets` | `tickets:write` | Opens a ticket without a requester for a customer. |
 | `POST /api/addon/tickets/{number}/notes` | `tickets:write` | Adds an internal note to a ticket. |
+| `POST /api/addon/tickets/{number}/resolve` | `tickets:write` | Resolves a ticket the add-on opened. |
 
 A requester has one or more e-mail addresses, each belonging to exactly one requester. A ticket's
 `requester` carries them all in `addresses`, the first registered first; `reply_to` is the address
@@ -337,6 +338,22 @@ exist is not found (404), as when an agent links it.
 closed ones too. Agents see the add-on as the author of the ticket and of its notes; a ticket read
 with `tickets:read` names the add-on that opened it in `opened_by_addon`. Notes are still never
 given to add-ons, theirs included.
+
+`POST /api/addon/tickets/{number}/resolve` resolves a ticket the add-on opened, open or waiting
+(204), such as when the problem it was opened for recovers; `ticket.state_changed` then names the
+add-on in `changed_by`. Resolving a ticket already resolved changes nothing and sends no event
+(204 again). A ticket an agent opened, one a message opened and one another add-on opened are
+refused (409), and so is a closed one; a ticket that does not exist is not found (404). As for an
+agent's resolution, a message that joins the ticket reopens it.
+
+The core does not refuse a ticket an agent has worked on: whether to resolve it then is the
+add-on's rule ([ADR 0010](../docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md):
+by default, only when no agent has). So that it can tell, a ticket read with `tickets:read` says
+`worked_on_by_agent`: `true` once it has an assignee, or an agent wrote a reply (sent or still in
+the outbox), a note or an announcement on it. Notes of add-ons, the opener's description
+included, and messages received do not count, and the notes themselves are still not given. Read
+the ticket just before resolving it: an agent may pick it up in between, so an add-on that needs
+both calls holds both scopes, `tickets:read` and `tickets:write`.
 
 An add-on never replies, assigns, or changes anything else on a ticket: its token opens none of
 the agents' calls.

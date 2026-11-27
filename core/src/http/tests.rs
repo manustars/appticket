@@ -2402,6 +2402,108 @@ async fn an_addon_opens_tickets_and_adds_notes_through_the_api(db: PgPool) {
     assert_eq!(by_hand["opened_by_addon"], Value::Null);
 }
 
+/// An add-on resolves the tickets it opened, after reading whether an agent has worked on them,
+/// without their notes; the change names the add-on. Without `tickets:write` it is refused with
+/// the scope error, and so is a ticket it did not open.
+#[sqlx::test]
+async fn an_addon_resolves_the_tickets_it_opened_through_the_api(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let watchtower = crate::addons::register(
+        &db,
+        "watchtower",
+        "http://127.0.0.1:9",
+        &[],
+        &[
+            crate::addons::TICKETS_READ.into(),
+            crate::addons::TICKETS_WRITE.into(),
+        ],
+    )
+    .await
+    .unwrap();
+    let reader = crate::addons::register(
+        &db,
+        "reader",
+        "http://127.0.0.1:9",
+        &[],
+        &[crate::addons::TICKETS_READ.into()],
+    )
+    .await
+    .unwrap();
+    let bot = Client::new_with_token(&db, &watchtower.token, api.agent);
+    let reader_bot = Client::new_with_token(&db, &reader.token, api.agent);
+    let opened = |title: &'static str| {
+        let bot = &bot;
+        async move {
+            let (status, opened) = bot
+                .call(
+                    "POST",
+                    "/api/addon/tickets",
+                    Some(
+                        serde_json::json!({"customer_id": brightfield, "title": title,
+                        "description": "Seen at 03:10."}),
+                    ),
+                )
+                .await;
+            assert_eq!(status, StatusCode::CREATED, "{opened}");
+            opened["number"].as_i64().unwrap()
+        }
+    };
+    let quiet = opened("SRV-01: disk full").await;
+    let busy = opened("SRV-02: disk full").await;
+    let (status, _) = api
+        .call(
+            "POST",
+            &format!("/api/tickets/{busy}/notes"),
+            Some(serde_json::json!({"body": "Looking into it."})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let read = bot.get(&format!("/api/addon/tickets/{quiet}")).await;
+    assert_eq!(read["worked_on_by_agent"], false, "only its own note");
+    let read = bot.get(&format!("/api/addon/tickets/{busy}")).await;
+    assert_eq!(read["worked_on_by_agent"], true, "an agent's note");
+    assert_eq!(read["timeline"], serde_json::json!([]), "no notes given");
+
+    let resolve = |n: i64| format!("/api/addon/tickets/{n}/resolve");
+    let (status, refused) = reader_bot.call("POST", &resolve(quiet), None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        refused["error"],
+        "The add-on reader lacks the scope tickets:write."
+    );
+    let by_hand = testing::ticket(&db, brightfield, None, "h1@brightfield.test").await;
+    let (status, refused) = bot.call("POST", &resolve(by_hand), None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        refused["error"],
+        format!(
+            "The add-on watchtower did not open the ticket #{by_hand}: an add-on resolves only \
+             the tickets it opened."
+        )
+    );
+    let (status, _) = bot.call("POST", &resolve(9999), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(testing::state_changes(&db).await.is_empty());
+
+    let (status, json) = bot.call("POST", &resolve(quiet), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    let (status, _) = bot.call("POST", &resolve(quiet), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "already resolved");
+    assert_eq!(
+        api.get(&format!("/api/tickets/{quiet}")).await["state"],
+        "resolved"
+    );
+    assert_eq!(
+        testing::state_changes(&db).await,
+        [
+            serde_json::json!({"ticket_number": quiet, "old_state": "open",
+            "new_state": "resolved", "changed_by": {"kind": "addon", "addon": "watchtower"}})
+        ]
+    );
+}
+
 /// The specification describes the ticket an add-on opens with its own fields, not those of the
 /// ticket an agent opens by hand.
 #[test]
@@ -2519,6 +2621,7 @@ async fn an_addon_s_token_changes_nothing_but_its_own_calls(db: PgPool) {
             "POST /api/addon/proposals",
             "POST /api/addon/tickets",
             "POST /api/addon/tickets/{number}/notes",
+            "POST /api/addon/tickets/{number}/resolve",
             "PUT /api/addon/assets/{id}",
         ]
     );

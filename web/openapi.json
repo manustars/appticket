@@ -593,7 +593,7 @@
         "tags": [
           "add-ons"
         ],
-        "summary": "A ticket with its messages and links, without internal notes, announcements and its customer's\nkey requesters. Scope `tickets:read`.",
+        "summary": "A ticket with its messages and links, without internal notes, announcements and its customer's\nkey requesters; `worked_on_by_agent` says whether an agent has worked on it all the same.\nScope `tickets:read`.",
         "operationId": "ticket",
         "parameters": [
           {
@@ -678,6 +678,57 @@
         },
         "responses": {
           "201": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/addon/tickets/{number}/resolve": {
+      "post": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "Resolves a ticket the add-on opened, open or waiting; `ticket.state_changed` names the add-on\nas who changed it. A ticket already resolved stays as it is (204 again). A ticket an agent, a\nmessage or another add-on opened is refused, and so is a closed one. Read\n`worked_on_by_agent` on the ticket first: the core does not refuse a ticket an agent has\nworked on, the add-on's rules decide. Scope `tickets:write`.",
+        "operationId": "resolve_ticket",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
           "401": {
             "content": {
               "application/json": {
@@ -9641,9 +9692,28 @@
                 "format": "uuid"
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "An add-on, by name, that resolved a ticket it opened.",
+            "required": [
+              "addon",
+              "kind"
+            ],
+            "properties": {
+              "addon": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "addon"
+                ]
+              }
+            }
           }
         ],
-        "description": "Who or what changed a ticket's state. More kinds may come (an add-on, once add-ons resolve\nthe tickets they opened): read `kind` and skip the ones you do not know."
+        "description": "Who or what changed a ticket's state. More kinds may come: read `kind` and skip the ones you\ndo not know."
       },
       "SuppliedAsset": {
         "allOf": [
@@ -9752,6 +9822,7 @@
           "state",
           "priority",
           "customer",
+          "worked_on_by_agent",
           "assets",
           "services",
           "children",
@@ -9871,6 +9942,10 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "worked_on_by_agent": {
+            "type": "boolean",
+            "description": "Whether an agent has worked on the ticket: it has an assignee, or an agent wrote a reply,\na note or an announcement on it. Notes of add-ons and messages received do not count."
           }
         }
       },

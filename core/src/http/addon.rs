@@ -32,6 +32,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(propose))
         .routes(routes!(open_ticket))
         .routes(routes!(add_note))
+        .routes(routes!(resolve_ticket))
         .merge(super::addon_catalog::routes())
 }
 
@@ -274,7 +275,8 @@ async fn open_tickets(
 }
 
 /// A ticket with its messages and links, without internal notes, announcements and its customer's
-/// key requesters. Scope `tickets:read`.
+/// key requesters; `worked_on_by_agent` says whether an agent has worked on it all the same.
+/// Scope `tickets:read`.
 #[utoipa::path(get, path = "/api/addon/tickets/{number}", tag = "add-ons",
     params(("number" = i64, Path, description = "The ticket's number")),
     responses((status = OK, body = TicketDetail), (status = NOT_FOUND, body = Problem),
@@ -414,4 +416,23 @@ async fn add_note(
     caller.require(TICKETS_WRITE)?;
     addon_tickets::add_note(&state.db, caller.id, number, &note.body).await?;
     Ok(StatusCode::CREATED)
+}
+
+/// Resolves a ticket the add-on opened, open or waiting; `ticket.state_changed` names the add-on
+/// as who changed it. A ticket already resolved stays as it is (204 again). A ticket an agent, a
+/// message or another add-on opened is refused, and so is a closed one. Read
+/// `worked_on_by_agent` on the ticket first: the core does not refuse a ticket an agent has
+/// worked on, the add-on's rules decide. Scope `tickets:write`.
+#[utoipa::path(post, path = "/api/addon/tickets/{number}/resolve", tag = "add-ons",
+    params(("number" = i64, Path, description = "The ticket's number")),
+    responses((status = NO_CONTENT), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn resolve_ticket(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(number): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    caller.require(TICKETS_WRITE)?;
+    addon_tickets::resolve(&state.db, caller.id, number).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

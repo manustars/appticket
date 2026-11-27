@@ -107,6 +107,8 @@ pub enum StateChangedBy {
     /// A received message that joined the ticket and reopened it; `message.received` carries the
     /// same `message_id`. Its sender is not always the ticket's requester.
     Message { message_id: Uuid },
+    /// An add-on, by name, that resolved a ticket it opened.
+    Addon { addon: String },
     /// A kind this version of the SDK does not know; newer cores may send more kinds.
     #[serde(other)]
     Other,
@@ -201,6 +203,14 @@ mod tests {
         );
         assert_eq!(
             changed(serde_json::json!({"kind": "addon", "addon": "watchtower"}))
+                .event()
+                .unwrap(),
+            event(StateChangedBy::Addon {
+                addon: "watchtower".into()
+            })
+        );
+        assert_eq!(
+            changed(serde_json::json!({"kind": "schedule", "every": "night"}))
                 .event()
                 .unwrap(),
             event(StateChangedBy::Other)
