@@ -25,13 +25,18 @@ At startup and every few minutes (`sync.interval_minutes`) the add-on:
    nested in it ([domain rules](../../docs/domain-rules.md#add-ons)). Each host covered by one
    customer becomes an asset of that customer:
    - name: the host's visible name;
-   - kind: from the first mapping of `assets.kinds` that matches one of the host's templates or
-     tags, else `assets.default_kind`;
+   - kind: from the first mapping of `assets.kinds` that matches one of the host's tags or of
+     the templates linked to the host itself (`selectParentTemplates`; a template that one of
+     those templates links does not count), else `assets.default_kind`;
    - serial number: the inventory's `serialno_a`, when the inventory is on and has one;
    - no site, and no holder: agents give it one;
 3. retires the assets of hosts that left Zabbix or that no group of their customer covers any
-   more, and reports the hosts it does not import because their groups are covered by two
-   customers, as conflicts with a sentence in English and Italian.
+   more, and reports the hosts whose groups are covered by two customers, as conflicts with a
+   sentence in English and Italian.
+
+Every host of those groups counts, disabled ones included, and so do hosts that discovery
+created: they come and go with discovery, and so do their assets. Renamed, given another serial
+number, another tag or another template, a host updates its asset at the next round.
 
 The asset's reference combines the host's id and the customer's (`10084@<customer id>`), since a
 reference names one asset of one customer for good: a host that moves to another customer's
@@ -41,12 +46,14 @@ groups retires its asset at the old customer and becomes a new asset of the new 
   the names no customer covers, in the add-on's state.
 - A host in a group an offboarded customer has, or in one nested in it, is imported for nobody,
   even inside an active customer's group; one also in an active customer's group is a conflict.
-- A host that becomes a conflict retires its asset, which comes back once the host is in the
-  groups of one customer again.
+- A host in conflict is neither imported nor updated: an asset it already has stays as it is,
+  holder included, and is updated again once the host is in the groups of one customer.
 - When the customer already has an asset with the host's serial number or name, entered by hand
   or supplied by another add-on, the core records a link proposal instead of a second asset, and
   the add-on carries on. Once agents accept it, the add-on leaves that asset as it is, and unlinks
-  itself when the host leaves Zabbix or its customer.
+  itself when the host leaves Zabbix or its customer, or when the asset's source (an agent, for
+  one entered by hand) retires it; the host then becomes an asset of the add-on's own at the next
+  round.
 - Nothing is retired in a round where Zabbix or the core did not answer every read; the next
   round tries again.
 

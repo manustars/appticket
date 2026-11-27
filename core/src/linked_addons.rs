@@ -428,6 +428,21 @@ mod tests {
             .unwrap();
         let after = crate::catalog::asset(&db, srv).await.unwrap();
         assert!(after.retired_at.is_some(), "still retired");
+        // Whatever the linked add-on sends then, it is answered the retired asset as it is, so
+        // that it learns the asset is retired and unlinks itself, rather than being refused at
+        // every attempt: a retired asset changes no more, and only its source brings it back.
+        let renamed = details("Laptop", "SRV-01 rack 2", Some("SN-2"), None);
+        let reached = supply(&db, "watchtower", brightfield, "host-1", &renamed)
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                reached.asset().id,
+                reached.asset().name.as_str(),
+                reached.asset().retired_at.is_some()
+            ),
+            (srv, "SRV-01", true)
+        );
 
         // A reference names one asset of one customer, linked or not.
         assert_eq!(

@@ -6,7 +6,7 @@
 mod common;
 
 use common::{ADDON, Core, TestZabbix};
-use hd_zabbix::kinds::{KindMapping, Kinds};
+use hd_zabbix::kinds::{KindMapping, Kinds, Match};
 use hd_zabbix::sync::Round;
 use serde_json::{Value, json};
 
@@ -14,15 +14,14 @@ fn kinds(template: &str) -> Kinds {
     Kinds {
         mappings: vec![
             KindMapping {
-                template: Some(template.into()),
-                tag: None,
-                value: None,
+                matches: Match::Template(template.into()),
                 kind: "Server".into(),
             },
             KindMapping {
-                template: None,
-                tag: Some("device".into()),
-                value: Some("printer".into()),
+                matches: Match::Tag {
+                    name: "device".into(),
+                    value: Some("printer".into()),
+                },
                 kind: "Printer".into(),
             },
         ],
@@ -72,7 +71,7 @@ async fn the_hosts_of_a_mapped_group_and_its_subgroups_become_assets_of_the_cust
     let archive = zabbix.group("Brightfield/Archive").await;
     let unclaimed = zabbix.group("Unclaimed").await;
     let template = zabbix.template("Linux servers").await;
-    zabbix
+    let srv = zabbix
         .host(
             "srv-01",
             &[&offices],
@@ -81,14 +80,14 @@ async fn the_hosts_of_a_mapped_group_and_its_subgroups_become_assets_of_the_cust
                    "inventory_mode": 0, "inventory": {"serialno_a": "SN-0042"}}),
         )
         .await;
-    zabbix
+    let printer = zabbix
         .host(
             "printer-02",
             &[&bf],
             json!({"tags": [{"tag": "device", "value": "printer"}], "inventory_mode": -1}),
         )
         .await;
-    zabbix.host("crane-03", &[&crane], json!({})).await;
+    let crane_host = zabbix.host("crane-03", &[&crane], json!({})).await;
     zabbix.host("archive-04", &[&archive], json!({})).await;
     zabbix.host("lab-05", &[&unclaimed], json!({})).await;
     let addon = zabbix.addon(&core, kinds(&zabbix.name("Linux servers")));
@@ -175,12 +174,57 @@ async fn the_hosts_of_a_mapped_group_and_its_subgroups_become_assets_of_the_cust
         "{round:?}"
     );
     assert_eq!(core.assets(brightfield).await.len(), 2);
+
+    // Renamed, given another serial number, another tag or a template, a host updates its asset.
+    zabbix
+        .update_host(
+            &srv,
+            json!({"name": p("SRV-01 primary"), "inventory": {"serialno_a": "SN-0043"}}),
+        )
+        .await;
+    zabbix
+        .update_host(
+            &printer,
+            json!({"tags": [{"tag": "device", "value": "scanner"}]}),
+        )
+        .await;
+    zabbix
+        .update_host(
+            &crane_host,
+            json!({"templates": [{"templateid": template}]}),
+        )
+        .await;
+    let round = addon.run().await.unwrap();
+    assert_eq!(
+        (round.created, round.updated, round.refused),
+        (0, 3, 0),
+        "{round:?}"
+    );
+    assert_eq!(
+        core.assets(brightfield).await,
+        [
+            zabbix_asset(&p("SRV-01 primary"), "Server", Some("SN-0043")),
+            zabbix_asset(
+                &format!("{}-printer-02", zabbix.prefix),
+                "Network device",
+                None
+            ),
+        ]
+    );
+    assert_eq!(
+        core.assets(harbor).await,
+        [zabbix_asset(
+            &format!("{}-crane-03", zabbix.prefix),
+            "Server",
+            None
+        )]
+    );
     zabbix.clean_up().await;
 }
 
 #[tokio::test]
 #[ignore = "needs the Zabbix in containers and the test database"]
-async fn a_host_two_customers_cover_is_a_conflict_and_hosts_that_leave_are_retired() {
+async fn a_host_two_customers_cover_is_a_conflict_left_as_it_is_and_hosts_that_leave_are_retired() {
     let core = Core::start().await;
     let mut zabbix = TestZabbix::connect().await;
     let brightfield = core.customer("Brightfield").await;
@@ -204,9 +248,12 @@ async fn a_host_two_customers_cover_is_a_conflict_and_hosts_that_leave_are_retir
     let round = addon.run().await.unwrap();
     assert_eq!(round.created, 4, "{round:?}");
 
-    // db-01 joins a group of Harbor Lane's too, web-02 moves there, app-03 leaves Zabbix and
-    // Brightfield no longer has the lab.
+    // db-01 joins a group of Harbor Lane's too, and is renamed meanwhile; web-02 moves there,
+    // app-03 leaves Zabbix and Brightfield no longer has the lab.
     zabbix.move_host(&shared, &[&bf, &hl]).await;
+    zabbix
+        .update_host(&shared, json!({"name": zabbix.name("DB-01 primary")}))
+        .await;
     zabbix.move_host(&moving, &[&hl]).await;
     zabbix.delete_host(&removed).await;
     let (status, json) = core
@@ -227,7 +274,7 @@ async fn a_host_two_customers_cover_is_a_conflict_and_hosts_that_leave_are_retir
             round.conflicts,
             round.refused
         ),
-        (1, 1, 4, 1, 0),
+        (1, 1, 3, 1, 0),
         "{round:?}"
     );
     let named = |host: &str| format!("{}-{host}", zabbix.prefix);
@@ -240,12 +287,13 @@ async fn a_host_two_customers_cover_is_a_conflict_and_hosts_that_leave_are_retir
             retired,
         )
     };
+    // The host in conflict keeps its asset as it was: neither updated nor retired.
     assert_eq!(
         core.assets(brightfield).await,
         [
             asset("app-03", true),
             asset("bench-04", true),
-            asset("db-01", true),
+            asset("db-01", false),
             asset("web-02", true),
         ]
     );
@@ -256,26 +304,32 @@ async fn a_host_two_customers_cover_is_a_conflict_and_hosts_that_leave_are_retir
         json!([{"sentence": {
             "en": format!(
                 "The host {} is in host groups of different customers: {} (Brightfield), {} \
-                 (Harbor Lane). It is not imported: leave it in the groups of one customer.",
-                named("db-01"), zabbix.name("Brightfield"), zabbix.name("Harbor Lane")
+                 (Harbor Lane). It is neither imported nor updated: leave it in the groups of \
+                 one customer.",
+                zabbix.name("DB-01 primary"), zabbix.name("Brightfield"),
+                zabbix.name("Harbor Lane")
             ),
             "it": format!(
                 "L'host {} è in gruppi di host di clienti diversi: {} (Brightfield), {} \
-                 (Harbor Lane). Non viene importato: lasciarlo nei gruppi di un solo cliente.",
-                named("db-01"), zabbix.name("Brightfield"), zabbix.name("Harbor Lane")
+                 (Harbor Lane). Non viene né importato né aggiornato: lasciarlo nei gruppi di \
+                 un solo cliente.",
+                zabbix.name("DB-01 primary"), zabbix.name("Brightfield"),
+                zabbix.name("Harbor Lane")
             ),
         }}])
     );
 
-    // Back in one customer's groups, the host's asset comes back and the conflict goes.
+    // Back in one customer's groups, the host's asset is updated and the conflict goes.
     zabbix.move_host(&shared, &[&bf]).await;
     let round = addon.run().await.unwrap();
-    assert_eq!((round.updated, round.conflicts), (2, 0), "{round:?}");
-    assert!(
-        core.assets(brightfield)
-            .await
-            .contains(&asset("db-01", false))
+    assert_eq!(
+        (round.updated, round.conflicts, round.refused),
+        (2, 0, 0),
+        "{round:?}"
     );
+    let mut renamed = asset("db-01", false);
+    renamed.0 = zabbix.name("DB-01 primary");
+    assert!(core.assets(brightfield).await.contains(&renamed));
     assert_eq!(core.state().await["conflicts"]["conflicts"], json!([]));
     zabbix.clean_up().await;
 }
@@ -293,7 +347,8 @@ async fn a_host_matching_an_asset_the_customer_has_is_proposed_as_that_asset() {
     let entered = core
         .create(&assets, by_hand("PC-0077", Some("SN-0077")))
         .await;
-    core.create(&assets, by_hand(&zabbix.name("NAS"), None))
+    let nas_entered = core
+        .create(&assets, by_hand(&zabbix.name("NAS"), None))
         .await;
     let bf = zabbix.group("Brightfield").await;
     let by_serial = zabbix
@@ -303,7 +358,7 @@ async fn a_host_matching_an_asset_the_customer_has_is_proposed_as_that_asset() {
             json!({"inventory_mode": 0, "inventory": {"serialno_a": "sn-0077"}}),
         )
         .await;
-    zabbix
+    let nas = zabbix
         .host("nas", &[&bf], json!({"name": zabbix.name("nas")}))
         .await;
     let addon = zabbix.addon(&core, kinds("none"));
@@ -387,5 +442,81 @@ async fn a_host_matching_an_asset_the_customer_has_is_proposed_as_that_asset() {
         core.assets(brightfield).await.iter().all(|a| !a.4),
         "nothing retired"
     );
+
+    // An asset the add-on is linked to that its source retires: the add-on unlinks itself,
+    // without writes the core refuses, and supplies the host as an asset of its own.
+    let printer = core
+        .create(&assets, by_hand(&zabbix.name("PRN"), None))
+        .await;
+    zabbix
+        .host("prn", &[&bf], json!({"name": zabbix.name("prn")}))
+        .await;
+    let round = addon.run().await.unwrap();
+    assert_eq!(round.proposed, 2, "the NAS and the printer: {round:?}");
+    let open = core
+        .get(&format!(
+            "/api/customers/{brightfield}/asset-link-proposals"
+        ))
+        .await;
+    for proposal in open.as_array().unwrap() {
+        let id = proposal["id"].as_str().unwrap();
+        let (status, json) = core
+            .call(
+                "POST",
+                &format!("/api/asset-link-proposals/{id}/accept"),
+                None,
+            )
+            .await;
+        assert!(status.is_success(), "{json}");
+    }
+    let round = addon.run().await.unwrap();
+    assert_eq!((round.proposed, round.refused), (0, 0), "{round:?}");
+    let retire = |asset: uuid::Uuid| {
+        let core = &core;
+        async move {
+            let (status, json) = core
+                .call("POST", &format!("/api/assets/{asset}/retire"), None)
+                .await;
+            assert!(status.is_success(), "{json}");
+        }
+    };
+
+    // Retired after a restart: the add-on does not know it was linked to it.
+    retire(printer).await;
+    let restarted = zabbix.addon(&core, kinds("none"));
+    let round = restarted.run().await.unwrap();
+    assert_eq!(
+        (round.unlinked, round.created, round.refused),
+        (1, 0, 0),
+        "{round:?}"
+    );
+    // Retired while the add-on runs, with the host renamed meanwhile, which a linked add-on
+    // could not send.
+    retire(nas_entered).await;
+    zabbix
+        .update_host(&nas, json!({"name": zabbix.name("nas-2")}))
+        .await;
+    let round = restarted.run().await.unwrap();
+    assert_eq!(
+        (round.unlinked, round.created, round.refused),
+        (1, 1, 0),
+        "{round:?}"
+    );
+    let round = restarted.run().await.unwrap();
+    assert_eq!((round.created, round.refused), (1, 0), "{round:?}");
+    let round = restarted.run().await.unwrap();
+    assert_eq!(
+        (round.created, round.unlinked, round.refused),
+        (0, 0, 0),
+        "{round:?}"
+    );
+    let own: Vec<String> = core
+        .assets(brightfield)
+        .await
+        .into_iter()
+        .filter(|a| a.3.as_deref() == Some(ADDON) && !a.4)
+        .map(|a| a.0)
+        .collect();
+    assert_eq!(own, [zabbix.name("nas-2"), zabbix.name("prn")]);
     zabbix.clean_up().await;
 }

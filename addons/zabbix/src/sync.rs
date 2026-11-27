@@ -1,6 +1,7 @@
 //! One round of the add-on's work: Zabbix's host groups go to the core as the name list of its
 //! system, and the hosts of the groups customers cover become their assets; what left them is
-//! retired, and the hosts of groups two customers cover are reported as conflicts.
+//! retired, and the hosts of groups two customers cover are reported as conflicts and left as
+//! they are.
 
 use std::collections::{HashMap, HashSet};
 
@@ -20,14 +21,21 @@ pub fn reference(host_id: &str, customer: Uuid) -> String {
     format!("{host_id}@{customer}")
 }
 
-/// The add-on's work, between a Zabbix and the core.
+/// The host a reference of [`reference`] is of.
+fn host_of(reference: &str) -> &str {
+    reference
+        .split_once('@')
+        .map_or(reference, |(host, _)| host)
+}
+
+/// The add-on's work, between a Zabbix and the core, round after round.
 #[derive(Debug)]
-pub struct Sync {
-    pub core: Client,
-    pub zabbix: Zabbix,
+pub struct Syncer {
+    core: Client,
+    zabbix: Zabbix,
     /// The system's name as external references name it.
-    pub system: String,
-    pub kinds: Kinds,
+    system: String,
+    kinds: Kinds,
 }
 
 /// What a round did.
@@ -55,7 +63,16 @@ struct Known {
     linked: bool,
 }
 
-impl Sync {
+impl Syncer {
+    pub fn new(core: Client, zabbix: Zabbix, system: impl Into<String>, kinds: Kinds) -> Self {
+        Syncer {
+            core,
+            zabbix,
+            system: system.into(),
+            kinds,
+        }
+    }
+
     /// One round: the name list, the assets of the hosts customers cover, and the conflicts.
     /// Nothing is retired unless both Zabbix and the core answered every read.
     pub async fn run(&self) -> anyhow::Result<Round> {
@@ -78,7 +95,7 @@ impl Sync {
             .context("reading the offboarded customers' external references")?;
         let coverage = Coverage::new(&self.system, &groups, &customers, &offboarded);
 
-        let list = coverage.name_list(&self.system);
+        let list = coverage.name_list();
         round.names = list.names.len();
         if let Err(e) = self.core.replace_names(&list).await {
             // The references picked from the latest list the core took still count.
@@ -89,13 +106,19 @@ impl Sync {
         let hosts = self.zabbix.hosts(&coverage.imported_groups()).await?;
         let mut wanted: Vec<(Uuid, &Host)> = Vec::new();
         let mut found: Vec<HostConflict> = Vec::new();
+        // A host in conflict is still covered: its asset, if it has one, is left as it is,
+        // holder and all, until the host is in the groups of one customer again.
+        let mut in_conflict: HashSet<&str> = HashSet::new();
         for host in &hosts {
             match coverage.place(host.group_ids.iter().map(String::as_str)) {
                 Placement::Customer(customer) => wanted.push((customer, host)),
-                Placement::Conflict(groups) => found.push(HostConflict {
-                    host: host.name.clone(),
-                    groups,
-                }),
+                Placement::Conflict(groups) => {
+                    in_conflict.insert(&host.id);
+                    found.push(HostConflict {
+                        host: host.name.clone(),
+                        groups,
+                    });
+                }
                 Placement::Uncovered | Placement::Offboarded => {}
             }
         }
@@ -144,7 +167,16 @@ impl Sync {
             };
             match self.core.supply_asset(&asset).await {
                 Ok(Supplied::Asset { created: true, .. }) => round.created += 1,
-                Ok(Supplied::Asset { created: false, .. }) => round.updated += 1,
+                // The reference reaches an asset the add-on is linked to that its source retired
+                // (it is not among the active ones read above): the add-on unlinks itself, and
+                // supplies the host as an asset of its own from the next round.
+                Ok(Supplied::Asset { asset, .. })
+                    if asset.source_addon.as_deref() != Some(me.name.as_str())
+                        && asset.retired_at.is_some() =>
+                {
+                    self.unlink(asset.id, &reference, &mut round).await;
+                }
+                Ok(Supplied::Asset { .. }) => round.updated += 1,
                 Ok(Supplied::LinkProposed(_)) => round.proposed += 1,
                 Err(e) => {
                     tracing::warn!(host = %host.name, reference, error = %e, "the core did not take the host's asset");
@@ -154,19 +186,17 @@ impl Sync {
         }
 
         for (reference, asset) in &known {
-            if present.contains(reference) {
+            if present.contains(reference) || in_conflict.contains(host_of(reference)) {
                 continue;
             }
-            let done = if asset.linked {
-                self.core.unlink_asset(asset.id).await
-            } else {
-                self.core.retire_asset(asset.id).await
-            };
-            match done {
-                Ok(()) if asset.linked => round.unlinked += 1,
+            if asset.linked {
+                self.unlink(asset.id, reference, &mut round).await;
+                continue;
+            }
+            match self.core.retire_asset(asset.id).await {
                 Ok(()) => round.retired += 1,
                 Err(e) => {
-                    tracing::warn!(reference, error = %e, "the core did not take the asset off");
+                    tracing::warn!(reference, error = %e, "the core did not retire the asset");
                     round.refused += 1;
                 }
             }
@@ -185,5 +215,15 @@ impl Sync {
             round.refused += 1;
         }
         Ok(round)
+    }
+
+    async fn unlink(&self, asset: Uuid, reference: &str, round: &mut Round) {
+        match self.core.unlink_asset(asset).await {
+            Ok(()) => round.unlinked += 1,
+            Err(e) => {
+                tracing::warn!(reference, error = %e, "the core did not unlink the add-on");
+                round.refused += 1;
+            }
+        }
     }
 }

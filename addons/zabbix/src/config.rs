@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::kinds::{KindMapping, Kinds};
 
 /// The add-on's settings.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     /// The core's base URL, such as `https://helpdesk.example.com`.
     pub core_url: String,
@@ -30,6 +30,20 @@ pub struct Config {
     pub interval: Duration,
     /// The asset kind of each host.
     pub kinds: Kinds,
+}
+
+/// Everything but the two tokens.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("core_url", &self.core_url)
+            .field("zabbix_url", &self.zabbix_url)
+            .field("zabbix_timeout", &self.zabbix_timeout)
+            .field("system", &self.system)
+            .field("interval", &self.interval)
+            .field("kinds", &self.kinds)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The configuration file as written.
@@ -133,11 +147,6 @@ impl Config {
         let default = file.assets.default_kind.trim().to_owned();
         if default.is_empty() {
             bail!("assets.default_kind is blank: give an asset kind of the help desk's list");
-        }
-        for (i, mapping) in file.assets.kinds.iter().enumerate() {
-            if let Some(problem) = mapping.problem() {
-                bail!("the asset kind mapping {} ({mapping:?}): {problem}", i + 1);
-            }
         }
         Ok(Config {
             core_url: checked_url("core.url", &file.core.url)?,
@@ -300,6 +309,16 @@ default_kind = "Server"
     }
 
     #[test]
+    fn the_settings_as_logged_leave_the_tokens_out() {
+        let shown = format!("{:?}", parse(FULL).unwrap());
+        assert!(shown.contains("https://zabbix.example.com"), "{shown}");
+        assert!(
+            !shown.contains("core-token") && !shown.contains("zabbix-token"),
+            "{shown}"
+        );
+    }
+
+    #[test]
     fn what_is_left_out_has_a_default() {
         let config = parse(SMALLEST).unwrap();
         assert_eq!(config.system, "Zabbix");
@@ -319,10 +338,12 @@ default_kind = "Server"
         assert!(error("[core]\n").contains("zabbix.toml"));
         let bad_mapping =
             format!("{SMALLEST}\n[[assets.kinds]]\nvalue = \"x\"\nkind = \"Server\"\n");
-        assert_eq!(
-            error(&bad_mapping),
-            "the asset kind mapping 1 (KindMapping { template: None, tag: None, \
-             value: Some(\"x\"), kind: \"Server\" }): it names neither a template nor a tag"
+        let refused = error(&bad_mapping);
+        assert!(
+            refused.contains("zabbix.toml")
+                && refused.contains("assets.kinds")
+                && refused.contains("the mapping to Server names neither a template nor a tag"),
+            "{refused}"
         );
         let ftp = SMALLEST.replace("http://127.0.0.1:8180", "ftp://zabbix.example.com");
         assert_eq!(

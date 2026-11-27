@@ -1,6 +1,6 @@
 use hd_addon_sdk::Client;
 use hd_zabbix::config::Config;
-use hd_zabbix::sync::Sync;
+use hd_zabbix::sync::Syncer;
 use hd_zabbix::zabbix::Zabbix;
 use tracing_subscriber::EnvFilter;
 
@@ -24,12 +24,12 @@ async fn main() -> anyhow::Result<()> {
         Ok(version) => tracing::info!(%version, url = %config.zabbix_url, "Zabbix answers"),
         Err(e) => tracing::warn!(error = %e, "Zabbix does not answer yet; trying every round"),
     }
-    let sync = Sync {
-        core: Client::new(&config.core_url, &config.core_token)?,
+    let sync = Syncer::new(
+        Client::new(&config.core_url, &config.core_token)?,
         zabbix,
-        system: config.system.clone(),
-        kinds: config.kinds.clone(),
-    };
+        config.system.clone(),
+        config.kinds.clone(),
+    );
     tracing::info!(
         system = %config.system,
         interval_seconds = config.interval.as_secs(),
