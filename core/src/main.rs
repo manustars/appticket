@@ -281,7 +281,7 @@ async fn main() -> anyhow::Result<()> {
                 trusted_proxies,
                 identity_provider,
                 identity_provider_activity,
-                addons: addons::http_client()?,
+                addon_client: live_details::http_client()?,
             };
             http::serve(state, listen, web_dir).await
         }

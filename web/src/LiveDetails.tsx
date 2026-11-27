@@ -33,7 +33,7 @@ export function LiveDetails({ details, asking }: {
         return (
           <div key={d.addon} className="live">
             <span className={`marker live-${state}`}>
-              {addon}: {state === 'ok' ? t('liveDetails.ok') : state === 'warning' ? t('liveDetails.warning') : t('liveDetails.problem')}
+              {addon}: {t(`liveDetails.${state}`)}
             </span>
             {fields.map((f, i) => (
               <span key={i} className="live-field">

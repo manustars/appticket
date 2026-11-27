@@ -126,18 +126,21 @@ percent-encoded), in place of a body: check them before answering. The add-on an
 | `links` | Up to 10 `http` or `https` links (at most 2000 characters each) into the add-on's system, each with its `label`. Optional. |
 
 A `label` (at most 100 characters) is written in every language of the agents' UI, as a
-rationale is (`GET /api/addon/whoami` lists them); a single string is taken as English, which is
-also what agents see when their language is missing. Agents see the fields, state and links
-beside the asset.
+rationale is (`GET /api/addon/whoami` lists them); a single string is taken as English. Agents
+read the label in their language; when it is missing, in English; and only when both are
+missing, in the first language the add-on gave. They see the fields, state and links beside the
+asset.
 
-The core waits 2 seconds at most, for the whole answer, and asks every add-on at once, so one
-slow add-on holds nothing else up. When the add-on does not answer in time, answers another
-status, or answers anything that does not keep to the above as a whole (an unknown state, too
-many fields, a link to another scheme, more than 64 KiB), agents see its details as unavailable,
-and the core's log says why. A switched-off add-on is not asked: its details are unavailable.
-Answer 404 when the add-on has no live details of that asset, as an add-on that serves no live
-details at all does: agents then see none, and nothing unavailable. Answer from what the add-on
-already knows rather than asking its own system on every read.
+An add-on answers for every asset it supplies (or, once linking exists, is linked to). The core
+asks every add-on at once, at most 8 reads of one add-on at a time, the others waiting their
+turn, and all of them end within one deadline 2 seconds after the agents' page asked, whatever
+is still under way, so one slow add-on holds nothing else up. When the add-on does not answer by
+then, answers any other status (404 included), or answers anything that does not keep to the
+above as a whole (an unknown state, too many fields, a link to another scheme, more than 64 KiB),
+agents see its details as unavailable, and the core's log says why. The core does not follow
+redirects, since the signature is for the add-on's own URL. A switched-off add-on is not asked:
+its details are unavailable. Answer from what the add-on already knows rather than asking its
+own system on every read.
 
 Retired assets and the assets of offboarded customers are not asked about. Being asked needs no
 scope. Once assets can be linked to several add-ons, each linked add-on is asked the same way,

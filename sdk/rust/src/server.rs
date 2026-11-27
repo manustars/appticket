@@ -31,7 +31,8 @@ pub type HandlerError = Box<dyn std::error::Error + Send + Sync>;
 /// check out. Answers:
 ///
 /// - 200 with the live details the handler gives;
-/// - 404 when it gives none: the add-on has no live details of that asset, and agents see none;
+/// - 404 when it gives none, for a reference the add-on does not know: agents see the details
+///   as unavailable;
 /// - 401 when the signature or the timestamp is wrong;
 /// - 503 when the handler failed: agents see the details as unavailable.
 pub fn live_details_router<H, F>(verifier: Verifier, handler: H) -> Router
