@@ -157,6 +157,7 @@ sentence saying which scope is missing.
 |---|---|---|
 | `GET /api/addon/whoami` | none | The add-on's name, scopes and the languages of the agents' UI. |
 | `GET /api/addon/customers` | `directory:read` | Customers that can get tickets, with their mail domains and external references. |
+| `GET /api/addon/external-references/offboarded` | `directory:read` | The external references of offboarded customers, without the customers. |
 | `GET /api/addon/customers/{id}/assets` | `directory:read` | A customer's active assets. |
 | `GET /api/addon/customers/{id}/services` | `directory:read` | The active services a customer uses. |
 | `GET /api/addon/tickets?requester_email=…` or `?customer=…` | `tickets:read` | Tickets that are not closed, of the requester the address belongs to (any of their addresses) or of a customer. |
@@ -196,7 +197,10 @@ one customer within its system. The core compares systems and names ignoring cas
 looking up a name of its own system should too. Agents who manage customers set them, picking
 from the names the add-on lists in a system it lists them for (see
 [Names of the add-on's system](#names-of-the-add-ons-system)); add-ons only read them. Offboarded
-customers are not listed, and neither are their references.
+customers are not listed, and neither are their references there;
+`GET /api/addon/external-references/offboarded` gives those references alone, as `system` and
+`name`, without saying whose they are, since a name an offboarded customer has stays covered and
+nothing of it is imported (see below).
 
 The full request and response shapes are in the core's OpenAPI specification
 (`hd openapi`, or `/api/openapi.json` on a running core), which also describes the body of
@@ -332,7 +336,10 @@ manage customers pick a customer's external references from them rather than typ
   reference of another customer, which then covers it and the names nested in it. The add-on's
   state, where those who manage add-ons see them, lists the names of its latest list that no
   external reference covers, so that agents give them a customer. A name an offboarded customer
-  has is covered.
+  has is covered, and so are the names nested in it, even inside an active customer's name:
+  import nothing of them for either customer. The add-on reads those names with
+  `GET /api/addon/external-references/offboarded`, and finds who covers each of its names as the
+  core does: its own external reference, else that of the nearest name it is nested in.
 
 ### Conflicts
 

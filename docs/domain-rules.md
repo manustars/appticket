@@ -258,7 +258,9 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   add-ons read, shows the latest list, also while the add-on is switched off, and the names of its
   latest name list that no external reference covers. A name an offboarded customer has is
   covered, and so are the names nested in it, even inside the name of an active customer: they
-  are not listed, and nothing of them is imported for either customer.
+  are not listed, and nothing of them is imported for either customer. Add-ons do not read
+  offboarded customers, but read the names they have, without whose they are, so as to import
+  nothing of them.
 - The live details of an asset come from its source and each add-on it is linked to, asked with
   that add-on's reference when the asset is shown, and only for an active asset of a customer
   that is not offboarded; when an add-on does not answer within 2 seconds, answers with an error

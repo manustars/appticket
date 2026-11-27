@@ -294,6 +294,12 @@ default_kind = "Server"
     }
 
     #[test]
+    fn the_example_in_the_readme_s_folder_is_a_valid_configuration() {
+        let config = parse(include_str!("../zabbix.example.toml")).unwrap();
+        assert_eq!(config.kinds.mappings.len(), 2);
+    }
+
+    #[test]
     fn what_is_left_out_has_a_default() {
         let config = parse(SMALLEST).unwrap();
         assert_eq!(config.system, "Zabbix");

@@ -80,11 +80,55 @@ jobs:
           done
           docker logs keycloak
           exit 1
-      # Includes the tests that need the test mail server, Keycloak and the TLS test database.
-      - run: cargo test --locked -- --include-ignored
+      # Includes the tests that need the test mail server, Keycloak and the TLS test database. The
+      # Zabbix add-on's tests run in the job zabbix, beside the Zabbix they need.
+      - run: cargo test --locked --workspace --exclude hd-zabbix -- --include-ignored
       - name: The UI's copy of the API specification is current
         if: matrix.checks
         run: cargo run -q --locked -p hd-core -- openapi | diff -u web/openapi.json -
+
+  # The Zabbix add-on, its tests included that run against the Zabbix of compose.yaml (the profile
+  # zabbix, on 127.0.0.1:55180) and the real core, which the tests start from the binary built
+  # here on a database of their own on the service db.
+  zabbix:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: docker.io/library/postgres:18
+        env:
+          POSTGRES_USER: hd
+          POSTGRES_PASSWORD: hd
+          POSTGRES_DB: hd
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hd -d hd" --health-interval 2s --health-retries 30
+    env:
+      DATABASE_URL: postgres://hd:hd@127.0.0.1:55432/hd
+      HD_TEST_ZABBIX_URL: http://127.0.0.1:55180
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v5
+      # It sets up its database while the code builds.
+      - name: Start Zabbix
+        run: docker compose --profile zabbix up -d zabbix-db zabbix-server zabbix-web
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: zabbix
+      - run: cargo build --locked -p hd-core
+      - name: Wait for Zabbix
+        run: |
+          for _ in $(seq 150); do
+            if curl -sf -H 'Content-Type: application/json-rpc' \
+                -d '{"jsonrpc":"2.0","method":"apiinfo.version","params":{},"id":1}' \
+                http://127.0.0.1:55180/api_jsonrpc.php | grep -q '"result"'; then
+              exit 0
+            fi
+            sleep 4
+          done
+          docker compose --profile zabbix logs
+          exit 1
+      - run: cargo test --locked -p hd-zabbix -- --include-ignored
 
   web:
     runs-on: ubuntu-latest
