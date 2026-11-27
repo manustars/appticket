@@ -190,8 +190,9 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
   const loadProposals = useCallback(() => listAssetLinkProposals(c.id), [c])
   const proposals = useLoad(loadProposals, onSignedOut)
   // Asked of the add-ons apart, so that the assets show at once and their live details beside
-  // them when the add-ons have answered.
-  const loadLive = useCallback(() => listCustomerAssetLiveDetails(c.id), [c])
+  // them when the add-ons have answered; asked again for another customer only, not each time
+  // this one is reloaded.
+  const loadLive = useCallback(() => listCustomerAssetLiveDetails(c.id), [c.id])
   const live = useLoad(loadLive, onSignedOut)
   const liveByAsset = liveDetailsByAsset(live.data)
   const kinds = useLoad(loadKinds, onSignedOut)
