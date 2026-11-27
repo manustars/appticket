@@ -2156,6 +2156,7 @@ mod tests {
             }
         };
         let watched = add("NAS-01", Some("SN-0100")).await;
+        crate::testing::addon(&db, "watchtower").await;
         sqlx::query(
             "UPDATE assets SET source_addon = 'watchtower', source_ref = 'host-1' WHERE id = $1",
         )
@@ -3907,6 +3908,7 @@ mod tests {
         .await
         .unwrap();
         let nas = crate::testing::asset(&db, brightfield, "Laptop", "NAS-01").await;
+        crate::testing::addon(&db, "watchtower").await;
         sqlx::query(
             "UPDATE assets SET source_addon = 'watchtower', source_ref = 'n' WHERE id = $1",
         )
@@ -3961,6 +3963,7 @@ mod tests {
         let brightfield = crate::customers::create(&db, "Brightfield", &[])
             .await
             .unwrap();
+        crate::testing::addon(&db, "watchtower").await;
         for (change, why) in [
             (
                 "UPDATE assets SET retired_at = now() WHERE id = $1",

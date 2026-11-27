@@ -29,8 +29,11 @@ pub struct Asset {
     /// Where it is: its holder's site while it has a holder, when its kind moves with its holder;
     /// its own site otherwise.
     pub at_site: Option<SiteRef>,
-    /// The add-on it came from, when an add-on supplies it.
+    /// The add-on it came from, when an add-on supplies it: only that add-on changes its kind,
+    /// name, serial number and site, and retires it.
     pub source_addon: Option<String>,
+    /// That add-on's own reference for it.
+    pub source_ref: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub retired_at: Option<OffsetDateTime>,
 }
@@ -63,6 +66,7 @@ struct AssetRow {
     at_site_id: Option<Uuid>,
     at_site_name: Option<String>,
     source_addon: Option<String>,
+    source_ref: Option<String>,
     retired_at: Option<OffsetDateTime>,
 }
 
@@ -88,6 +92,7 @@ impl From<AssetRow> for Asset {
             }),
             at_site: site(row.at_site_id, row.at_site_name),
             source_addon: row.source_addon,
+            source_ref: row.source_ref,
             retired_at: row.retired_at,
         }
     }
@@ -106,7 +111,7 @@ macro_rules! select_assets {
                     (SELECT ha.address FROM requester_addresses ha WHERE ha.requester_id = h.id
                      ORDER BY ha.created_at, ha.address LIMIT 1) AS holder_address,
                     w.site_id AS at_site_id, ws.name AS at_site_name,
-                    a.source_addon, a.retired_at
+                    a.source_addon, a.source_ref, a.retired_at
              FROM assets a
              JOIN customers c ON c.id = a.customer_id
              JOIN asset_kinds k ON k.id = a.kind_id
@@ -164,7 +169,8 @@ pub struct CustomerRef {
     pub is_help_desk: bool,
 }
 
-fn text(value: &str, what: &str) -> Result<String> {
+/// `value` trimmed, refused when nothing is left.
+pub(crate) fn text(value: &str, what: &str) -> Result<String> {
     let value = value.trim();
     if value.is_empty() {
         return rule(format!("the {what} cannot be empty"));
@@ -363,14 +369,29 @@ pub(crate) async fn update_asset_in(
     fields: &AssetFields,
 ) -> Result<()> {
     let details = checked_details(tx, customer, fields).await?;
-    let retired: bool = sqlx::query_scalar(
-        "SELECT retired_at IS NOT NULL FROM assets WHERE id = $1 FOR NO KEY UPDATE",
-    )
-    .bind(id)
-    .fetch_one(&mut **tx)
-    .await?;
-    if retired && fields.holder_id.is_some() {
+    let stored = lock_stored(tx, id).await?;
+    if stored.retired && fields.holder_id.is_some() {
         return rule("a retired asset has no holder");
+    }
+    // What an add-on supplied only its source changes; the holder is the agents' to choose.
+    if let Some(addon) = &stored.source_addon
+        && (
+            fields.kind_id,
+            &details.name,
+            &details.serial_number,
+            fields.site_id,
+        ) != (
+            stored.kind_id,
+            &stored.name,
+            &stored.serial_number,
+            stored.site_id,
+        )
+    {
+        return rule(format!(
+            "{} comes from the add-on {addon}: only its source changes its kind, name, serial \
+             number and site, while agents give it a holder",
+            stored.name
+        ));
     }
     sqlx::query(
         "UPDATE assets SET kind_id = $2, name = $3, serial_number = $4, site_id = $5,
@@ -460,11 +481,12 @@ async fn kind_exists<'e>(db: impl sqlx::PgExecutor<'e>, kind: Uuid) -> Result<()
 }
 
 /// Retires an asset: it stays on the tickets that refer to it but gets no new links, and it loses
-/// its holder.
+/// its holder. An asset an add-on supplied is retired by that add-on only, when it leaves the
+/// add-on's system.
 pub async fn retire_asset(db: &PgPool, id: Uuid) -> Result<()> {
     let retired = sqlx::query(
         "UPDATE assets SET retired_at = now(), holder_id = NULL
-         WHERE id = $1 AND retired_at IS NULL",
+         WHERE id = $1 AND retired_at IS NULL AND source_addon IS NULL",
     )
     .bind(id)
     .execute(db)
@@ -472,14 +494,20 @@ pub async fn retire_asset(db: &PgPool, id: Uuid) -> Result<()> {
     if retired.rows_affected() == 1 {
         return Ok(());
     }
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM assets WHERE id = $1)")
-        .bind(id)
-        .fetch_one(db)
-        .await?;
-    if exists {
-        rule("the asset is already retired")
-    } else {
-        Err(Error::NotFound("asset"))
+    let asset: Option<(String, Option<String>, bool)> = sqlx::query_as(
+        "SELECT name, source_addon, retired_at IS NOT NULL FROM assets WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    match asset {
+        None => Err(Error::NotFound("asset")),
+        Some((_, _, true)) => rule("the asset is already retired"),
+        Some((name, addon, false)) => rule(format!(
+            "{name} comes from the add-on {}: only its source retires it, when it leaves the \
+             add-on's system",
+            addon.unwrap_or_default()
+        )),
     }
 }
 
@@ -1198,6 +1226,75 @@ mod tests {
             panic!("a retired asset was given a holder");
         };
         assert!(why.contains("retired"), "{why}");
+    }
+
+    #[sqlx::test]
+    async fn agents_give_a_supplied_asset_a_holder_but_change_nothing_its_source_supplied(
+        db: PgPool,
+    ) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let head = crate::sites::create(&db, brightfield, "Head office", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let laptop = testing::asset_kind(&db, "Laptop").await;
+        let printer = testing::asset_kind(&db, "Printer").await;
+        testing::addon(&db, "watchtower").await;
+        let supplied = crate::supplied_assets::SuppliedDetails {
+            kind: "Laptop".into(),
+            name: "PC-0042".into(),
+            serial_number: Some("SN-0042".into()),
+            site: Some("Head office".into()),
+        };
+        let pc =
+            crate::supplied_assets::supply(&db, "watchtower", brightfield, "host-1", &supplied)
+                .await
+                .unwrap()
+                .id;
+        let as_supplied =
+            |holder: Option<Uuid>| fields(laptop, "PC-0042", Some("SN-0042"), Some(head), holder);
+
+        update_asset(&db, pc, &as_supplied(Some(ada)))
+            .await
+            .unwrap();
+        let asset = &assets_of(&db, brightfield).await.unwrap()[0];
+        assert_eq!(asset.holder.as_ref().map(|h| h.id), Some(ada));
+        update_asset(&db, pc, &as_supplied(None)).await.unwrap();
+
+        for changed in [
+            fields(printer, "PC-0042", Some("SN-0042"), Some(head), Some(ada)),
+            fields(laptop, "PC-0043", Some("SN-0042"), Some(head), Some(ada)),
+            fields(laptop, "PC-0042", None, Some(head), Some(ada)),
+            fields(laptop, "PC-0042", Some("SN-0042"), None, Some(ada)),
+        ] {
+            let Err(Error::Rule(why)) = update_asset(&db, pc, &changed).await else {
+                panic!("{changed:?} accepted on a supplied asset");
+            };
+            assert_eq!(
+                why,
+                "PC-0042 comes from the add-on watchtower: only its source changes its kind, \
+                 name, serial number and site, while agents give it a holder"
+            );
+        }
+        let Err(Error::Rule(why)) = retire_asset(&db, pc).await else {
+            panic!("an agent retired a supplied asset");
+        };
+        assert_eq!(
+            why,
+            "PC-0042 comes from the add-on watchtower: only its source retires it, when it leaves \
+             the add-on's system"
+        );
+        let asset = &assets_of(&db, brightfield).await.unwrap()[0];
+        assert_eq!(
+            (
+                asset.kind_id,
+                asset.name.as_str(),
+                asset.holder.is_none(),
+                asset.retired_at.is_none()
+            ),
+            (laptop, "PC-0042", true, true),
+            "unchanged"
+        );
     }
 
     #[sqlx::test]

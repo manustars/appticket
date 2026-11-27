@@ -41,6 +41,19 @@ pub async fn asset_kind(db: &PgPool, name: &str) -> Uuid {
     .unwrap()
 }
 
+/// An add-on called `name`, whose token may write the assets it supplies.
+pub async fn addon(db: &PgPool, name: &str) -> crate::addons::Registered {
+    crate::addons::register(
+        db,
+        name,
+        "http://127.0.0.1:9",
+        &[],
+        &[crate::addons::CATALOG_WRITE.into()],
+    )
+    .await
+    .unwrap()
+}
+
 /// An asset of the customer, of the named kind.
 pub async fn asset(db: &PgPool, customer: Uuid, kind: &str, name: &str) -> Uuid {
     let kind = asset_kind(db, kind).await;

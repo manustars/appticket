@@ -38,6 +38,7 @@ mod roles;
 mod secret;
 mod sign_in_limits;
 mod sites;
+mod supplied_assets;
 #[cfg(test)]
 mod testing;
 mod tickets;
