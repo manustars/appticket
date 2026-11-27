@@ -5,6 +5,7 @@ use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -15,7 +16,8 @@ use uuid::Uuid;
 use super::addon::AddonAsset;
 use super::{ApiError, AppState, Problem};
 use crate::addons::{CATALOG_WRITE, Caller};
-use crate::supplied_assets::{self, SuppliedDetails};
+use crate::asset_link_proposals::AssetLinkProposal;
+use crate::supplied_assets::{self, Supplied, SuppliedDetails};
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -84,17 +86,24 @@ async fn written(
 /// Creates an asset of a customer known by the add-on's reference, or updates the one the add-on
 /// already supplied with that reference (bringing it back if it retired it), so that the add-on
 /// can send its whole inventory again safely: 201 when created, 200 when updated. Its kind and its
-/// site are named; what is left out is cleared, and its holder, whom agents choose, stays. Scope
-/// `catalog:write`.
+/// site are named; what is left out is cleared, and its holder, whom agents choose, stays.
+///
+/// When the add-on would create the asset and its customer already has an active one with the same
+/// serial number, else the same name, both ignoring case, that the add-on is not the source of,
+/// nothing is created: the answer is 202 with the link proposal recorded for the agents, which
+/// says which asset matched. Sending the asset again while the proposal is open answers the same
+/// proposal; once agents discard it, the next attempt creates the asset. Scope `catalog:write`.
 #[utoipa::path(post, path = "/api/addon/assets", tag = "add-ons", request_body = SuppliedAsset,
     responses((status = CREATED, body = AddonAsset), (status = OK, body = AddonAsset),
+        (status = ACCEPTED, body = AssetLinkProposal,
+            description = "A link proposal instead of the asset"),
         (status = NOT_FOUND, body = Problem), (status = CONFLICT, body = Problem),
         (status = UNAUTHORIZED, body = Problem)))]
 async fn supply_asset(
     State(state): State<AppState>,
     caller: Caller,
     Json(asset): Json<SuppliedAsset>,
-) -> Result<(StatusCode, Json<AddonAsset>), ApiError> {
+) -> Result<Response, ApiError> {
     caller.require(CATALOG_WRITE)?;
     asset.holder.refuse()?;
     let supplied = supplied_assets::supply(
@@ -105,12 +114,17 @@ async fn supply_asset(
         &asset.details,
     )
     .await?;
-    let status = if supplied.created {
-        StatusCode::CREATED
-    } else {
-        StatusCode::OK
-    };
-    Ok((status, Json(AddonAsset::seen_by(supplied.asset, &caller))))
+    Ok(match supplied {
+        Supplied::Asset { asset, created } => {
+            let status = if created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            };
+            (status, Json(AddonAsset::seen_by(asset, &caller))).into_response()
+        }
+        Supplied::LinkProposed(proposal) => (StatusCode::ACCEPTED, Json(proposal)).into_response(),
+    })
 }
 
 /// Updates an asset the add-on is the source of, as supplying it again does, but refuses a retired

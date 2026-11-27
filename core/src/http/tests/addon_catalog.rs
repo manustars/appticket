@@ -170,6 +170,14 @@ async fn the_catalog_calls_need_the_scope_catalog_write(db: PgPool) {
         .await;
     assert_eq!(shown.as_array().unwrap().len(), 1, "nothing created");
     assert!(shown[0]["retired_at"].is_null(), "nothing retired");
+    assert_eq!(
+        api.get(&format!(
+            "/api/customers/{brightfield}/asset-link-proposals"
+        ))
+        .await,
+        json!([]),
+        "nor proposed, though the name matches"
+    );
 }
 
 #[sqlx::test]
@@ -372,4 +380,105 @@ async fn agents_set_only_the_holder_of_a_supplied_asset_through_the_api(db: PgPo
         (&shown[0]["name"], &shown[0]["holder"]["id"]),
         (&json!("PC-0042"), &json!(ada))
     );
+}
+
+/// An add-on that would create an asset its customer already has gets a link proposal instead;
+/// every agent sees it on the customer's assets, and only agents who manage the catalog discard
+/// it, after which the add-on creates its own asset.
+#[sqlx::test]
+async fn a_matching_asset_is_proposed_as_a_link_and_discarded_through_the_api(db: PgPool) {
+    use crate::roles::Permission;
+    let cataloguer = super::role_with(&db, "Cataloguer", &[Permission::ManageCatalog]).await;
+    let cataloguer = Client::with_role(&db, "carla@northgate.test", cataloguer).await;
+    let manager = super::role_with(&db, "Manager", &[Permission::ManageCustomers]).await;
+    let manager = Client::with_role(&db, "mara@northgate.test", manager).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let laptop = testing::asset_kind(&db, "Laptop").await;
+    let by_hand = crate::catalog::create_asset(
+        &db,
+        brightfield,
+        &testing::asset_details(laptop, "PC-0042", Some("SN-0042"), None, None),
+    )
+    .await
+    .unwrap();
+    let watchtower = addon(&db, &cataloguer, "watchtower", &[CATALOG_WRITE]).await;
+    let asset = json!({"reference": "host-1042", "customer_id": brightfield, "kind": "Laptop",
+        "name": "Ada's laptop", "serial_number": "sn-0042"});
+
+    let (status, proposed) = watchtower
+        .call("POST", "/api/addon/assets", Some(asset.clone()))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{proposed}");
+    assert_eq!(
+        (
+            &proposed["matched_by"],
+            &proposed["asset_id"],
+            &proposed["asset_name"],
+            &proposed["reference"],
+            &proposed["name"],
+            &proposed["serial_number"],
+        ),
+        (
+            &json!("serial_number"),
+            &json!(by_hand),
+            &json!("PC-0042"),
+            &json!("host-1042"),
+            &json!("Ada's laptop"),
+            &json!("sn-0042"),
+        ),
+        "the answer says which asset matched"
+    );
+    let (status, again) = watchtower
+        .call("POST", "/api/addon/assets", Some(asset.clone()))
+        .await;
+    assert_eq!(
+        (status, &again["id"]),
+        (StatusCode::ACCEPTED, &proposed["id"]),
+        "no second proposal while one is open"
+    );
+
+    let proposals = format!("/api/customers/{brightfield}/asset-link-proposals");
+    for agent in [&manager, &cataloguer] {
+        let open = agent.get(&proposals).await;
+        assert_eq!(
+            (
+                open.as_array().unwrap().len(),
+                &open[0]["id"],
+                &open[0]["addon"]
+            ),
+            (1, &proposed["id"], &json!("watchtower")),
+            "{open}"
+        );
+    }
+    let discard = format!(
+        "/api/asset-link-proposals/{}/discard",
+        proposed["id"].as_str().unwrap()
+    );
+    let (status, json) = manager.call("POST", &discard, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{json}");
+    assert_eq!(manager.get(&proposals).await.as_array().unwrap().len(), 1);
+    let (status, json) = cataloguer.call("POST", &discard, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    let (status, json) = cataloguer.call("POST", &discard, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert_eq!(json["error"], "The link proposal is no longer open.");
+    let (status, _) = cataloguer
+        .call(
+            "POST",
+            &format!("/api/asset-link-proposals/{}/discard", Uuid::new_v4()),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(cataloguer.get(&proposals).await, json!([]));
+
+    let (status, created) = watchtower
+        .call("POST", "/api/addon/assets", Some(asset))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["reference"], "host-1042");
+    let shown = cataloguer
+        .get(&format!("/api/customers/{brightfield}/assets"))
+        .await;
+    assert_eq!(shown.as_array().unwrap().len(), 2, "{shown}");
 }

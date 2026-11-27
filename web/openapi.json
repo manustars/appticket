@@ -15,7 +15,8 @@
         "tags": [
           "add-ons"
         ],
-        "summary": "Creates an asset of a customer known by the add-on's reference, or updates the one the add-on\nalready supplied with that reference (bringing it back if it retired it), so that the add-on\ncan send its whole inventory again safely: 201 when created, 200 when updated. Its kind and its\nsite are named; what is left out is cleared, and its holder, whom agents choose, stays. Scope\n`catalog:write`.",
+        "summary": "Creates an asset of a customer known by the add-on's reference, or updates the one the add-on\nalready supplied with that reference (bringing it back if it retired it), so that the add-on\ncan send its whole inventory again safely: 201 when created, 200 when updated. Its kind and its\nsite are named; what is left out is cleared, and its holder, whom agents choose, stays.",
+        "description": "When the add-on would create the asset and its customer already has an active one with the same\nserial number, else the same name, both ignoring case, that the add-on is not the source of,\nnothing is created: the answer is 202 with the link proposal recorded for the agents, which\nsays which asset matched. Sending the asset again while the proposal is open answers the same\nproposal; once agents discard it, the next attempt creates the asset. Scope `catalog:write`.",
         "operationId": "supply_asset",
         "requestBody": {
           "content": {
@@ -42,6 +43,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AddonAsset"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "A link proposal instead of the asset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetLinkProposal"
                 }
               }
             }
@@ -1871,6 +1882,66 @@
         }
       }
     },
+    "/api/asset-link-proposals/{id}/discard": {
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Discards an open link proposal: the add-on's next attempt with its reference creates its own\nasset. Needs managing the catalog; an offboarded customer's proposals are not discarded.",
+        "operationId": "discard_asset_link_proposal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The link proposal",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/assets/{id}": {
       "put": {
         "tags": [
@@ -2191,6 +2262,50 @@
             }
           },
           "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customers/{id}/asset-link-proposals": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "The open link proposals on the customer's assets, oldest first: an add-on would supply an asset\nthat has the same serial number or name as one of them.",
+        "operationId": "customer_asset_link_proposals",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AssetLinkProposal"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6762,6 +6877,67 @@
           }
         }
       },
+      "AssetLinkProposal": {
+        "type": "object",
+        "description": "A proposal that the asset an add-on would supply is an asset its customer already has.",
+        "required": [
+          "id",
+          "addon",
+          "reference",
+          "customer_id",
+          "name",
+          "matched_by",
+          "asset_id",
+          "asset_name",
+          "created_at"
+        ],
+        "properties": {
+          "addon": {
+            "type": "string",
+            "description": "The add-on that would supply the asset."
+          },
+          "asset_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The asset it matched, of the same customer."
+          },
+          "asset_name": {
+            "type": "string",
+            "description": "That asset's name as it is now."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "customer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "matched_by": {
+            "$ref": "#/components/schemas/MatchedBy",
+            "description": "What the two assets have in common: when both a serial number and a name match, the serial\nnumber decides."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name the add-on sent."
+          },
+          "reference": {
+            "type": "string",
+            "description": "The add-on's own reference for the asset it would supply."
+          },
+          "serial_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The serial number the add-on sent, if any."
+          }
+        }
+      },
       "AssigneeChange": {
         "type": "object",
         "properties": {
@@ -7731,6 +7907,14 @@
             ]
           }
         }
+      },
+      "MatchedBy": {
+        "type": "string",
+        "description": "What the asset the add-on would supply has in common with the asset it matched.",
+        "enum": [
+          "serial_number",
+          "name"
+        ]
       },
       "MergedRequester": {
         "type": "object",

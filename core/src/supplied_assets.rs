@@ -8,6 +8,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::asset_link_proposals::AssetLinkProposal;
 use crate::catalog::{Asset, StoredAsset};
 use crate::error::{Error, Result, rule};
 
@@ -27,14 +28,19 @@ pub struct SuppliedDetails {
     pub site: Option<String>,
 }
 
-/// The asset an add-on supplied, and whether supplying it created it.
+/// What supplying an asset did.
 #[derive(Debug)]
-pub struct Supplied {
-    /// The asset as stored.
-    pub asset: Asset,
-    /// Whether supplying it created it; otherwise it updated the asset the add-on supplied before
-    /// with that reference.
-    pub created: bool,
+pub enum Supplied {
+    /// It created the asset, or updated the one the add-on supplied before with that reference.
+    Asset {
+        /// The asset as stored.
+        asset: Asset,
+        /// Whether supplying it created it.
+        created: bool,
+    },
+    /// The customer already has an asset with the same name or serial number, which the add-on's
+    /// asset is proposed to be instead of a second one: nothing was created.
+    LinkProposed(AssetLinkProposal),
 }
 
 /// Creates the asset of `customer` that `addon` knows by `reference`, or, when the add-on already
@@ -71,6 +77,20 @@ pub async fn supply(
             (id, false)
         }
         None => {
+            // A new asset of the add-on, unless its customer already has one that matches.
+            if let Some(proposal) = crate::asset_link_proposals::proposed(
+                &mut tx,
+                addon,
+                customer,
+                &reference,
+                &checked.name,
+                checked.serial_number.as_deref(),
+            )
+            .await?
+            {
+                tx.commit().await?;
+                return Ok(Supplied::LinkProposed(proposal));
+            }
             let id = Uuid::new_v4();
             sqlx::query(
                 "INSERT INTO assets (id, customer_id, kind_id, name, serial_number, site_id,
@@ -100,7 +120,7 @@ pub async fn supply(
         }
     };
     tx.commit().await?;
-    Ok(Supplied {
+    Ok(Supplied::Asset {
         asset: crate::catalog::asset(db, id).await?,
         created,
     })
@@ -285,6 +305,24 @@ mod tests {
     use super::*;
     use crate::testing;
 
+    impl Supplied {
+        /// The asset supplying created or updated, failing the test on a link proposal.
+        pub(crate) fn asset(&self) -> &Asset {
+            match self {
+                Supplied::Asset { asset, .. } => asset,
+                Supplied::LinkProposed(proposal) => panic!("a link proposal: {proposal:?}"),
+            }
+        }
+
+        /// Whether supplying created the asset, failing the test on a link proposal.
+        pub(crate) fn created(&self) -> bool {
+            match self {
+                Supplied::Asset { created, .. } => *created,
+                Supplied::LinkProposed(proposal) => panic!("a link proposal: {proposal:?}"),
+            }
+        }
+    }
+
     fn details(
         kind: &str,
         name: &str,
@@ -323,7 +361,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(first.created);
+        assert!(first.created());
         let again = supply(
             &db,
             "watchtower",
@@ -334,11 +372,11 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            (again.asset.id, again.created),
-            (first.asset.id, false),
+            (again.asset().id, again.created()),
+            (first.asset().id, false),
             "the same reference updates the same asset"
         );
-        assert_eq!(again.asset.name, "srv-01", "answered as stored");
+        assert_eq!(again.asset().name, "srv-01", "answered as stored");
         let assets = crate::catalog::assets_of(&db, brightfield).await.unwrap();
         assert_eq!(assets.len(), 1, "no second asset");
         let asset = &assets[0];
@@ -474,10 +512,10 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            try_supply("HOST-2", details("Laptop", "PC-02", None, None))
+            try_supply("HOST-2", details("Laptop", "PC-03", None, None))
                 .await
                 .unwrap()
-                .created
+                .created()
         );
 
         crate::customers::offboard(&db, harbor).await.unwrap();
@@ -534,7 +572,7 @@ mod tests {
         )
         .await
         .unwrap()
-        .asset
+        .asset()
         .id;
         let mine = supply(
             &db,
@@ -545,7 +583,7 @@ mod tests {
         )
         .await
         .unwrap()
-        .asset
+        .asset()
         .id;
         let renamed = details("Laptop", "Renamed", None, None);
 
@@ -600,7 +638,7 @@ mod tests {
         let pc = supply(&db, "watchtower", brightfield, "host-1", &laptop)
             .await
             .unwrap()
-            .asset
+            .asset()
             .id;
         let holder = |db: PgPool| async move {
             let asset = crate::catalog::assets_of(&db, brightfield).await.unwrap();
@@ -630,7 +668,7 @@ mod tests {
         let back = supply(&db, "watchtower", brightfield, "host-1", &laptop)
             .await
             .unwrap();
-        assert_eq!((back.asset.id, back.created), (pc, false));
+        assert_eq!((back.asset().id, back.created()), (pc, false));
         assert_eq!(holder(db.clone()).await, (None, false));
         // Updated by its id, it does not come back: what the add-on sends about an asset it retired
         // may be older than the retirement.

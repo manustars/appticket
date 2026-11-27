@@ -12,6 +12,7 @@ mod addons;
 mod agents;
 mod announcements;
 mod asset_kinds;
+mod asset_link_proposals;
 mod auth;
 mod catalog;
 mod cli;
