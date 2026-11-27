@@ -221,6 +221,11 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   serial number and site, and retiring them when they leave its system), never a holder, an asset
   entered by hand or one another add-on supplied. Customers and requesters supplied by add-ons
   will follow the same rule.
+- An add-on knows each asset it supplies by a reference of its own, which names one asset of one
+  customer for good: supplying an asset with a reference the add-on gave before updates that asset,
+  and brings it back if the add-on retired it. It names the kind from the help desk's list and the
+  site from the customer's active sites. Agents give a supplied asset a holder, which the add-on
+  supplying it again leaves, but change nothing else its source supplied, nor retire it.
 - An asset has at most one source and can be linked to other add-ons, which only supply live
   details and links. An add-on that finds an asset matching one it would supply (same name or
   serial number) proposes the link instead of creating it; accepting needs managing the catalog,
