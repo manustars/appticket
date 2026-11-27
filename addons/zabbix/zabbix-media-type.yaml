@@ -1,0 +1,73 @@
+zabbix_export:
+  version: '7.0'
+  media_types:
+    - name: 'Help desk'
+      type: WEBHOOK
+      parameters:
+        - name: action
+          value: '{EVENT.UPDATE.ACTION}'
+        - name: event_id
+          value: '{EVENT.ID}'
+        - name: event_source
+          value: '{EVENT.SOURCE}'
+        - name: event_update_status
+          value: '{EVENT.UPDATE.STATUS}'
+        - name: event_value
+          value: '{EVENT.VALUE}'
+        - name: http_proxy
+        - name: message
+          value: '{EVENT.UPDATE.MESSAGE}'
+        - name: secret
+          value: '{$HD_WEBHOOK_SECRET}'
+        - name: url
+          value: 'https://hd-zabbix.example.com/webhook'
+        - name: user
+          value: '{USER.FULLNAME}'
+      script: |
+        // Sends a trigger's problem, recovery and update events to the help desk's Zabbix add-on, and
+        // answers the tags the add-on gives, such as hd_ticket with the number of the ticket it opened.
+        var params = JSON.parse(value);
+        if (!/^https?:\/\//.test(params.url || '')) {
+            throw 'Set the parameter url to the Zabbix add-on\'s webhook, such as https://hd-zabbix.example.com/webhook';
+        }
+        var event = {};
+        Object.keys(params).forEach(function (name) {
+            if (name !== 'url' && name !== 'secret' && name !== 'http_proxy') {
+                event[name] = params[name];
+            }
+        });
+        var request = new HttpRequest();
+        if (params.http_proxy) {
+            request.setProxy(params.http_proxy);
+        }
+        request.addHeader('Content-Type: application/json');
+        request.addHeader('Authorization: Bearer ' + params.secret);
+        var response = request.post(params.url, JSON.stringify(event));
+        var status = request.getStatus();
+        if (status !== 200) {
+            throw 'The Zabbix add-on answered ' + status + ': ' + response;
+        }
+        var answer;
+        try {
+            answer = JSON.parse(response);
+        }
+        catch (error) {
+            throw 'The Zabbix add-on answered what is not JSON: ' + response;
+        }
+        return JSON.stringify({tags: answer.tags || {}});
+        
+      process_tags: 'YES'
+      description: 'Sends the problem, recovery and update events of triggers to the help desk''s Zabbix add-on, which opens and updates tickets by its rules and answers the ticket''s number in the tag hd_ticket. Set url to the add-on''s webhook and the global macro {$HD_WEBHOOK_SECRET} (of type Secret text) to the webhook''s secret.'
+      message_templates:
+        - event_source: TRIGGERS
+          operation_mode: PROBLEM
+          subject: 'Problem: {EVENT.NAME}'
+          message: 'Problem {EVENT.ID} on {HOST.NAME} started at {EVENT.TIME} on {EVENT.DATE}, severity {EVENT.SEVERITY}.'
+        - event_source: TRIGGERS
+          operation_mode: RECOVERY
+          subject: 'Resolved: {EVENT.NAME}'
+          message: 'Problem {EVENT.ID} on {HOST.NAME} resolved at {EVENT.RECOVERY.TIME} on {EVENT.RECOVERY.DATE}.'
+        - event_source: TRIGGERS
+          operation_mode: UPDATE
+          subject: 'Updated: {EVENT.NAME}'
+          message: '{USER.FULLNAME} {EVENT.UPDATE.ACTION} problem {EVENT.ID}: {EVENT.UPDATE.MESSAGE}'

@@ -142,6 +142,10 @@ impl Core {
             "names:write",
             "--scope",
             "conflicts:write",
+            "--scope",
+            "tickets:read",
+            "--scope",
+            "tickets:write",
         ]);
         let token = added
             .lines()
@@ -296,6 +300,54 @@ impl Core {
         listed
     }
 
+    /// A service the customer uses; answers its id.
+    pub async fn service(&self, name: &str, customer: Uuid) -> Uuid {
+        let service = self.create("/api/services", json!({"name": name})).await;
+        let path = format!("/api/services/{service}/customers/{customer}");
+        let (status, json) = self.call("PUT", &path, None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "PUT {path}: {json}");
+        service
+    }
+
+    /// A ticket as agents read it.
+    pub async fn ticket(&self, number: i64) -> Value {
+        self.get(&format!("/api/tickets/{number}")).await
+    }
+
+    /// The numbers of every ticket, as agents list them.
+    pub async fn tickets(&self) -> Vec<i64> {
+        let mut numbers: Vec<i64> = self
+            .get("/api/tickets")
+            .await
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["number"].as_i64().unwrap())
+            .collect();
+        numbers.sort();
+        numbers
+    }
+
+    /// The bodies of the ticket's notes by the add-on, oldest first.
+    pub async fn addon_notes(&self, number: i64) -> Vec<String> {
+        self.ticket(number).await["timeline"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "note" && e["by_addon"] == true)
+            .map(|e| e["body"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// The administrator writes a note on the ticket: an agent has worked on it.
+    pub async fn work_on(&self, number: i64) {
+        let path = format!("/api/tickets/{number}/notes");
+        let (status, json) = self
+            .call("POST", &path, Some(json!({"body": "Looking into it."})))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "POST {path}: {json}");
+    }
+
     /// The add-on's state, as those who manage add-ons read it.
     pub async fn state(&self) -> Value {
         let addons = self.get("/api/admin/addons").await;
@@ -366,6 +418,9 @@ pub struct TestZabbix {
     groups: Vec<String>,
     hosts: Vec<String>,
     templates: Vec<String>,
+    users: Vec<String>,
+    actions: Vec<String>,
+    media_types: Vec<String>,
 }
 
 impl TestZabbix {
@@ -414,6 +469,9 @@ impl TestZabbix {
             groups: vec![],
             hosts: vec![],
             templates: vec![],
+            users: vec![],
+            actions: vec![],
+            media_types: vec![],
         }
     }
 
@@ -516,6 +574,27 @@ impl TestZabbix {
 
     /// Removes what the test created in Zabbix.
     pub async fn clean_up(self) {
+        if !self.actions.is_empty() {
+            let _: Value = self
+                .admin
+                .call("action.delete", json!(self.actions))
+                .await
+                .unwrap();
+        }
+        if !self.users.is_empty() {
+            let _: Value = self
+                .admin
+                .call("user.delete", json!(self.users))
+                .await
+                .unwrap();
+        }
+        if !self.media_types.is_empty() {
+            let _: Value = self
+                .admin
+                .call("mediatype.delete", json!(self.media_types))
+                .await
+                .unwrap();
+        }
         if !self.hosts.is_empty() {
             let _: Value = self
                 .admin
@@ -714,4 +793,343 @@ pub async fn live_details(core: &Core, customer: Uuid) -> Vec<Option<Read>> {
             ))
         })
         .collect()
+}
+
+/// What the tests of alerts make in Zabbix: triggers whose problems they raise and recover,
+/// users, and the media type and action that send the problems to the add-on's webhook.
+impl TestZabbix {
+    /// A trigger with this expression and severity and the fields given, such as `tags` or
+    /// `opdata`; answers its id.
+    pub async fn trigger_with(
+        &self,
+        description: &str,
+        expression: &str,
+        severity: u8,
+        fields: Value,
+    ) -> String {
+        let mut params = json!({"description": description, "expression": expression,
+                                "priority": severity});
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let created: Value = self.admin.call("trigger.create", params).await.unwrap();
+        created["triggerids"][0].as_str().unwrap().to_owned()
+    }
+
+    /// Pushes `value` to the trapper item until the trigger has a problem, and answers the id of
+    /// its event: the server takes values for an item once it has read the new configuration.
+    pub async fn raise(&self, item: &str, trigger: &str, value: &str) -> String {
+        let started = Instant::now();
+        loop {
+            let pushed: Value = self
+                .admin
+                .call("history.push", json!([{"itemid": item, "value": value}]))
+                .await
+                .unwrap();
+            let events: Vec<Value> = self
+                .admin
+                .call(
+                    "event.get",
+                    json!({"objectids": [trigger], "value": 1, "output": ["eventid"]}),
+                )
+                .await
+                .unwrap();
+            if let Some(event) = events.first() {
+                return event["eventid"].as_str().unwrap().to_owned();
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(180),
+                "no problem of trigger {trigger} after pushing values: {pushed}"
+            );
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    /// Pushes `value` to the trapper item until the problem of `event` has recovered; answers
+    /// the recovery's event id.
+    pub async fn recover(&self, item: &str, event: &str, value: &str) -> String {
+        self.push(item, value).await;
+        let started = Instant::now();
+        loop {
+            let events: Vec<Value> = self
+                .admin
+                .call(
+                    "event.get",
+                    json!({"eventids": [event], "output": ["r_eventid"]}),
+                )
+                .await
+                .unwrap();
+            let recovery = events[0]["r_eventid"].as_str().unwrap_or("0");
+            if recovery != "0" {
+                return recovery.to_owned();
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "problem {event} does not recover"
+            );
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    /// The tags of the event, as name and value.
+    pub async fn event_tags(&self, event: &str) -> Vec<(String, String)> {
+        let events: Vec<Value> = self
+            .admin
+            .call(
+                "event.get",
+                json!({"eventids": [event], "output": ["eventid"],
+                       "selectTags": ["tag", "value"]}),
+            )
+            .await
+            .unwrap();
+        events[0]["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                (
+                    t["tag"].as_str().unwrap().to_owned(),
+                    t["value"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// A Zabbix user of the test's own, a Super admin, named `username` after the prefix, with
+    /// the fields given, such as `name`, `surname` and `medias`; answers its username.
+    pub async fn user(&mut self, username: &str, fields: Value) -> String {
+        let username = format!("{}-{username}", self.prefix);
+        let groups: Vec<Value> = self
+            .admin
+            .call(
+                "usergroup.get",
+                json!({"output": ["usrgrpid"], "filter": {"name": ["Zabbix administrators"]}}),
+            )
+            .await
+            .unwrap();
+        let mut params = json!({"username": username, "passwd": USER_PASSWORD,
+                                "roleid": SUPER_ADMIN_ROLE,
+                                "usrgrps": [{"usrgrpid": groups[0]["usrgrpid"]}]});
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let created: Value = self.admin.call("user.create", params).await.unwrap();
+        self.users
+            .push(created["userids"][0].as_str().unwrap().to_owned());
+        username
+    }
+
+    /// Zabbix's API as a user the test made.
+    pub async fn sign_in(&self, username: &str) -> Admin {
+        let anonymous = Zabbix::new(&zabbix_url(), "", Duration::from_secs(30)).unwrap();
+        let session: String = Admin(anonymous)
+            .call(
+                "user.login",
+                json!({"username": username, "password": USER_PASSWORD}),
+            )
+            .await
+            .unwrap();
+        Admin(Zabbix::new(&zabbix_url(), &session, Duration::from_secs(30)).unwrap())
+    }
+
+    /// Imports the add-on's media type (`zabbix-media-type.yaml`) under a name of the test's own,
+    /// and sets it to send to `url` with `secret`; answers its id.
+    pub async fn media_type(&mut self, url: &str, secret: &str) -> String {
+        let shipped = include_str!("../../zabbix-media-type.yaml");
+        let name = self.name("Help desk");
+        let file = shipped.replace("- name: 'Help desk'", &format!("- name: '{name}'"));
+        assert_ne!(file, shipped, "the media type is named Help desk");
+        let _: Value = self
+            .admin
+            .call(
+                "configuration.import",
+                json!({"format": "yaml", "source": file,
+                       "rules": {"mediaTypes": {"createMissing": true}}}),
+            )
+            .await
+            .unwrap();
+        let found: Vec<Value> = self
+            .admin
+            .call(
+                "mediatype.get",
+                json!({"output": ["mediatypeid", "status", "process_tags", "parameters"],
+                       "filter": {"name": [name]}}),
+            )
+            .await
+            .unwrap();
+        let media_type = &found[0];
+        let id = media_type["mediatypeid"].as_str().unwrap().to_owned();
+        self.media_types.push(id.clone());
+        assert_eq!(media_type["status"], "0", "imported enabled");
+        assert_eq!(media_type["process_tags"], "1", "imported processing tags");
+        let parameters: Vec<Value> = media_type["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| match p["name"].as_str().unwrap() {
+                "url" => json!({"name": "url", "value": url}),
+                "secret" => json!({"name": "secret", "value": secret}),
+                _ => p.clone(),
+            })
+            .collect();
+        let _: Value = self
+            .admin
+            .call(
+                "mediatype.update",
+                json!({"mediatypeid": id, "parameters": parameters}),
+            )
+            .await
+            .unwrap();
+        id
+    }
+
+    /// An action that sends the problems of the hosts of `group` to `user` through `media_type`,
+    /// and their recoveries and updates to everyone they went to.
+    pub async fn action(&mut self, group: &str, media_type: &str, user: &str) -> String {
+        let users: Vec<Value> = self
+            .admin
+            .call(
+                "user.get",
+                json!({"output": ["userid"], "filter": {"username": [user]}}),
+            )
+            .await
+            .unwrap();
+        let created: Value = self
+            .admin
+            .call(
+                "action.create",
+                json!({
+                    "name": self.name("Help desk"),
+                    "eventsource": 0,
+                    "status": 0,
+                    "esc_period": "1h",
+                    // Host group is condition type 0, "equals" operator 0.
+                    "filter": {"evaltype": 0,
+                               "conditions": [{"conditiontype": 0, "operator": 0,
+                                               "value": group}]},
+                    "operations": [{"operationtype": 0,
+                                    "opmessage": {"default_msg": 1, "mediatypeid": media_type},
+                                    "opmessage_usr": [{"userid": users[0]["userid"]}]}],
+                    // Notify all involved: 11 on recovery, 12 on update.
+                    "recovery_operations": [{"operationtype": 11,
+                                             "opmessage": {"default_msg": 1}}],
+                    "update_operations": [{"operationtype": 12,
+                                           "opmessage": {"default_msg": 1}}],
+                }),
+            )
+            .await
+            .unwrap();
+        let id = created["actionids"][0].as_str().unwrap().to_owned();
+        self.actions.push(id.clone());
+        id
+    }
+
+    /// What Zabbix's alerts of the event say, for a test that waits in vain for the webhook.
+    pub async fn alerts_of(&self, event: &str) -> Value {
+        self.admin
+            .call(
+                "alert.get",
+                json!({"eventids": [event], "output": ["status", "error", "retries"]}),
+            )
+            .await
+            .unwrap()
+    }
+
+    /// The add-on's alerts, between this Zabbix with the test's API token and `core`.
+    pub fn alerts(
+        &self,
+        core: &Core,
+        rules: hd_zabbix::rules::Rules,
+    ) -> hd_zabbix::webhook::Alerts {
+        hd_zabbix::webhook::Alerts::new(
+            core.addon(),
+            Zabbix::new(&zabbix_url(), &self.api_token, hd_zabbix::webhook::DEADLINE).unwrap(),
+            "Zabbix",
+            rules,
+        )
+    }
+}
+
+/// The password of the Zabbix users the tests make: none of their names is in it.
+const USER_PASSWORD: &str = "Kx7-test-pass-31!q";
+
+/// Zabbix's role `Super admin role`.
+const SUPER_ADMIN_ROLE: &str = "3";
+
+/// The rules of `[[alerts.rules]]` in this TOML.
+pub fn rules(toml_text: &str) -> hd_zabbix::rules::Rules {
+    let table: toml::Table = toml::from_str(toml_text).unwrap();
+    let rules = table["alerts"]["rules"].as_array().unwrap().clone();
+    hd_zabbix::rules::Rules::read(rules).unwrap()
+}
+
+/// A port for the add-on's webhook, bound on `HD_TEST_WEBHOOK_LISTEN` (default `0.0.0.0:0`, so
+/// that the Zabbix server's container reaches it), with the URL the test posts to and the URL
+/// Zabbix's server reaches it at, on the host `HD_TEST_ZABBIX_WEBHOOK_HOST` names (default
+/// `host.docker.internal`, which `compose.yaml` maps to the host).
+pub async fn webhook_listener() -> (tokio::net::TcpListener, String, String) {
+    let listen = std::env::var("HD_TEST_WEBHOOK_LISTEN").unwrap_or_else(|_| "0.0.0.0:0".into());
+    let listener = tokio::net::TcpListener::bind(&listen).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let host = std::env::var("HD_TEST_ZABBIX_WEBHOOK_HOST")
+        .unwrap_or_else(|_| "host.docker.internal".into());
+    let path = hd_zabbix::webhook::PATH;
+    (
+        listener,
+        format!("http://127.0.0.1:{port}{path}"),
+        format!("http://{host}:{port}{path}"),
+    )
+}
+
+/// Serves the add-on's webhook on `listener`, as the add-on does, with `secret`.
+pub fn serve_webhook(
+    listener: tokio::net::TcpListener,
+    alerts: hd_zabbix::webhook::Alerts,
+    secret: &str,
+) {
+    let app = hd_zabbix::webhook::router(std::sync::Arc::new(alerts), secret.to_owned());
+    tokio::spawn(async move { axum::serve(listener, app).await });
+}
+
+/// Posts what Zabbix's media type sends to the webhook at `url`, with `secret`; answers the
+/// status and the body.
+pub async fn post_event(url: &str, secret: &str, event: Value) -> (StatusCode, Value) {
+    let response = hd_addon_sdk::http_client(Duration::from_secs(60))
+        .unwrap()
+        .post(url)
+        .bearer_auth(secret)
+        .json(&event)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let text = response.text().await.unwrap();
+    (
+        status,
+        serde_json::from_str(&text).unwrap_or(Value::String(text)),
+    )
+}
+
+/// What the media type sends for a problem, as Zabbix 7.0 resolves its parameters: those of
+/// updates stay as they are written.
+pub fn problem_sent(event: &str) -> Value {
+    json!({"event_id": event, "event_value": "1", "event_update_status": "0",
+           "event_source": "0", "user": "{USER.FULLNAME}",
+           "action": "{EVENT.UPDATE.ACTION}", "message": "{EVENT.UPDATE.MESSAGE}"})
+}
+
+/// What the media type sends for the recovery of the problem of `event`.
+pub fn recovery_sent(event: &str) -> Value {
+    json!({"event_id": event, "event_value": "0", "event_update_status": "0",
+           "event_source": "0", "user": "{USER.FULLNAME}",
+           "action": "{EVENT.UPDATE.ACTION}", "message": "{EVENT.UPDATE.MESSAGE}"})
+}
+
+/// What the media type sends for an update of the problem of `event` by `user`, as
+/// `{USER.FULLNAME}` names them.
+pub fn update_sent(event: &str, user: &str, action: &str, message: &str) -> Value {
+    json!({"event_id": event, "event_value": "1", "event_update_status": "1",
+           "event_source": "0", "user": user, "action": action, "message": message})
 }
