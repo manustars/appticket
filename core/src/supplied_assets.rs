@@ -597,6 +597,10 @@ mod tests {
             }
         );
         assert_eq!(holder(db.clone()).await, (None, false));
+        // Updated by its id, as supplying it again does.
+        retire(&db, "watchtower", pc).await.unwrap();
+        update(&db, "watchtower", pc, &laptop).await.unwrap();
+        assert_eq!(holder(db.clone()).await, (None, false));
     }
 
     /// The database keeps an asset's source within the rules even when the code above is
