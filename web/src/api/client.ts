@@ -12,6 +12,7 @@ export type Asset = Schemas['Asset']
 export type AssetFields = Schemas['AssetFields']
 export type AssetKind = Schemas['AssetKind']
 export type AssetLinkProposal = Schemas['AssetLinkProposal']
+export type AssetLiveDetails = Schemas['AssetLiveDetails']
 export type CustomerDetail = Schemas['CustomerDetail']
 export type CustomerEntry = Schemas['CustomerEntry']
 export type CustomerSummary = Schemas['CustomerSummary']
@@ -531,6 +532,19 @@ export async function retireAsset(id: string): Promise<void> {
 }
 
 /** The open link proposals on the customer's assets, oldest first. */
+/**
+ * The live details of the customer's active assets, asked of the add-on each comes from now: the
+ * core waits 2 seconds at most for each, so this may come after the assets themselves.
+ */
+export function listCustomerAssetLiveDetails(customerId: string): Promise<AssetLiveDetails[]> {
+  return json('GET', `${customerPath(customerId)}/assets/live-details`)
+}
+
+/** The live details of the ticket's active assets, as for a customer's. */
+export function listTicketAssetLiveDetails(number: number): Promise<AssetLiveDetails[]> {
+  return json('GET', `${ticketPath(number)}/assets/live-details`)
+}
+
 export function listAssetLinkProposals(customerId: string): Promise<AssetLinkProposal[]> {
   return json('GET', `${customerPath(customerId)}/asset-link-proposals`)
 }

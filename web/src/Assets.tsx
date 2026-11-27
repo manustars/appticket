@@ -8,6 +8,7 @@ import {
   discardAssetLinkProposal,
   listAssetKinds,
   listAssetLinkProposals,
+  listCustomerAssetLiveDetails,
   listCustomerAssets,
   retireAsset,
   updateAsset,
@@ -16,6 +17,8 @@ import {
   type CustomerDetail,
 } from './api/client'
 import { useI18n } from './i18n/context'
+import { liveDetailsByAsset } from './addon'
+import { LiveDetails } from './LiveDetails'
 import { requesterLabel } from './people'
 import { Problem } from './Problem'
 import { adminHref, requesterHref } from './route'
@@ -186,6 +189,11 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
   const assets = useLoad(load, onSignedOut)
   const loadProposals = useCallback(() => listAssetLinkProposals(c.id), [c])
   const proposals = useLoad(loadProposals, onSignedOut)
+  // Asked of the add-ons apart, so that the assets show at once and their live details beside
+  // them when the add-ons have answered.
+  const loadLive = useCallback(() => listCustomerAssetLiveDetails(c.id), [c])
+  const live = useLoad(loadLive, onSignedOut)
+  const liveByAsset = liveDetailsByAsset(live.data)
   const kinds = useLoad(loadKinds, onSignedOut)
   const action = useAction(onSignedOut)
   const [editing, setEditing] = useState<Draft | null>(null)
@@ -263,6 +271,7 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
       <Problem error={assets.error} />
       <Problem error={kinds.error} />
       <Problem error={proposals.error} />
+      <Problem error={live.error} />
       {proposals.data && (
         <LinkProposals proposals={proposals.data} readOnly={readOnly} busy={action.busy}
           onAccept={acceptLink} onDiscard={discardLink} />
@@ -340,6 +349,10 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
                   <AssetSource asset={a} />
                   {a.retired_at && (
                     <> <span className="marker retired">{t('assets.retired', { date: formatTime(a.retired_at) })}</span></>
+                  )}
+                  {!a.retired_at && (
+                    <LiveDetails details={liveByAsset?.get(a.id) ?? (liveByAsset ? [] : undefined)}
+                      asking={live.error ? null : a.source_addon} />
                   )}
                 </td>
                 <td>{a.serial_number ?? none}</td>

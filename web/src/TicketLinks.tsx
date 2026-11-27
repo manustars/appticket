@@ -8,15 +8,19 @@ import {
   linkTicketService,
   listCustomerAssets,
   listCustomerServices,
+  listTicketAssetLiveDetails,
   resolveChildren,
   setParent,
   unlinkTicketAsset,
   unlinkTicketService,
   type Asset,
+  type AssetLiveDetails,
   type Service,
   type TicketDetail,
 } from './api/client'
 import { useI18n } from './i18n/context'
+import { liveDetailsByAsset } from './addon'
+import { LiveDetails } from './LiveDetails'
 import { Problem } from './Problem'
 import { ticketHref } from './route'
 import { useSession } from './session'
@@ -42,6 +46,13 @@ export function TicketAssets({ ticket, onChanged, onSignedOut }: Props) {
   const load = useCallback(
     (): Promise<Asset[]> => (locked ? nothing() : listCustomerAssets(customerId)), [locked, customerId])
   const options = useLoad(load, onSignedOut)
+  // Asked again only when the ticket links other assets, not each time the ticket is reloaded.
+  const linked = ticket.assets.map((a) => a.id).join(' ')
+  const loadLive = useCallback(
+    (): Promise<AssetLiveDetails[]> => (linked ? listTicketAssetLiveDetails(ticket.number) : nothing()),
+    [ticket.number, linked])
+  const live = useLoad(loadLive, onSignedOut)
+  const liveByAsset = liveDetailsByAsset(live.data)
   const action = useAction(onSignedOut)
   const [chosen, setChosen] = useState('')
   const id = useId()
@@ -77,6 +88,7 @@ export function TicketAssets({ ticket, onChanged, onSignedOut }: Props) {
                   {t('action.unlink')}
                 </button>
               )}
+              <LiveDetails details={liveByAsset?.get(a.id)} />
             </li>
           ))}
         </ul>
@@ -97,7 +109,7 @@ export function TicketAssets({ ticket, onChanged, onSignedOut }: Props) {
           <button type="submit" disabled={action.busy || !chosen}>{t('action.link')}</button>
         </form>
       )}
-      <Problem error={options.error ?? action.error} />
+      <Problem error={options.error ?? live.error ?? action.error} />
     </section>
   )
 }
