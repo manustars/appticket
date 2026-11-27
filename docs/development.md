@@ -170,12 +170,13 @@ of seconds per message, so proposals appear accordingly later.
 ## The Zabbix add-on
 
 The Zabbix add-on (`addons/zabbix`, details in its README) makes the hosts of the host groups
-customers have into their assets. With the test Zabbix above, make an API token for `Admin` in
-its frontend (*Users → API tokens*), then:
+customers have into their assets, and the alerts its rules open into tickets. With the test
+Zabbix above, make an API token for `Admin` in its frontend (*Users → API tokens*), then:
 
 ```sh
 cargo run -p hd-core -- addon add zabbix --url http://127.0.0.1:8091 \
-  --scope directory:read --scope catalog:write --scope names:write --scope conflicts:write
+  --scope directory:read --scope catalog:write --scope names:write --scope conflicts:write \
+  --scope tickets:read --scope tickets:write
 cp addons/zabbix/zabbix.example.toml zabbix.toml   # core.url http://127.0.0.1:8080,
                                                    # zabbix.url http://127.0.0.1:55180
 # in .env: HD_ZABBIX_TOKEN=… and HD_ZABBIX_EVENT_SECRET=… (printed above) and
@@ -184,7 +185,9 @@ cargo run -p hd-zabbix
 ```
 
 Its host groups then appear on a customer's page among the names to pick an external reference
-in `Zabbix` from, and the assets of its hosts show their live details from Zabbix.
+in `Zabbix` from, and the assets of its hosts show their live details from Zabbix. For alerts, add
+a `[webhook]` section with a secret file, listen on an address the Zabbix server's container
+reaches, and import and set up the media type as the add-on's README says (*Alerts*).
 
 ## Tests
 
@@ -196,7 +199,10 @@ cargo test -- --ignored       # tests that also need the test mail server, Keycl
 
 The Zabbix add-on's ignored tests start the core's binary, so build it first
 (`cargo build -p hd-core`), and reach the test Zabbix at `HD_TEST_ZABBIX_URL` (default
-`http://127.0.0.1:55180`); CI runs them in a job of their own.
+`http://127.0.0.1:55180`); CI runs them in a job of their own. The tests of alerts serve the
+add-on's webhook to the Zabbix server, which reaches them at `HD_TEST_ZABBIX_WEBHOOK_HOST`
+(default `host.docker.internal`); with Podman on Windows or macOS give the host's address as its
+virtual machine sees it (the add-on's README says how).
 
 The help desk supports PostgreSQL 16 and later: CI runs the core's tests on 16 and on 18, the
 version of `compose.yaml`. To run them on 16 locally, start a server of that version on a port of
