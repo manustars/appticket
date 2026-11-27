@@ -83,6 +83,9 @@ sentence saying which scope is missing.
 | `GET /api/addon/tickets?requester_email=…` or `?customer=…` | `tickets:read` | Tickets that are not closed, of the requester the address belongs to (any of their addresses) or of a customer. |
 | `GET /api/addon/tickets/{number}` | `tickets:read` | A ticket with its messages, links and open proposals; internal notes and announcements are never given to add-ons. |
 | `POST /api/addon/proposals` | `proposals:write` | Proposes something to the agents. |
+| `POST /api/addon/assets` | `catalog:write` | Creates an asset of a customer known by the add-on's reference, or updates the one the add-on supplied with that reference. |
+| `PUT /api/addon/assets/{id}` | `catalog:write` | Updates an asset the add-on is the source of. |
+| `POST /api/addon/assets/{id}/retire` | `catalog:write` | Retires an asset the add-on is the source of. |
 
 A requester has one or more e-mail addresses, each belonging to exactly one requester. A ticket's
 `requester` carries them all in `addresses`, the first registered first; `reply_to` is the address
@@ -93,7 +96,8 @@ written on it; `last_picked` is then the address an agent picked for the last re
 
 An asset, in a customer's asset list, has its `kind` (a name from the help desk's list of asset
 kinds) and `name`, its `serial_number` and its own `site` (`{"id", "name"}`, one of its customer's
-sites) when it has them, and `source_addon`, the add-on it came from, if any. Add-ons are not told
+sites) when it has them, and `source_addon`, the add-on it came from, if any, with `reference`,
+the add-on's own reference for it, when the add-on reading it is that source. Add-ons are not told
 its holder, the requester it has been given to, nor the site it is at through them.
 
 A customer's `external_references` are the names other systems use for it, each a `system` and a
@@ -105,6 +109,40 @@ read them. Offboarded customers are not listed, and neither are their references
 
 The full request and response shapes are in the core's OpenAPI specification
 (`hd openapi`, or `/api/openapi.json` on a running core).
+
+### Supplying assets
+
+An add-on such as an inventory or monitoring integration supplies the assets of its system to the
+help desk's catalog. It is their source: only it changes what it supplied, and it changes nothing
+else.
+
+```json
+{ "reference": "host-1042", "customer_id": "…", "kind": "Laptop", "name": "PC-0042",
+  "serial_number": "SN-0042", "site": "Head office" }
+```
+
+- `reference` is the add-on's own identifier for the asset, such as a host's id in its system,
+  compared exactly once trimmed. `POST /api/addon/assets` with a reference the add-on has not
+  given before creates the asset (201); with one it has, it updates that asset instead (200), so
+  the add-on can send its whole inventory again safely. A reference names one asset of one
+  customer for good: an asset never changes customer, and the core refuses (409) a reference of
+  another customer's asset.
+- `kind` is the name of an asset kind of the help desk's list and `site` the name of one of the
+  customer's active sites, both compared ignoring case; the add-on maps its own kinds and places
+  to them in its configuration. An unknown kind, or a site that is not one of the customer's
+  active sites, is refused (409) with a sentence saying which.
+- Each call sends the whole asset: a `serial_number` or `site` left out is cleared. The answer is
+  the asset as add-ons read it, with its `id` and `reference`.
+- `PUT /api/addon/assets/{id}` updates an asset by its id, with the same fields but `reference`
+  and `customer_id`; `POST /api/addon/assets/{id}/retire` retires it when it leaves the add-on's
+  system (204, also when it is already retired). A retired asset stays on its tickets and loses
+  its holder; supplying it again brings it back.
+- An add-on never gives an asset a holder: a `holder_id` or `holder` is refused (409). Agents
+  choose the holder, and supplying the asset again leaves it. An asset entered by hand or
+  supplied by another add-on is refused (409) by both calls.
+
+Agents see which add-on an asset comes from; they still give it a holder, but do not change its
+kind, name, serial number or site, nor retire it.
 
 ### Proposals
 
