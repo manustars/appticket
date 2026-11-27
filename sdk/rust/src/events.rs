@@ -95,7 +95,7 @@ pub struct TicketStateChanged {
     /// The state the ticket is in now; never the old one.
     pub new_state: TicketState,
     pub changed_by: StateChangedBy,
-    /// The add-on's own reference for the ticket, when it opened it with one: what maps the
+    /// The add-on's ticket reference, when it opened it with one: what maps the
     /// change back to the problem the add-on opened the ticket for. Never another add-on's.
     #[serde(default)]
     pub reference: Option<String>,

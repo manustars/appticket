@@ -217,11 +217,25 @@ pub struct AddonTicketSummary {
     /// The address a reply goes to: the one the requester last wrote from on the ticket, else the
     /// one an agent last picked there, else the first they registered.
     requester_email: Option<String>,
-    /// Your own reference for the ticket, when you opened it with one; another add-on's is not
-    /// given.
+    /// Your ticket reference, when you opened the ticket with one; another add-on's is not given.
     reference: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
+}
+
+/// The query of [`AddonTicketSummary`]s as the add-on `$1` reads them, with `rest` after `FROM
+/// tickets t`: its own ticket references only.
+macro_rules! select_summaries {
+    ($rest:literal) => {
+        concat!(
+            "SELECT t.number, t.title, t.state, t.priority, t.customer_id,
+                    ticket_requester_address(t.id) AS requester_email,
+                    CASE WHEN t.opened_by_addon_id = $1 THEN t.addon_reference END AS reference,
+                    t.updated_at
+             FROM tickets t ",
+            $rest
+        )
+    };
 }
 
 /// Tickets that are not closed, of a requester or a customer, most recent first (at most 50).
@@ -241,29 +255,26 @@ async fn open_tickets(
         ));
     }
     Ok(Json(
-        sqlx::query_as(
-            "SELECT t.number, t.title, t.state, t.priority, t.customer_id,
-                    ticket_requester_address(t.id) AS requester_email,
-                    CASE WHEN t.opened_by_addon_id = $3 THEN t.addon_reference END AS reference,
-                    t.updated_at
-             FROM tickets t
-             WHERE t.state <> 'closed'
-               AND ($1::text IS NULL OR t.requester_id =
-                    (SELECT requester_id FROM requester_addresses WHERE address = lower($1)))
-               AND ($2::uuid IS NULL OR t.customer_id = $2)
-             ORDER BY t.updated_at DESC LIMIT 50",
-        )
+        sqlx::query_as(select_summaries!(
+            "WHERE t.state <> 'closed'
+               AND ($2::text IS NULL OR t.requester_id =
+                    (SELECT requester_id FROM requester_addresses WHERE address = lower($2)))
+               AND ($3::uuid IS NULL OR t.customer_id = $3)
+             ORDER BY t.updated_at DESC LIMIT 50"
+        ))
+        .bind(caller.id)
         .bind(filter.requester_email.map(|e| e.trim().to_owned()))
         .bind(filter.customer)
-        .bind(caller.id)
         .fetch_all(&state.db)
         .await?,
     ))
 }
 
-/// Every ticket the add-on opened that is not closed, with its reference when it gave one, most
-/// recent first: what it needs to pick up its tickets again, such as after a restart. Scope
-/// `tickets:read`.
+/// The tickets the add-on opened that are not closed
+///
+/// Every ticket the add-on opened that is not closed, with its ticket reference when it gave one,
+/// most recent first and without a limit: what it needs to pick up its tickets again, such as
+/// after a restart. Scope `tickets:read`.
 #[utoipa::path(get, path = "/api/addon/tickets/opened", tag = "add-ons",
     responses((status = OK, body = Vec<AddonTicketSummary>), (status = CONFLICT, body = Problem),
         (status = UNAUTHORIZED, body = Problem)))]
@@ -273,23 +284,30 @@ async fn opened_tickets(
 ) -> Result<Json<Vec<AddonTicketSummary>>, ApiError> {
     caller.require(TICKETS_READ)?;
     Ok(Json(
-        sqlx::query_as(
-            "SELECT t.number, t.title, t.state, t.priority, t.customer_id,
-                    ticket_requester_address(t.id) AS requester_email,
-                    t.addon_reference AS reference, t.updated_at
-             FROM tickets t
-             WHERE t.opened_by_addon_id = $1 AND t.state <> 'closed'
-             ORDER BY t.updated_at DESC, t.number DESC",
-        )
+        sqlx::query_as(select_summaries!(
+            "WHERE t.opened_by_addon_id = $1 AND t.state <> 'closed'
+             ORDER BY t.updated_at DESC, t.number DESC"
+        ))
         .bind(caller.id)
         .fetch_all(&state.db)
         .await?,
     ))
 }
 
-/// The ticket as `caller` reads it: without internal notes, announcements and its customer's key
-/// requesters, and with the caller's reference when it opened the ticket with one.
-async fn seen_by(state: &AppState, caller: &Caller, number: i64) -> Result<TicketDetail, ApiError> {
+/// A ticket as an add-on reads it: as agents do, without internal notes, announcements and the
+/// customer's key requesters, and with the add-on's own ticket reference.
+#[derive(Serialize, ToSchema)]
+pub struct AddonTicket {
+    #[serde(flatten)]
+    detail: TicketDetail,
+    /// Your ticket reference, when you opened the ticket with one; left out otherwise, and never
+    /// given to other add-ons.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reference: Option<String>,
+}
+
+/// The ticket as `caller` reads it.
+async fn seen_by(state: &AppState, caller: &Caller, number: i64) -> Result<AddonTicket, ApiError> {
     let mut detail = tickets::detail(&state.db, number).await?;
     // Internal notes are for agents only; an add-on never sees them. Nor the customer's key
     // requesters and where they are written to, which announcements name too: no add-on needs
@@ -301,22 +319,25 @@ async fn seen_by(state: &AppState, caller: &Caller, number: i64) -> Result<Ticke
         )
     });
     detail.key_requesters = None;
-    detail.reference = addon_tickets::reference_of(&state.db, caller.id, number).await?;
-    Ok(detail)
+    Ok(AddonTicket {
+        detail,
+        reference: addon_tickets::reference_of(&state.db, caller.id, number).await?,
+    })
 }
 
 /// A ticket with its messages and links, without internal notes, announcements and its customer's
 /// key requesters; `worked_on_by_agent` says whether an agent has worked on it all the same, and
-/// `reference` is given to the add-on that opened it with one. Scope `tickets:read`.
+/// `reference` is given to the add-on that opened it with a ticket reference. Scope
+/// `tickets:read`.
 #[utoipa::path(get, path = "/api/addon/tickets/{number}", tag = "add-ons",
     params(("number" = i64, Path, description = "The ticket's number")),
-    responses((status = OK, body = TicketDetail), (status = NOT_FOUND, body = Problem),
+    responses((status = OK, body = AddonTicket), (status = NOT_FOUND, body = Problem),
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn ticket(
     State(state): State<AppState>,
     caller: Caller,
     Path(number): Path<i64>,
-) -> Result<Json<TicketDetail>, ApiError> {
+) -> Result<Json<AddonTicket>, ApiError> {
     caller.require(TICKETS_READ)?;
     Ok(Json(seen_by(&state, &caller, number).await?))
 }
@@ -324,22 +345,25 @@ async fn ticket(
 #[derive(Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ByReference {
-    /// The reference the add-on gave the ticket when it opened it, compared exactly once trimmed.
+    /// The ticket reference the add-on gave the ticket when it opened it, compared exactly once
+    /// trimmed.
     reference: String,
 }
 
-/// The ticket the add-on opened with this reference, in any state, closed included, as
-/// `GET /api/addon/tickets/{number}` gives it; not found for a reference the add-on never gave,
-/// another add-on's included. Scope `tickets:read`.
+/// The ticket the add-on opened with a ticket reference
+///
+/// The ticket the add-on opened with this ticket reference, in any state, closed included, as
+/// `GET /api/addon/tickets/{number}` gives it; not found for a ticket reference the add-on never
+/// gave, another add-on's included. Scope `tickets:read`.
 #[utoipa::path(get, path = "/api/addon/tickets/by-reference", tag = "add-ons",
     params(ByReference),
-    responses((status = OK, body = TicketDetail), (status = NOT_FOUND, body = Problem),
+    responses((status = OK, body = AddonTicket), (status = NOT_FOUND, body = Problem),
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn ticket_by_reference(
     State(state): State<AppState>,
     caller: Caller,
     Query(by): Query<ByReference>,
-) -> Result<Json<TicketDetail>, ApiError> {
+) -> Result<Json<AddonTicket>, ApiError> {
     caller.require(TICKETS_READ)?;
     let number = addon_tickets::by_reference(&state.db, caller.id, &by.reference).await?;
     Ok(Json(seen_by(&state, &caller, number).await?))
@@ -427,12 +451,13 @@ fn open_ticket_description() -> String {
          customer's active assets and services it is about; replies on it go to the customer's \
          key requesters. The description becomes the ticket's first internal note, by the \
          add-on. An asset or service that does not fit refuses the ticket, with a sentence naming \
-         it; one that does not exist is not found. A `reference`, the add-on's own for the \
-         ticket such as the id of the problem it is about, names the ticket for good: at most \
-         {MAX_REFERENCE_LENGTH} characters once trimmed, neither blank nor with control \
-         characters, compared exactly. Opening again with a reference the add-on gave before \
-         opens nothing and answers 200 with the ticket opened then, in any state and unchanged, \
-         whatever else the request says; another add-on's references are its own. Scope \
+         it; one that does not exist is not found. A `reference`, the add-on's ticket \
+         reference such as the id of the problem the ticket is about, names the ticket for good: \
+         at most {MAX_REFERENCE_LENGTH} characters once trimmed, neither blank nor with control \
+         characters, compared exactly. Opening again with a ticket reference the add-on gave \
+         before, also while that ticket is still being opened, opens nothing and answers 200 \
+         with the number of the ticket opened then, which stays as it is, in any state, whatever \
+         else the request says; another add-on's ticket references are its own. Scope \
          `tickets:write`."
     )
 }
@@ -443,7 +468,8 @@ fn open_ticket_description() -> String {
     description = open_ticket_description(),
     responses((status = CREATED, body = AddonTicketOpened, description = "A new ticket"),
         (status = OK, body = AddonTicketOpened,
-            description = "The ticket the add-on opened before with the same reference, unchanged"),
+            description = "The number of the ticket the add-on opened before with the same \
+                ticket reference, unchanged"),
         (status = NOT_FOUND, body = Problem),
         (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
 async fn open_ticket(

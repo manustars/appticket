@@ -197,7 +197,7 @@ pub struct TicketSummary {
     /// one an agent last picked there, else the first they registered.
     #[serde(default)]
     pub requester_email: Option<String>,
-    /// The add-on's own reference for the ticket, when it opened it with one; never another
+    /// The add-on's ticket reference, when it opened it with one; never another
     /// add-on's.
     #[serde(default)]
     pub reference: Option<String>,
@@ -222,7 +222,7 @@ pub struct Ticket {
     /// The add-on that opened the ticket, by name, when an add-on did.
     #[serde(default)]
     pub opened_by_addon: Option<String>,
-    /// The add-on's own reference for the ticket, when it opened it with one; never another
+    /// The add-on's ticket reference, when it opened it with one; never another
     /// add-on's.
     #[serde(default)]
     pub reference: Option<String>,

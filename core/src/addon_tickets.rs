@@ -34,9 +34,9 @@ pub struct NewTicket {
     /// Active services the customer uses that the ticket is about.
     #[serde(default)]
     pub service_ids: Vec<Uuid>,
-    /// The add-on's own reference for the ticket, such as the id of the problem it is about,
-    /// compared exactly once trimmed: it names this ticket for good, and opening again with it
-    /// answers this ticket, unchanged. Not blank, without control characters, at most 255
+    /// The add-on's ticket reference, its own name for the ticket, such as the id of the problem it
+    /// is about, compared exactly once trimmed: it names this ticket for good, and opening again
+    /// with it answers this ticket, unchanged. Not blank, without control characters, at most 255
     /// characters. Without one, each open opens a new ticket.
     #[serde(default)]
     #[schema(max_length = 255)]
@@ -54,7 +54,7 @@ pub struct Opened {
 /// `reference` trimmed, refused with a sentence when it does not fit.
 fn checked_reference(reference: &str) -> Result<&str> {
     crate::name_lists::trimmed(reference, MAX_REFERENCE_LENGTH, || {
-        "a ticket's reference".to_owned()
+        "a ticket reference".to_owned()
     })
 }
 
@@ -75,28 +75,36 @@ async fn find<'e>(
 
 /// Opens a ticket without a requester for `addon`. The ticket, its links and its description are
 /// written together or not at all: an asset or service that does not fit refuses the whole
-/// ticket, with a sentence naming it. With a reference the add-on gave before, it opens nothing
-/// and answers the ticket opened then, in any state and unchanged, whatever else `new` says; so
-/// does the second of two opens with the same reference at the same time.
+/// ticket, with a sentence naming it. With a ticket reference the add-on gave before, it opens
+/// nothing and answers the ticket opened then, in any state and unchanged, whatever else `new`
+/// says, also while that ticket is still being opened by another call.
 pub async fn open(db: &PgPool, addon: Uuid, new: &NewTicket) -> Result<Opened> {
     let reference = new
         .reference
         .as_deref()
         .map(checked_reference)
         .transpose()?;
-    if let Some(reference) = reference
-        && let Some(number) = find(db, addon, reference).await?
-    {
-        return Ok(Opened {
-            number,
-            created: false,
-        });
+    let mut tx = db.begin().await?;
+    if let Some(reference) = reference {
+        // Opens of the add-on with the same reference take turns: the one that comes second
+        // waits here until the first has written its ticket or given up, then finds it below
+        // before anything else it sends is checked.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text || ' ' || $2, 0))")
+            .bind(addon)
+            .bind(reference)
+            .execute(&mut *tx)
+            .await?;
+        if let Some(number) = find(&mut *tx, addon, reference).await? {
+            return Ok(Opened {
+                number,
+                created: false,
+            });
+        }
     }
     let title = new.title.trim();
     if title.is_empty() {
         return rule("a ticket needs a title");
     }
-    let mut tx = db.begin().await?;
     // Shared locks hold the customer, assets and services as checked until the ticket links them:
     // offboarding the customer or retiring one of them waits for it.
     let customer: Option<(String, bool)> = sqlx::query_as(
@@ -119,13 +127,10 @@ pub async fn open(db: &PgPool, addon: Uuid, new: &NewTicket) -> Result<Opened> {
         crate::catalog::ensure_service_fits(&mut tx, service, new.customer_id).await?;
     }
     let id = Uuid::new_v4();
-    // An open of the add-on with the same reference at the same time makes this one wait: once
-    // that one is written, this one writes nothing and answers its ticket.
-    let number: Option<i64> = sqlx::query_scalar(
+    let number: i64 = sqlx::query_scalar(
         "INSERT INTO tickets (id, customer_id, title, priority, opened_by_addon_id,
                               addon_reference)
          VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (opened_by_addon_id, addon_reference) DO NOTHING
          RETURNING number",
     )
     .bind(id)
@@ -134,19 +139,8 @@ pub async fn open(db: &PgPool, addon: Uuid, new: &NewTicket) -> Result<Opened> {
     .bind(new.priority.unwrap_or(Priority::Normal))
     .bind(addon)
     .bind(reference)
-    .fetch_optional(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
-    let Some(number) = number else {
-        tx.rollback().await?;
-        let reference = reference.expect("without a reference nothing conflicts");
-        let number = find(db, addon, reference).await?.ok_or_else(|| {
-            anyhow::anyhow!("the ticket with the reference {reference} is not there")
-        })?;
-        return Ok(Opened {
-            number,
-            created: false,
-        });
-    };
     sqlx::query(
         "INSERT INTO ticket_assets (ticket_id, customer_id, asset_id)
          SELECT $1, $2, unnest($3::uuid[]) ON CONFLICT DO NOTHING",
@@ -1295,19 +1289,19 @@ mod tests {
         for (reference, expected) in [
             (
                 "   ".to_owned(),
-                "a ticket's reference cannot be blank".to_owned(),
+                "a ticket reference cannot be blank".to_owned(),
             ),
             (
                 "".to_owned(),
-                "a ticket's reference cannot be blank".to_owned(),
+                "a ticket reference cannot be blank".to_owned(),
             ),
             (
                 "47\n11".to_owned(),
-                "a ticket's reference holds a control character".to_owned(),
+                "a ticket reference holds a control character".to_owned(),
             ),
             (
                 too_long,
-                format!("a ticket's reference is longer than {MAX_REFERENCE_LENGTH} characters"),
+                format!("a ticket reference is longer than {MAX_REFERENCE_LENGTH} characters"),
             ),
         ] {
             match open(&db, watchtower, &with(reference.clone())).await {

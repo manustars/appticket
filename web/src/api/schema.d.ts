@@ -232,7 +232,7 @@ export interface paths {
         put?: never;
         /**
          * Opens a ticket without a requester
-         * @description Opens a ticket without a requester for an active customer, with a priority and the customer's active assets and services it is about; replies on it go to the customer's key requesters. The description becomes the ticket's first internal note, by the add-on. An asset or service that does not fit refuses the ticket, with a sentence naming it; one that does not exist is not found. A `reference`, the add-on's own for the ticket such as the id of the problem it is about, names the ticket for good: at most 255 characters once trimmed, neither blank nor with control characters, compared exactly. Opening again with a reference the add-on gave before opens nothing and answers 200 with the ticket opened then, in any state and unchanged, whatever else the request says; another add-on's references are its own. Scope `tickets:write`.
+         * @description Opens a ticket without a requester for an active customer, with a priority and the customer's active assets and services it is about; replies on it go to the customer's key requesters. The description becomes the ticket's first internal note, by the add-on. An asset or service that does not fit refuses the ticket, with a sentence naming it; one that does not exist is not found. A `reference`, the add-on's ticket reference such as the id of the problem the ticket is about, names the ticket for good: at most 255 characters once trimmed, neither blank nor with control characters, compared exactly. Opening again with a ticket reference the add-on gave before, also while that ticket is still being opened, opens nothing and answers 200 with the number of the ticket opened then, which stays as it is, in any state, whatever else the request says; another add-on's ticket references are its own. Scope `tickets:write`.
          */
         post: operations["open_ticket"];
         delete?: never;
@@ -249,9 +249,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The ticket the add-on opened with this reference, in any state, closed included, as
-         *     `GET /api/addon/tickets/{number}` gives it; not found for a reference the add-on never gave,
-         *     another add-on's included. Scope `tickets:read`.
+         * The ticket the add-on opened with a ticket reference
+         * @description The ticket the add-on opened with this ticket reference, in any state, closed included, as
+         *     `GET /api/addon/tickets/{number}` gives it; not found for a ticket reference the add-on never
+         *     gave, another add-on's included. Scope `tickets:read`.
          */
         get: operations["ticket_by_reference"];
         put?: never;
@@ -270,9 +271,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Every ticket the add-on opened that is not closed, with its reference when it gave one, most
-         *     recent first: what it needs to pick up its tickets again, such as after a restart. Scope
-         *     `tickets:read`.
+         * The tickets the add-on opened that are not closed
+         * @description Every ticket the add-on opened that is not closed, with its ticket reference when it gave one,
+         *     most recent first and without a limit: what it needs to pick up its tickets again, such as
+         *     after a restart. Scope `tickets:read`.
          */
         get: operations["opened_tickets"];
         put?: never;
@@ -293,7 +295,8 @@ export interface paths {
         /**
          * A ticket with its messages and links, without internal notes, announcements and its customer's
          *     key requesters; `worked_on_by_agent` says whether an agent has worked on it all the same, and
-         *     `reference` is given to the add-on that opened it with one. Scope `tickets:read`.
+         *     `reference` is given to the add-on that opened it with a ticket reference. Scope
+         *     `tickets:read`.
          */
         get: operations["ticket"];
         put?: never;
@@ -2122,9 +2125,9 @@ export interface components {
             description?: string | null;
             priority?: components["schemas"]["Priority"] | null;
             /**
-             * @description The add-on's own reference for the ticket, such as the id of the problem it is about,
-             *     compared exactly once trimmed: it names this ticket for good, and opening again with it
-             *     answers this ticket, unchanged. Not blank, without control characters, at most 255
+             * @description The add-on's ticket reference, its own name for the ticket, such as the id of the problem it
+             *     is about, compared exactly once trimmed: it names this ticket for good, and opening again
+             *     with it answers this ticket, unchanged. Not blank, without control characters, at most 255
              *     characters. Without one, each open opens a new ticket.
              */
             reference?: string | null;
@@ -2165,6 +2168,17 @@ export interface components {
             conflicts?: components["schemas"]["ConflictList"] | null;
             names?: components["schemas"]["NameListState"] | null;
         };
+        /**
+         * @description A ticket as an add-on reads it: as agents do, without internal notes, announcements and the
+         *     customer's key requesters, and with the add-on's own ticket reference.
+         */
+        AddonTicket: components["schemas"]["TicketDetail"] & {
+            /**
+             * @description Your ticket reference, when you opened the ticket with one; left out otherwise, and never
+             *     given to other add-ons.
+             */
+            reference?: string | null;
+        };
         AddonTicketOpened: {
             /** Format: int64 */
             number: number;
@@ -2175,10 +2189,7 @@ export interface components {
             /** Format: int64 */
             number: number;
             priority: components["schemas"]["Priority"];
-            /**
-             * @description Your own reference for the ticket, when you opened it with one; another add-on's is not
-             *     given.
-             */
+            /** @description Your ticket reference, when you opened the ticket with one; another add-on's is not given. */
             reference?: string | null;
             /**
              * @description The address a reply goes to: the one the requester last wrote from on the ticket, else the
@@ -3393,11 +3404,6 @@ export interface components {
             priority: components["schemas"]["Priority"];
             /** @description Open proposals of add-ons such as the Assistant. */
             proposals: components["schemas"]["ProposalView"][];
-            /**
-             * @description The add-on's own reference for the ticket, given only to the add-on that opened it with
-             *     one: never to agents or other add-ons.
-             */
-            reference?: string | null;
             requester?: components["schemas"]["Requester"] | null;
             /** @description Services of the help desk the ticket is about. */
             services: components["schemas"]["LinkedService"][];
@@ -3426,7 +3432,7 @@ export interface components {
             /** @description The state the ticket left. */
             old_state: components["schemas"]["TicketState"];
             /**
-             * @description Your own reference for the ticket, when you opened it with one; never sent to other
+             * @description Your ticket reference, when you opened the ticket with one; never sent to other
              *     add-ons. The core adds it as it delivers the event and does not keep it in the event.
              */
             reference?: string | null;
@@ -4028,7 +4034,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The ticket the add-on opened before with the same reference, unchanged */
+            /** @description The number of the ticket the add-on opened before with the same ticket reference, unchanged */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4075,7 +4081,10 @@ export interface operations {
     ticket_by_reference: {
         parameters: {
             query: {
-                /** @description The reference the add-on gave the ticket when it opened it, compared exactly once trimmed. */
+                /**
+                 * @description The ticket reference the add-on gave the ticket when it opened it, compared exactly once
+                 *     trimmed.
+                 */
                 reference: string;
             };
             header?: never;
@@ -4089,7 +4098,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TicketDetail"];
+                    "application/json": components["schemas"]["AddonTicket"];
                 };
             };
             401: {
@@ -4170,7 +4179,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TicketDetail"];
+                    "application/json": components["schemas"]["AddonTicket"];
                 };
             };
             401: {

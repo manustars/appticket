@@ -8,7 +8,7 @@ Apache-2.0, like the rest of `sdk/`.
   `TicketStateChanged` carries the old and new `TicketState` and `changed_by`, a
   `StateChangedBy`: an `Agent` with their `id` and `name`, a `Message` that reopened the ticket,
   an `Addon`, by name, that resolved a ticket it opened, or `Other` for a kind of changer this
-  version does not know; and the add-on's own `reference` for the ticket, when it opened it with
+  version does not know; and the add-on's ticket reference (`reference`), when it opened it with
   one.
 - `signature`: `Verifier` checks `hd-signature` (HMAC-SHA-256 over `<hd-timestamp>.<raw body>`) in
   constant time and refuses timestamps more than five minutes off; its clock can be replaced in
@@ -35,7 +35,7 @@ Apache-2.0, like the rest of `sdk/`.
   per language (`{"en": …, "it": …}`) that `propose` sends; `in_english` makes one with only an
   English sentence, which agents in other languages then read.
 - `tickets`: `NewTicket`, the ticket without a requester that `open_ticket` sends, with the
-  add-on's own `reference` for it, such as the id of the problem it is about; `open_ticket`
+  add-on's ticket reference (`reference`), such as the id of the problem it is about; `open_ticket`
   answers `OpenedTicket`, whose `created` is false when the reference named a ticket the add-on
   opened before, which the core answers unchanged instead of opening a second one. A `Ticket` and
   a `TicketSummary` the add-on reads carry its own `reference`, never another add-on's;
