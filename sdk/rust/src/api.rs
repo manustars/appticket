@@ -217,9 +217,10 @@ pub struct Ticket {
     /// The add-on that opened the ticket, by name, when an add-on did.
     #[serde(default)]
     pub opened_by_addon: Option<String>,
-    /// Whether an agent has worked on the ticket: it has an assignee, or an agent wrote a reply,
-    /// a note or an announcement on it; notes of add-ons do not count. The notes themselves are
-    /// never given to add-ons. True from a core that does not say, so that an add-on resolving
+    /// Whether an agent has worked on the ticket: once they have been its assignee, written a
+    /// reply, a note or an announcement on it, or changed it by hand (its state, priority, links,
+    /// customer or parent), and so for good; notes of add-ons and messages received do not
+    /// count. The notes themselves are never given to add-ons. True from a core that does not say, so that an add-on resolving
     /// only tickets nobody worked on leaves them alone.
     #[serde(default = "worked_on_unless_said")]
     pub worked_on_by_agent: bool,

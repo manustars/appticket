@@ -77,6 +77,8 @@ pub async fn attach(db: &PgPool, child: i64, parent: i64) -> Result<()> {
         .bind(p.id)
         .execute(&mut *tx)
         .await?;
+    crate::tickets::worked_on(&mut tx, c.id).await?;
+    crate::tickets::worked_on(&mut tx, p.id).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -94,6 +96,10 @@ pub async fn detach(db: &PgPool, child: i64) -> Result<()> {
         .bind(c.id)
         .execute(&mut *tx)
         .await?;
+    crate::tickets::worked_on(&mut tx, c.id).await?;
+    if let Some(parent) = c.parent {
+        crate::tickets::worked_on(&mut tx, parent).await?;
+    }
     tx.commit().await?;
     Ok(())
 }

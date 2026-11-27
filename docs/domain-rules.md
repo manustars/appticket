@@ -250,8 +250,10 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
 - An add-on allowed to work tickets opens tickets without a requester for a customer, with a
   priority, assets and services; it adds notes to any ticket and resolves the tickets it opened,
   when they are open or waiting. It never replies and changes nothing else on tickets. It reads
-  whether an agent has worked on a ticket (an assignee, a reply, a note or an announcement by an
-  agent), never the notes themselves.
+  whether an agent has worked on a ticket, never the notes themselves: an agent has once they
+  have been its assignee, written a reply, a note or an announcement on it, or changed it by hand
+  (its state, priority, links, customer or parent), and it stays so, also once they are
+  unassigned. Notes of add-ons and messages received are no work of an agent.
 - Add-ons registered for `ticket.state_changed` are told of every change of a ticket's state,
   once, with the state it left, the state it reached and who changed it: an agent, a received
   message that reopened it, or the add-on that resolved a ticket it opened. A move to the state
@@ -259,7 +261,7 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
 - An alert opens a ticket of the customer of the asset it is about, only when the monitoring
   add-on's rules say so, and at most one ticket per problem of the monitoring system. When the
   problem recovers, the add-on adds a note and resolves the ticket only if no agent has worked on
-  it (no assignee, no reply, note or announcement by an agent), unless its rule says otherwise.
+  it (as above), unless its rule says otherwise.
 
 ## Assistant
 

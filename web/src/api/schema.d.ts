@@ -3185,8 +3185,10 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
             /**
-             * @description Whether an agent has worked on the ticket: it has an assignee, or an agent wrote a reply,
-             *     a note or an announcement on it. Notes of add-ons and messages received do not count.
+             * @description Whether an agent has worked on the ticket: once they have been its assignee, written a
+             *     reply, a note or an announcement on it, or changed it by hand (its state, priority, links,
+             *     customer or parent). It stays so, also once the agent is unassigned. Notes of add-ons and
+             *     messages received do not count.
              */
             worked_on_by_agent: boolean;
         };

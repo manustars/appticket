@@ -92,9 +92,9 @@ closed ticket never moves again.
 | `message` | A received message joined the ticket and reopened it. Its sender is not always the ticket's requester: a key requester's answer, for one, joins the ticket too. | `message_id`: the message, which `message.received` announces too. |
 | `addon` | An add-on resolved a ticket it opened, with `POST /api/addon/tickets/{number}/resolve`; `new_state` is then `resolved`. | `addon`: the add-on's name, as in `opened_by_addon`. |
 
-More kinds may come: skip a `kind` you do not know. Receiving the event needs no scope; reading the ticket afterwards needs
-`tickets:read`. A ticket being opened is no change of state: it is announced by `ticket.opened`
-or `message.received`.
+More kinds may come: skip a `kind` you do not know. Receiving the event needs no scope; reading
+the ticket afterwards needs `tickets:read`. A ticket being opened is no change of state: it is
+announced by `ticket.opened` or `message.received`.
 
 ## Live details: core to add-on
 
@@ -349,11 +349,13 @@ agent's resolution, a message that joins the ticket reopens it.
 The core does not refuse a ticket an agent has worked on: whether to resolve it then is the
 add-on's rule ([ADR 0010](../docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md):
 by default, only when no agent has). So that it can tell, a ticket read with `tickets:read` says
-`worked_on_by_agent`: `true` once it has an assignee, or an agent wrote a reply (sent or still in
-the outbox), a note or an announcement on it. Notes of add-ons, the opener's description
-included, and messages received do not count, and the notes themselves are still not given. Read
-the ticket just before resolving it: an agent may pick it up in between, so an add-on that needs
-both calls holds both scopes, `tickets:read` and `tickets:write`.
+`worked_on_by_agent`: `true` once an agent has been its assignee, written a reply (sent or still
+in the outbox), a note or an announcement on it, or changed it by hand: its state, priority,
+assets or services, customer or parent. It stays `true`, also once the agent is unassigned or the
+ticket resolved again. Notes of add-ons, the opener's description included, and messages received
+do not count, and the notes themselves are still not given. Read the ticket just before resolving
+it: an agent may pick it up in between, so an add-on that needs both calls holds both scopes,
+`tickets:read` and `tickets:write`.
 
 An add-on never replies, assigns, or changes anything else on a ticket: its token opens none of
 the agents' calls.

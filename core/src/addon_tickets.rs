@@ -115,25 +115,24 @@ pub async fn add_note(db: &PgPool, addon: Uuid, number: i64, body: &str) -> Resu
 /// for the add-on to weigh (`worked_on_by_agent` in its view of the ticket), not a refusal.
 pub async fn resolve(db: &PgPool, addon: Uuid, number: i64) -> Result<()> {
     let mut tx = db.begin().await?;
-    let (ticket, state, opener, name): (Uuid, TicketState, Option<Uuid>, String) = sqlx::query_as(
-        "SELECT t.id, t.state, t.opened_by_addon_id, a.name
-         FROM tickets t, addons a WHERE t.number = $1 AND a.id = $2 FOR UPDATE OF t",
+    let (ticket, state) = crate::tickets::lock(&mut tx, number).await?;
+    let (opener, name): (Option<Uuid>, String) = sqlx::query_as(
+        "SELECT t.opened_by_addon_id, a.name FROM tickets t, addons a
+         WHERE t.id = $1 AND a.id = $2",
     )
-    .bind(number)
+    .bind(ticket)
     .bind(addon)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or(Error::NotFound("ticket"))?;
+    .fetch_one(&mut *tx)
+    .await?;
     if opener != Some(addon) {
         return rule(format!(
             "the add-on {name} did not open the ticket #{number}: an add-on resolves only the \
              tickets it opened"
         ));
     }
-    match state {
-        TicketState::Closed => return rule("the ticket is closed; a closed ticket cannot change"),
-        TicketState::Resolved => return Ok(()),
-        TicketState::Open | TicketState::Waiting => {}
+    crate::tickets::not_closed(state)?;
+    if state == TicketState::Resolved {
+        return Ok(());
     }
     crate::tickets::change_state(
         &mut tx,
@@ -636,15 +635,18 @@ mod tests {
         assert!(testing::state_changes(&db).await.is_empty());
     }
 
-    /// An agent has worked on a ticket once it has an assignee, or an agent wrote a reply, a note
-    /// or an announcement on it; notes of add-ons, its opener's included, and messages received
-    /// do not count.
+    /// An agent has worked on a ticket once they have been its assignee, written a reply, a note
+    /// or an announcement on it, or changed it by hand: its state, priority, links, customer or
+    /// parent. It stays so: unassigning the agent changes nothing. Notes of add-ons, its
+    /// opener's included, and messages received do not count.
     #[sqlx::test]
     async fn a_ticket_says_whether_an_agent_has_worked_on_it(db: PgPool) {
         let northgate = testing::help_desk(&db).await;
         let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
         let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
         crate::key_requesters::mark(&db, lena, None).await.unwrap();
+        let server = testing::asset(&db, brightfield, "Server", "SRV-01").await;
         let marco = testing::agent(&db, "marco@northgate.test").await;
         let watchtower = addon(&db, "watchtower").await;
         let pinger = addon(&db, "pinger").await;
@@ -686,6 +688,7 @@ mod tests {
         .execute(&db)
         .await
         .unwrap();
+        resolve(&db, watchtower, untouched).await.unwrap();
         assert_eq!(
             detail(&db, untouched).await.unwrap().timeline.len(),
             4,
@@ -699,7 +702,7 @@ mod tests {
             .unwrap();
         assert!(worked_on(assigned).await, "an assignee");
         crate::tickets::assign(&db, assigned, None).await.unwrap();
-        assert!(!worked_on(assigned).await, "no assignee any more");
+        assert!(worked_on(assigned).await, "still, once unassigned");
 
         let noted = opened("UPS on battery").await;
         crate::tickets::add_note(&db, noted, marco, "Called the site.")
@@ -721,26 +724,247 @@ mod tests {
         .unwrap();
         assert!(worked_on(replied).await, "an agent's reply, even unsent");
 
+        let reopened = opened("Link down").await;
+        resolve(&db, watchtower, reopened).await.unwrap();
+        crate::tickets::set_state(&db, reopened, TicketState::Open, marco)
+            .await
+            .unwrap();
+        assert!(worked_on(reopened).await, "reopened by hand, with no note");
+
+        let urgent = opened("RAID degraded").await;
+        crate::tickets::set_priority(&db, urgent, Priority::Urgent)
+            .await
+            .unwrap();
+        assert!(worked_on(urgent).await, "a priority set by hand");
+
+        let linked = opened("Fan failure").await;
+        crate::catalog::link_asset(&db, linked, server, true)
+            .await
+            .unwrap();
+        assert!(worked_on(linked).await, "an asset linked by hand");
+
+        let moved = opened("Printer offline").await;
+        crate::tickets::move_to_customer(&db, moved, harbor, crate::tickets::RequesterMove::Remove)
+            .await
+            .unwrap();
+        assert!(worked_on(moved).await, "moved to another customer");
+
         let outage = open(&db, watchtower, &ticket_for(northgate, "Mail relay down"))
             .await
             .unwrap();
-        crate::parents::attach(&db, untouched, outage)
+        let child = opened("Mail bounces").await;
+        crate::parents::attach(&db, child, outage).await.unwrap();
+        assert!(worked_on(child).await, "attached to a parent by hand");
+        assert!(worked_on(outage).await, "a child attached to it by hand");
+        let split = open(&db, watchtower, &ticket_for(northgate, "Relay slow"))
             .await
             .unwrap();
-        assert!(!worked_on(outage).await);
+        let leaving = opened("Mail delayed").await;
+        let attach = |child: i64, parent: i64| {
+            let db = db.clone();
+            async move {
+                sqlx::query(
+                    "UPDATE tickets SET parent_id = (SELECT id FROM tickets WHERE number = $1)
+                     WHERE number = $2",
+                )
+                .bind(parent)
+                .bind(child)
+                .execute(&db)
+                .await
+                .unwrap();
+            }
+        };
+        attach(leaving, split).await;
+        assert!(!worked_on(split).await && !worked_on(leaving).await);
+        crate::parents::detach(&db, leaving).await.unwrap();
+        assert!(worked_on(leaving).await, "detached by hand");
+        assert!(worked_on(split).await, "a child detached from it by hand");
+        let announcing = open(&db, watchtower, &ticket_for(northgate, "Backup site down"))
+            .await
+            .unwrap();
+        let affected = testing::ticket(&db, brightfield, None, "b1@brightfield.test").await;
+        attach(affected, announcing).await;
+        assert!(!worked_on(announcing).await);
         crate::announcements::send(
             &db,
             &testing::sender(),
-            outage,
+            announcing,
             marco,
-            "The mail relay is down.",
+            "The backup site is down.",
         )
         .await
         .unwrap();
-        assert!(worked_on(outage).await, "an agent's announcement");
+        assert!(worked_on(announcing).await, "an agent's announcement");
+        assert!(!worked_on(untouched).await, "nothing reached the first one");
+    }
+
+    /// The database keeps "worked on" also when the code is bypassed: an assignee and an agent's
+    /// note or message mark the ticket, a note of an add-on does not, and nothing clears the mark.
+    /// (An announcement, which needs its recipients, is checked through the code above.)
+    #[sqlx::test]
+    async fn the_database_keeps_a_ticket_worked_on(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let marco = testing::agent(&db, "marco@northgate.test").await;
+        let watchtower = addon(&db, "watchtower").await;
+        let worked_on = |n: i64| {
+            let db = db.clone();
+            async move {
+                sqlx::query_scalar::<_, bool>(
+                    "SELECT worked_on_by_agent FROM tickets WHERE number = $1",
+                )
+                .bind(n)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+            }
+        };
+        let run = |sql: &'static str, n: i64, who: Uuid| {
+            let db = db.clone();
+            async move {
+                sqlx::query(sql)
+                    .bind(n)
+                    .bind(who)
+                    .bind(Uuid::new_v4())
+                    .execute(&db)
+                    .await
+                    .unwrap();
+            }
+        };
+
+        let by_addon = testing::ticket(&db, brightfield, None, "a1@brightfield.test").await;
+        run(
+            "INSERT INTO notes (id, ticket_id, addon_id, body)
+             SELECT $3, id, $2, 'Checked.' FROM tickets WHERE number = $1",
+            by_addon,
+            watchtower,
+        )
+        .await;
+        assert!(!worked_on(by_addon).await, "a note of an add-on");
+
+        let assigned = testing::ticket(&db, brightfield, None, "a2@brightfield.test").await;
+        run(
+            "UPDATE tickets SET assignee_id = $2 WHERE number = $1 AND $3::uuid IS NOT NULL",
+            assigned,
+            marco,
+        )
+        .await;
+        run(
+            "UPDATE tickets SET assignee_id = NULL, worked_on_by_agent = false
+             WHERE number = $1 AND $2::uuid IS NOT NULL AND $3::uuid IS NOT NULL",
+            assigned,
+            marco,
+        )
+        .await;
         assert!(
-            !worked_on(untouched).await,
-            "an announcement from its parent is no work on the child"
+            worked_on(assigned).await,
+            "an assignee, and nothing clears it"
+        );
+
+        let noted = testing::ticket(&db, brightfield, None, "a3@brightfield.test").await;
+        run(
+            "INSERT INTO notes (id, ticket_id, author_id, body)
+             SELECT $3, id, $2, 'Checked.' FROM tickets WHERE number = $1",
+            noted,
+            marco,
+        )
+        .await;
+        assert!(worked_on(noted).await, "an agent's note");
+
+        let lena = testing::requester(&db, brightfield, "lena@brightfield.test").await;
+        let replied = testing::ticket(&db, brightfield, Some(lena), "a4@brightfield.test").await;
+        run(
+            "INSERT INTO messages (id, ticket_id, direction, author_id, from_address, to_address,
+                                   subject, body_text)
+             SELECT $3, id, 'outbound', $2, 'helpdesk@helpdesk.test', 'lena@brightfield.test',
+                    'Re: Printer jams', 'Done.'
+             FROM tickets WHERE number = $1",
+            replied,
+            marco,
+        )
+        .await;
+        assert!(worked_on(replied).await, "an agent's message");
+    }
+
+    /// Tickets from before "worked on" was kept are marked by what they show of agents: an
+    /// assignee, an agent's note or message, or a change of state by an agent among the events.
+    #[sqlx::test(migrations = false)]
+    async fn tickets_from_before_are_marked_by_what_agents_did(db: PgPool) {
+        let migrator = sqlx::migrate!();
+        let this = migrator
+            .iter()
+            .find(|m| &*m.description == "addon resolves tickets")
+            .unwrap()
+            .version;
+        migrator.run_to(this - 1, &db).await.unwrap();
+        // Written directly: the code of today writes columns this schema does not have yet.
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let marco = testing::agent(&db, "marco@northgate.test").await;
+        let watchtower = addon(&db, "watchtower").await;
+        let ticket = |id: &'static str| {
+            let db = db.clone();
+            async move { testing::ticket(&db, brightfield, None, id).await }
+        };
+        let run = |sql: &'static str, n: i64, who: Uuid| {
+            let db = db.clone();
+            async move {
+                sqlx::query(sql)
+                    .bind(n)
+                    .bind(who)
+                    .bind(Uuid::new_v4())
+                    .execute(&db)
+                    .await
+                    .unwrap();
+            }
+        };
+        let untouched = ticket("u1@brightfield.test").await;
+        run(
+            "INSERT INTO notes (id, ticket_id, addon_id, body)
+             SELECT $3, id, $2, 'Checked.' FROM tickets WHERE number = $1",
+            untouched,
+            watchtower,
+        )
+        .await;
+        let assigned = ticket("u2@brightfield.test").await;
+        run(
+            "UPDATE tickets SET assignee_id = $2 WHERE number = $1 AND $3::uuid IS NOT NULL",
+            assigned,
+            marco,
+        )
+        .await;
+        let noted = ticket("u3@brightfield.test").await;
+        run(
+            "INSERT INTO notes (id, ticket_id, author_id, body)
+             SELECT $3, id, $2, 'Checked.' FROM tickets WHERE number = $1",
+            noted,
+            marco,
+        )
+        .await;
+        let moved = ticket("u4@brightfield.test").await;
+        run(
+            "INSERT INTO events (id, kind, data)
+             VALUES ($3, 'ticket.state_changed', jsonb_build_object('ticket_number', $1::bigint,
+                 'old_state', 'open', 'new_state', 'waiting', 'changed_by',
+                 jsonb_build_object('kind', 'agent',
+                     'agent', jsonb_build_object('id', $2::uuid, 'name', 'marco'))))",
+            moved,
+            marco,
+        )
+        .await;
+
+        migrator.run(&db).await.unwrap();
+        let marked: Vec<(i64, bool)> =
+            sqlx::query_as("SELECT number, worked_on_by_agent FROM tickets ORDER BY number")
+                .fetch_all(&db)
+                .await
+                .unwrap();
+        assert_eq!(
+            marked,
+            [
+                (untouched, false),
+                (assigned, true),
+                (noted, true),
+                (moved, true)
+            ]
         );
     }
 
