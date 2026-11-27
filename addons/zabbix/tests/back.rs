@@ -151,6 +151,16 @@ async fn an_agent_resolving_or_closing_the_ticket_acknowledges_the_problem_and_c
         .await
         .unwrap();
     core.set_state(own.number, "resolved").await;
+    // Nor does one whose problem Zabbix no longer has, such as one its housekeeper removed.
+    let gone = core
+        .addon()
+        .open_ticket(&hd_addon_sdk::NewTicket {
+            reference: Some("999999999".into()),
+            ..hd_addon_sdk::NewTicket::new(brightfield, "SRV-02: Disk almost full")
+        })
+        .await
+        .unwrap();
+    core.set_state(gone.number, "resolved").await;
 
     core.set_state(closable.2, "resolved").await;
     core.set_state(fixed.2, "closed").await;
