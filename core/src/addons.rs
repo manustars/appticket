@@ -272,6 +272,9 @@ struct Due {
     data: Value,
     created_at: OffsetDateTime,
     attempts: i32,
+    /// The add-on's reference for the ticket a `ticket.state_changed` is about, when it opened
+    /// the ticket with one: added to the data for that add-on only, never kept in the event.
+    reference: Option<String>,
 }
 
 /// Delivers every due event to enabled add-ons, one transaction each. Returns how many arrived.
@@ -281,7 +284,11 @@ pub async fn deliver_due(db: &PgPool, client: &reqwest::Client) -> anyhow::Resul
         let mut tx = db.begin().await?;
         let due: Option<Due> = sqlx::query_as(
             "SELECT d.event_id, d.addon_id, a.name AS addon, a.url, a.event_secret,
-                    e.kind, e.data, e.created_at, d.attempts
+                    e.kind, e.data, e.created_at, d.attempts,
+                    (SELECT t.addon_reference FROM tickets t
+                     WHERE e.kind = 'ticket.state_changed'
+                       AND t.number = (e.data ->> 'ticket_number')::bigint
+                       AND t.opened_by_addon_id = d.addon_id) AS reference
              FROM event_deliveries d
              JOIN addons a ON a.id = d.addon_id
              JOIN events e ON e.id = d.event_id
@@ -294,9 +301,13 @@ pub async fn deliver_due(db: &PgPool, client: &reqwest::Client) -> anyhow::Resul
         .bind(MAX_ATTEMPTS)
         .fetch_optional(&mut *tx)
         .await?;
-        let Some(due) = due else {
+        let Some(mut due) = due else {
             return Ok(delivered);
         };
+        // The same on every attempt: a ticket keeps its reference.
+        if let (Some(reference), Some(data)) = (due.reference.take(), due.data.as_object_mut()) {
+            data.insert("reference".into(), Value::String(reference));
+        }
         let body = serde_json::to_vec(&Envelope {
             id: due.event_id,
             kind: &due.kind,

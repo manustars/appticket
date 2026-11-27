@@ -184,7 +184,8 @@ impl Priority {
     }
 }
 
-/// A ticket that is not closed, as listed by `GET /api/addon/tickets`.
+/// A ticket that is not closed, as listed by `GET /api/addon/tickets` and
+/// `GET /api/addon/tickets/opened`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TicketSummary {
     pub number: i64,
@@ -196,6 +197,10 @@ pub struct TicketSummary {
     /// one an agent last picked there, else the first they registered.
     #[serde(default)]
     pub requester_email: Option<String>,
+    /// The add-on's own reference for the ticket, when it opened it with one; never another
+    /// add-on's.
+    #[serde(default)]
+    pub reference: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
@@ -217,6 +222,10 @@ pub struct Ticket {
     /// The add-on that opened the ticket, by name, when an add-on did.
     #[serde(default)]
     pub opened_by_addon: Option<String>,
+    /// The add-on's own reference for the ticket, when it opened it with one; never another
+    /// add-on's.
+    #[serde(default)]
+    pub reference: Option<String>,
     /// Whether an agent has worked on the ticket: once they have been its assignee, written a
     /// reply, a note or an announcement on it, or changed it by hand (its state, even to the one
     /// it had, as when attaching an inbox message to it; its priority, links or customer; a child

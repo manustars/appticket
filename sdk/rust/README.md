@@ -8,13 +8,15 @@ Apache-2.0, like the rest of `sdk/`.
   `TicketStateChanged` carries the old and new `TicketState` and `changed_by`, a
   `StateChangedBy`: an `Agent` with their `id` and `name`, a `Message` that reopened the ticket,
   an `Addon`, by name, that resolved a ticket it opened, or `Other` for a kind of changer this
-  version does not know.
+  version does not know; and the add-on's own `reference` for the ticket, when it opened it with
+  one.
 - `signature`: `Verifier` checks `hd-signature` (HMAC-SHA-256 over `<hd-timestamp>.<raw body>`) in
   constant time and refuses timestamps more than five minutes off; its clock can be replaced in
   tests. `sign` computes the header, for testing an add-on.
 - `Client`: the add-on API (`whoami`, `customers`, `customer_assets`, `customer_services`,
   `open_tickets_of_requester`, `open_tickets_of_customer`, `ticket`, `propose`, `open_ticket`,
-  `add_note` and `resolve_ticket` for the tickets the add-on opens, `supply_asset`,
+  `ticket_by_reference`, `opened_tickets`, `add_note` and `resolve_ticket` for the tickets the
+  add-on opens, `supply_asset`,
   `update_asset`, `retire_asset` for the assets the add-on is the source of, `unlink_asset`
   for those it is linked to, `replace_names` for the names of its system, and
   `replace_conflicts` for the conflicts it reports). Errors carry the
@@ -32,7 +34,13 @@ Apache-2.0, like the rest of `sdk/`.
 - `proposals`: `Content` and `Triage`, the same JSON as the core, and `Rationale`, one sentence
   per language (`{"en": …, "it": …}`) that `propose` sends; `in_english` makes one with only an
   English sentence, which agents in other languages then read.
-- `tickets`: `NewTicket`, the ticket without a requester that `open_ticket` sends.
+- `tickets`: `NewTicket`, the ticket without a requester that `open_ticket` sends, with the
+  add-on's own `reference` for it, such as the id of the problem it is about; `open_ticket`
+  answers `OpenedTicket`, whose `created` is false when the reference named a ticket the add-on
+  opened before, which the core answers unchanged instead of opening a second one. A `Ticket` and
+  a `TicketSummary` the add-on reads carry its own `reference`, never another add-on's;
+  `ticket_by_reference` reads the ticket it opened with one, and `opened_tickets` lists those it
+  opened that are not closed.
 - `names`: `SystemNames`, the whole name list of the add-on's system, under the system's
   name, that `replace_names` sends, such as a monitoring tool's host groups: each a `SystemName`,
   at the `top` or `nested_in` another of the list. Agents who manage customers pick the

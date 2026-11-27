@@ -18,6 +18,7 @@ mod addon_catalog;
 mod addon_state;
 mod live_details;
 mod name_lists;
+mod ticket_references;
 
 /// A client calling with the token of a new add-on called `name` that has `scopes`.
 async fn addon(db: &PgPool, api: &Client, name: &str, scopes: &[&str]) -> Client {
@@ -2537,6 +2538,7 @@ fn the_specification_describes_the_ticket_an_addon_opens() {
             "customer_id",
             "description",
             "priority",
+            "reference",
             "service_ids",
             "title"
         ]
@@ -2562,7 +2564,13 @@ fn the_specification_describes_the_event_ticket_state_changed() {
     let (_, fields) = schema(&envelope["data"]["$ref"]);
     assert_eq!(
         fields,
-        ["changed_by", "new_state", "old_state", "ticket_number"]
+        [
+            "changed_by",
+            "new_state",
+            "old_state",
+            "reference",
+            "ticket_number"
+        ]
     );
 }
 

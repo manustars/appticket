@@ -33,4 +33,4 @@ pub use live_details::{DetailState, Field, Link, LiveDetails};
 pub use names::{SystemName, SystemNames};
 pub use proposals::{Content, Rationale, Target, Triage};
 pub use signature::{Verifier, VerifyError};
-pub use tickets::NewTicket;
+pub use tickets::{NewTicket, OpenedTicket};

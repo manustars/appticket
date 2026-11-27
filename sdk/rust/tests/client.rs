@@ -10,7 +10,7 @@ use axum::{
 };
 use hd_addon_sdk::api::{Direction, Priority, TicketState, TimelineEntry};
 use hd_addon_sdk::proposals::in_english;
-use hd_addon_sdk::{Client, Content, Error, NewTicket, Rationale, Target, Triage};
+use hd_addon_sdk::{Client, Content, Error, NewTicket, OpenedTicket, Rationale, Target, Triage};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -151,7 +151,11 @@ async fn fake_core() -> (String, Posted) {
                     if body["title"] == json!("") {
                         return problem(StatusCode::CONFLICT, "A ticket needs a title.");
                     }
+                    let again = body["reference"] == json!("4711");
                     posted.lock().unwrap().push(body);
+                    if again {
+                        return (StatusCode::OK, Json(json!({"number": 31})));
+                    }
                     (StatusCode::CREATED, Json(json!({"number": 31})))
                 }
             }),
@@ -350,7 +354,7 @@ async fn tickets_are_opened_and_noted_in_the_core_shape() {
     let customer = Uuid::parse_str(CUSTOMER).unwrap();
     let server = Uuid::parse_str("5a1d0c3e-7b2f-4e6a-9c8d-1f0e2d3c4b5a").unwrap();
 
-    let number = client
+    let opened = client
         .open_ticket(&NewTicket {
             description: Some("Disk /var is 97% full.".into()),
             priority: Some(Priority::High),
@@ -359,11 +363,32 @@ async fn tickets_are_opened_and_noted_in_the_core_shape() {
         })
         .await
         .unwrap();
-    assert_eq!(number, 31);
+    assert_eq!(
+        opened,
+        OpenedTicket {
+            number: 31,
+            created: true
+        }
+    );
     client
         .open_ticket(&NewTicket::new(customer, "Backup failed"))
         .await
         .unwrap();
+    let again = client
+        .open_ticket(&NewTicket {
+            reference: Some("4711".into()),
+            ..NewTicket::new(customer, "SRV-01: disk almost full")
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        again,
+        OpenedTicket {
+            number: 31,
+            created: false
+        },
+        "200: the ticket opened before with that reference"
+    );
     client.add_note(31, "Back to 60%.").await.unwrap();
     let refused = client
         .open_ticket(&NewTicket::new(customer, ""))
@@ -392,6 +417,11 @@ async fn tickets_are_opened_and_noted_in_the_core_shape() {
     );
     assert_eq!(
         posted[2],
+        json!({"customer_id": customer, "title": "SRV-01: disk almost full",
+            "asset_ids": [], "service_ids": [], "reference": "4711"})
+    );
+    assert_eq!(
+        posted[3],
         json!({"ticket": 31, "note": {"body": "Back to 60%."}})
     );
 }

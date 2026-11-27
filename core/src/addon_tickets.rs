@@ -1,7 +1,7 @@
 //! What an add-on with the scope `tickets:write` does on tickets (docs/domain-rules.md,
 //! "Add-ons"): it opens tickets without a requester for a customer, with a priority, assets and
-//! services, adds internal notes to any ticket and resolves the tickets it opened. It never replies
-//! and changes nothing else.
+//! services, and a reference of its own that names the ticket for good; it adds internal notes to
+//! any ticket and resolves the tickets it opened. It never replies and changes nothing else.
 
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -10,6 +10,9 @@ use uuid::Uuid;
 
 use crate::error::{Error, Result, rule};
 use crate::tickets::{NoteAuthor, Priority, StateChanger, TicketState};
+
+/// The longest reference an add-on gives a ticket, in characters, once trimmed.
+pub const MAX_REFERENCE_LENGTH: usize = 255;
 
 /// A ticket an add-on opens.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -31,12 +34,64 @@ pub struct NewTicket {
     /// Active services the customer uses that the ticket is about.
     #[serde(default)]
     pub service_ids: Vec<Uuid>,
+    /// The add-on's own reference for the ticket, such as the id of the problem it is about,
+    /// compared exactly once trimmed: it names this ticket for good, and opening again with it
+    /// answers this ticket, unchanged. Not blank, without control characters, at most
+    /// [`MAX_REFERENCE_LENGTH`] characters. Without one, each open opens a new ticket.
+    #[serde(default)]
+    #[schema(max_length = 255)]
+    pub reference: Option<String>,
 }
 
-/// Opens a ticket without a requester for `addon`; returns its number. The ticket, its links and
-/// its description are written together or not at all: an asset or service that does not fit
-/// refuses the whole ticket, with a sentence naming it.
-pub async fn open(db: &PgPool, addon: Uuid, new: &NewTicket) -> Result<i64> {
+/// The ticket an add-on opened, or the one it had opened before with the same reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Opened {
+    pub number: i64,
+    /// Opened now; false when the reference named a ticket the add-on had opened before.
+    pub created: bool,
+}
+
+/// `reference` trimmed, refused with a sentence when it does not fit.
+fn checked_reference(reference: &str) -> Result<&str> {
+    crate::name_lists::trimmed(reference, MAX_REFERENCE_LENGTH, || {
+        "a ticket's reference".to_owned()
+    })
+}
+
+/// The ticket `addon` opened with `reference`, compared exactly.
+async fn find<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    addon: Uuid,
+    reference: &str,
+) -> Result<Option<i64>> {
+    Ok(sqlx::query_scalar(
+        "SELECT number FROM tickets WHERE opened_by_addon_id = $1 AND addon_reference = $2",
+    )
+    .bind(addon)
+    .bind(reference)
+    .fetch_optional(db)
+    .await?)
+}
+
+/// Opens a ticket without a requester for `addon`. The ticket, its links and its description are
+/// written together or not at all: an asset or service that does not fit refuses the whole
+/// ticket, with a sentence naming it. With a reference the add-on gave before, it opens nothing
+/// and answers the ticket opened then, in any state and unchanged, whatever else `new` says; so
+/// does the second of two opens with the same reference at the same time.
+pub async fn open(db: &PgPool, addon: Uuid, new: &NewTicket) -> Result<Opened> {
+    let reference = new
+        .reference
+        .as_deref()
+        .map(checked_reference)
+        .transpose()?;
+    if let Some(reference) = reference
+        && let Some(number) = find(db, addon, reference).await?
+    {
+        return Ok(Opened {
+            number,
+            created: false,
+        });
+    }
     let title = new.title.trim();
     if title.is_empty() {
         return rule("a ticket needs a title");
@@ -64,9 +119,13 @@ pub async fn open(db: &PgPool, addon: Uuid, new: &NewTicket) -> Result<i64> {
         crate::catalog::ensure_service_fits(&mut tx, service, new.customer_id).await?;
     }
     let id = Uuid::new_v4();
-    let number: i64 = sqlx::query_scalar(
-        "INSERT INTO tickets (id, customer_id, title, priority, opened_by_addon_id)
-         VALUES ($1, $2, $3, $4, $5)
+    // An open of the add-on with the same reference at the same time makes this one wait: once
+    // that one is written, this one writes nothing and answers its ticket.
+    let number: Option<i64> = sqlx::query_scalar(
+        "INSERT INTO tickets (id, customer_id, title, priority, opened_by_addon_id,
+                              addon_reference)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (opened_by_addon_id, addon_reference) DO NOTHING
          RETURNING number",
     )
     .bind(id)
@@ -74,8 +133,20 @@ pub async fn open(db: &PgPool, addon: Uuid, new: &NewTicket) -> Result<i64> {
     .bind(title)
     .bind(new.priority.unwrap_or(Priority::Normal))
     .bind(addon)
-    .fetch_one(&mut *tx)
+    .bind(reference)
+    .fetch_optional(&mut *tx)
     .await?;
+    let Some(number) = number else {
+        tx.rollback().await?;
+        let reference = reference.expect("without a reference nothing conflicts");
+        let number = find(db, addon, reference).await?.ok_or_else(|| {
+            anyhow::anyhow!("the ticket with the reference {reference} is not there")
+        })?;
+        return Ok(Opened {
+            number,
+            created: false,
+        });
+    };
     sqlx::query(
         "INSERT INTO ticket_assets (ticket_id, customer_id, asset_id)
          SELECT $1, $2, unnest($3::uuid[]) ON CONFLICT DO NOTHING",
@@ -101,7 +172,31 @@ pub async fn open(db: &PgPool, addon: Uuid, new: &NewTicket) -> Result<i64> {
     }
     crate::tickets::emit_opened(&mut tx, number).await?;
     tx.commit().await?;
-    Ok(number)
+    Ok(Opened {
+        number,
+        created: true,
+    })
+}
+
+/// The number of the ticket `addon` opened with `reference`, compared exactly once trimmed, in
+/// any state; not found for a reference it never gave, another add-on's included.
+pub async fn by_reference(db: &PgPool, addon: Uuid, reference: &str) -> Result<i64> {
+    find(db, addon, reference.trim())
+        .await?
+        .ok_or(Error::NotFound("ticket"))
+}
+
+/// The reference `addon` gave the ticket, when it opened it with one; none for a ticket another
+/// add-on, an agent or a message opened.
+pub async fn reference_of(db: &PgPool, addon: Uuid, number: i64) -> Result<Option<String>> {
+    Ok(sqlx::query_scalar::<_, Option<String>>(
+        "SELECT addon_reference FROM tickets WHERE number = $1 AND opened_by_addon_id = $2",
+    )
+    .bind(number)
+    .bind(addon)
+    .fetch_optional(db)
+    .await?
+    .flatten())
 }
 
 /// Adds an internal note by `addon` to any ticket, closed ones too.
@@ -173,6 +268,7 @@ mod tests {
             priority: None,
             asset_ids: Vec::new(),
             service_ids: Vec::new(),
+            reference: None,
         }
     }
 
@@ -212,7 +308,8 @@ mod tests {
             },
         )
         .await
-        .unwrap();
+        .unwrap()
+        .number;
 
         let ticket = detail(&db, number).await.unwrap();
         assert_eq!(ticket.title, "SRV-01: disk almost full");
@@ -244,7 +341,8 @@ mod tests {
 
         let plain = open(&db, watchtower, &ticket_for(brightfield, "Backup failed"))
             .await
-            .unwrap();
+            .unwrap()
+            .number;
         let ticket = detail(&db, plain).await.unwrap();
         assert_eq!(ticket.priority, Priority::Normal, "the default");
         assert!(ticket.timeline.is_empty(), "no description, no note");
@@ -435,7 +533,8 @@ mod tests {
         let watchtower = addon(&db, "watchtower").await;
         let n = open(&db, watchtower, &ticket_for(brightfield, "Backup failed"))
             .await
-            .unwrap();
+            .unwrap()
+            .number;
 
         crate::tickets::reply(
             &db,
@@ -547,16 +646,19 @@ mod tests {
             &ticket_for(brightfield, "SRV-01: disk full"),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .number;
         let backup = open(&db, watchtower, &ticket_for(brightfield, "Backup failed"))
             .await
-            .unwrap();
+            .unwrap()
+            .number;
         testing::set_state(&db, backup, TicketState::Waiting)
             .await
             .unwrap();
         let done = open(&db, watchtower, &ticket_for(brightfield, "UPS on battery"))
             .await
-            .unwrap();
+            .unwrap()
+            .number;
         testing::set_state(&db, done, TicketState::Closed)
             .await
             .unwrap();
@@ -617,7 +719,8 @@ mod tests {
                 .unwrap();
         let by_another = open(&db, pinger, &ticket_for(brightfield, "Host unreachable"))
             .await
-            .unwrap();
+            .unwrap()
+            .number;
 
         for n in [by_hand, by_message, by_another] {
             match resolve(&db, watchtower, n).await {
@@ -667,6 +770,7 @@ mod tests {
                 )
                 .await
                 .unwrap()
+                .number
             }
         };
 
@@ -775,14 +879,16 @@ mod tests {
 
         let outage = open(&db, watchtower, &ticket_for(northgate, "Mail relay down"))
             .await
-            .unwrap();
+            .unwrap()
+            .number;
         let child = opened("Mail bounces").await;
         crate::parents::attach(&db, child, outage).await.unwrap();
         assert!(worked_on(child).await, "attached to a parent by hand");
         assert!(worked_on(outage).await, "a child attached to it by hand");
         let split = open(&db, watchtower, &ticket_for(northgate, "Relay slow"))
             .await
-            .unwrap();
+            .unwrap()
+            .number;
         let leaving = opened("Mail delayed").await;
         let attach = |child: i64, parent: i64| {
             let db = db.clone();
@@ -805,7 +911,8 @@ mod tests {
         assert!(worked_on(split).await, "a child detached from it by hand");
         let announcing = open(&db, watchtower, &ticket_for(northgate, "Backup site down"))
             .await
-            .unwrap();
+            .unwrap()
+            .number;
         let affected = opened("Backups late").await;
         attach(affected, announcing).await;
         assert!(!worked_on(announcing).await);
@@ -832,11 +939,13 @@ mod tests {
             &ticket_for(northgate, "Storage array down"),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .number;
         let written = opened("Shares unreachable").await;
         let quiet = open(&db, watchtower, &ticket_for(harbor, "Shares unreachable"))
             .await
-            .unwrap();
+            .unwrap()
+            .number;
         for child in [written, quiet] {
             attach(child, failure).await;
         }
@@ -1041,6 +1150,269 @@ mod tests {
                 (child, true),
             ]
         );
+    }
+
+    async fn event_count(db: &PgPool) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM events")
+            .fetch_one(db)
+            .await
+            .unwrap()
+    }
+
+    /// A reference names the ticket the add-on opened with it, for good: opening again with it
+    /// answers that ticket in any state, closed included, and changes nothing on it, whatever
+    /// else the request says; it opens nothing else and records no event.
+    #[sqlx::test]
+    async fn opening_again_with_a_reference_answers_the_same_ticket(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let harbor = testing::customer(&db, "Harbor Lane").await;
+        let watchtower = addon(&db, "watchtower").await;
+
+        let first = open(
+            &db,
+            watchtower,
+            &NewTicket {
+                reference: Some("  4711  ".into()),
+                description: Some("Disk /var is 97% full.".into()),
+                ..ticket_for(brightfield, "SRV-01: disk full")
+            },
+        )
+        .await
+        .unwrap();
+        assert!(first.created);
+        testing::set_state(&db, first.number, TicketState::Closed)
+            .await
+            .unwrap();
+        crate::customers::offboard(&db, brightfield).await.unwrap();
+        let events = event_count(&db).await;
+
+        let again = open(
+            &db,
+            watchtower,
+            &NewTicket {
+                reference: Some("4711".into()),
+                description: Some("Disk /var is 99% full.".into()),
+                priority: Some(Priority::Urgent),
+                asset_ids: vec![Uuid::new_v4()],
+                ..ticket_for(harbor, "   ")
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            again,
+            Opened {
+                number: first.number,
+                created: false
+            }
+        );
+        let ticket = detail(&db, first.number).await.unwrap();
+        assert_eq!(ticket.title, "SRV-01: disk full");
+        assert_eq!(ticket.customer.id, brightfield);
+        assert_eq!(ticket.priority, Priority::Normal);
+        assert_eq!(ticket.state, TicketState::Closed);
+        assert_eq!(ticket.timeline.len(), 1, "only the first description");
+        assert_eq!(ticket_count(&db).await, 1);
+        assert_eq!(event_count(&db).await, events, "no event either");
+
+        // Tickets without a reference are opened anew each time, as before.
+        for _ in 0..2 {
+            let plain = open(&db, watchtower, &ticket_for(harbor, "Backup failed"))
+                .await
+                .unwrap();
+            assert!(plain.created);
+        }
+        assert_eq!(ticket_count(&db).await, 3);
+    }
+
+    /// References are the add-on's own: another add-on opens its own ticket with the same one,
+    /// and each finds only its own by reference, compared exactly once trimmed.
+    #[sqlx::test]
+    async fn an_addon_finds_its_own_tickets_by_reference(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let watchtower = addon(&db, "watchtower").await;
+        let pinger = addon(&db, "pinger").await;
+        let with = |reference: &str| NewTicket {
+            reference: Some(reference.into()),
+            ..ticket_for(brightfield, "Host unreachable")
+        };
+
+        let ours = open(&db, watchtower, &with("4711")).await.unwrap();
+        let theirs = open(&db, pinger, &with("4711")).await.unwrap();
+        assert!(theirs.created);
+        assert_ne!(ours.number, theirs.number);
+        let upper = open(&db, watchtower, &with("host-A")).await.unwrap();
+        let lower = open(&db, watchtower, &with("host-a")).await.unwrap();
+        assert!(lower.created, "case counts");
+        assert_ne!(upper.number, lower.number);
+        let plain = open(&db, watchtower, &ticket_for(brightfield, "Backup failed"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            by_reference(&db, watchtower, " 4711 ").await.unwrap(),
+            ours.number
+        );
+        assert_eq!(
+            by_reference(&db, pinger, "4711").await.unwrap(),
+            theirs.number
+        );
+        for (who, reference) in [(watchtower, "4712"), (pinger, "host-a"), (watchtower, "")] {
+            assert!(
+                matches!(
+                    by_reference(&db, who, reference).await,
+                    Err(Error::NotFound("ticket"))
+                ),
+                "{reference:?}"
+            );
+        }
+        assert_eq!(
+            reference_of(&db, watchtower, ours.number).await.unwrap(),
+            Some("4711".into())
+        );
+        assert_eq!(
+            reference_of(&db, pinger, ours.number).await.unwrap(),
+            None,
+            "another add-on's"
+        );
+        assert_eq!(
+            reference_of(&db, watchtower, plain.number).await.unwrap(),
+            None
+        );
+    }
+
+    /// A reference that is blank, holds a control character or is longer than the limit is
+    /// refused with a sentence, and nothing is opened; the longest one fits, in any characters.
+    #[sqlx::test]
+    async fn a_reference_that_does_not_fit_is_refused(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let watchtower = addon(&db, "watchtower").await;
+        let with = |reference: String| NewTicket {
+            reference: Some(reference),
+            ..ticket_for(brightfield, "Disk full")
+        };
+        let too_long = "é".repeat(MAX_REFERENCE_LENGTH + 1);
+        for (reference, expected) in [
+            (
+                "   ".to_owned(),
+                "a ticket's reference cannot be blank".to_owned(),
+            ),
+            (
+                "".to_owned(),
+                "a ticket's reference cannot be blank".to_owned(),
+            ),
+            (
+                "47\n11".to_owned(),
+                "a ticket's reference holds a control character".to_owned(),
+            ),
+            (
+                too_long,
+                format!("a ticket's reference is longer than {MAX_REFERENCE_LENGTH} characters"),
+            ),
+        ] {
+            match open(&db, watchtower, &with(reference.clone())).await {
+                Err(Error::Rule(why)) => assert_eq!(why, expected),
+                other => panic!("{reference:?}: {other:?}"),
+            }
+        }
+        assert_eq!(ticket_count(&db).await, 0);
+        let longest = "é".repeat(MAX_REFERENCE_LENGTH);
+        let opened = open(&db, watchtower, &with(longest.clone())).await.unwrap();
+        assert_eq!(
+            by_reference(&db, watchtower, &longest).await.unwrap(),
+            opened.number
+        );
+    }
+
+    /// The database keeps the rules of references also when the code is bypassed: one ticket per
+    /// reference of an add-on, a reference only on a ticket an add-on opened, trimmed, not blank,
+    /// without control characters and within the limit, and it stays as it was given.
+    #[sqlx::test]
+    async fn the_database_keeps_one_ticket_per_reference_of_an_addon(db: PgPool) {
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let watchtower = addon(&db, "watchtower").await;
+        let pinger = addon(&db, "pinger").await;
+        let insert = |addon: Option<Uuid>, reference: Option<String>| {
+            let db = db.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO tickets (id, customer_id, title, opened_by_addon_id,
+                                          addon_reference)
+                     VALUES ($1, $2, 'Disk full', $3, $4) RETURNING number",
+                )
+                .bind(Uuid::new_v4())
+                .bind(brightfield)
+                .bind(addon)
+                .bind(reference)
+                .fetch_one(&db)
+                .await
+                .map(|row| sqlx::Row::get::<i64, _>(&row, 0))
+                .map_err(|e| e.to_string())
+            }
+        };
+        let given = |r: &str| Some(r.to_owned());
+        let first = insert(Some(watchtower), given("4711")).await.unwrap();
+        assert!(
+            insert(Some(watchtower), given("4711")).await.is_err(),
+            "twice"
+        );
+        assert!(
+            insert(Some(pinger), given("4711")).await.is_ok(),
+            "another add-on's"
+        );
+        assert!(insert(Some(watchtower), None).await.is_ok());
+        assert!(insert(Some(watchtower), None).await.is_ok(), "none twice");
+        assert!(
+            insert(None, given("4712")).await.is_err(),
+            "nobody's reference"
+        );
+        for wrong in [" 4712", "4712 ", "", "47\t12", "47\u{7f}12"] {
+            assert!(
+                insert(Some(watchtower), given(wrong)).await.is_err(),
+                "{wrong:?}"
+            );
+        }
+        let longest = "é".repeat(MAX_REFERENCE_LENGTH);
+        assert!(insert(Some(watchtower), given(&longest)).await.is_ok());
+        let too_long = "é".repeat(MAX_REFERENCE_LENGTH + 1);
+        assert!(insert(Some(watchtower), given(&too_long)).await.is_err());
+
+        let plain = insert(Some(watchtower), None).await.unwrap();
+        let change = |sql: &'static str, number: i64| {
+            let db = db.clone();
+            async move {
+                sqlx::query(sql)
+                    .bind(number)
+                    .bind(pinger)
+                    .execute(&db)
+                    .await
+                    .is_ok()
+            }
+        };
+        for sql in [
+            "UPDATE tickets SET addon_reference = '4713' WHERE number = $1 AND $2::uuid IS NOT NULL",
+            "UPDATE tickets SET addon_reference = NULL WHERE number = $1 AND $2::uuid IS NOT NULL",
+            "UPDATE tickets SET opened_by_addon_id = $2 WHERE number = $1",
+        ] {
+            assert!(!change(sql, first).await, "{sql}");
+        }
+        assert!(
+            !change(
+                "UPDATE tickets SET addon_reference = '4713' WHERE number = $1 AND $2::uuid IS NOT NULL",
+                plain
+            )
+            .await,
+            "a reference added later"
+        );
+        assert!(
+            change(
+                "UPDATE tickets SET title = 'Disk still full' WHERE number = $1 AND $2::uuid IS NOT NULL",
+                first
+            )
+            .await,
+            "the rest of the ticket changes as before"
+        );
+        assert_eq!(by_reference(&db, watchtower, "4711").await.unwrap(), first);
     }
 
     /// The number of the one ticket there is.
