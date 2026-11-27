@@ -21,7 +21,13 @@ pub const MESSAGE_RECEIVED: &str = "message.received";
 pub const TICKET_OPENED: &str = "ticket.opened";
 
 /// What an add-on's token may do.
-pub const SCOPES: &[&str] = &[DIRECTORY_READ, TICKETS_READ, PROPOSALS_WRITE, CATALOG_WRITE];
+pub const SCOPES: &[&str] = &[
+    DIRECTORY_READ,
+    TICKETS_READ,
+    PROPOSALS_WRITE,
+    CATALOG_WRITE,
+    TICKETS_WRITE,
+];
 /// Read customers and their assets.
 pub const DIRECTORY_READ: &str = "directory:read";
 /// Read tickets.
@@ -30,6 +36,8 @@ pub const TICKETS_READ: &str = "tickets:read";
 pub const PROPOSALS_WRITE: &str = "proposals:write";
 /// Create, update and retire the assets the add-on is the source of.
 pub const CATALOG_WRITE: &str = "catalog:write";
+/// Open tickets without a requester and add notes to tickets.
+pub const TICKETS_WRITE: &str = "tickets:write";
 
 /// After this many failed attempts a delivery stops being retried.
 pub const MAX_ATTEMPTS: i32 = 12;
@@ -316,6 +324,7 @@ pub async fn deliver_due(db: &PgPool, client: &reqwest::Client) -> anyhow::Resul
 /// An add-on calling the core with its token.
 #[derive(Debug, Clone)]
 pub struct Caller {
+    pub id: Uuid,
     pub name: String,
     pub scopes: Vec<String>,
 }
@@ -333,12 +342,12 @@ impl Caller {
 
 /// The enabled add-on a token belongs to.
 pub async fn caller(db: &PgPool, token: &str) -> Result<Option<Caller>> {
-    let row: Option<(String, Vec<String>)> =
-        sqlx::query_as("SELECT name, scopes FROM addons WHERE token_hash = $1 AND enabled")
+    let row: Option<(Uuid, String, Vec<String>)> =
+        sqlx::query_as("SELECT id, name, scopes FROM addons WHERE token_hash = $1 AND enabled")
             .bind(token_hash(token))
             .fetch_optional(db)
             .await?;
-    Ok(row.map(|(name, scopes)| Caller { name, scopes }))
+    Ok(row.map(|(id, name, scopes)| Caller { id, name, scopes }))
 }
 
 #[cfg(test)]

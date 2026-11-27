@@ -122,6 +122,7 @@
   "ticket.assignee": "Assegnatario",
   "ticket.unassigned": "Non assegnato",
   "ticket.opened": "Aperto il",
+  "ticket.openedByAddon": "dall'add-on {addon}",
   "ticket.confirmClose": "Chiudere il ticket #{number}? La chiusura è definitiva: il ticket non potrà essere riaperto e un nuovo messaggio del richiedente aprirà un nuovo ticket.",
   "ticket.moved": "Ticket spostato.",
   "ticket.movedWithRequester": {
@@ -135,6 +136,7 @@
   "ticket.emptyTimeline": "Su questo ticket non è ancora stato scritto nulla.",
   "ticket.closedNotice": "Questo ticket è chiuso in modo definitivo. Un nuovo messaggio del richiedente apre un nuovo ticket. Gli operatori possono comunque aggiungere note interne.",
   "entry.note": "Nota interna",
+  "entry.byAddon": "{addon} (add-on)",
   "entry.outgoing": "Messaggio in uscita",
   "entry.incoming": "Messaggio in arrivo",
   "entry.to": "a {address}",

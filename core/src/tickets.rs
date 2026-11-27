@@ -62,7 +62,10 @@ pub async fn emit_opened(tx: &mut Transaction<'_, Postgres>, number: i64) -> Res
 }
 
 /// The ticket's id and state, locked for the rest of the transaction.
-async fn lock(tx: &mut Transaction<'_, Postgres>, number: i64) -> Result<(Uuid, TicketState)> {
+pub(crate) async fn lock(
+    tx: &mut Transaction<'_, Postgres>,
+    number: i64,
+) -> Result<(Uuid, TicketState)> {
     sqlx::query_as("SELECT id, state FROM tickets WHERE number = $1 FOR UPDATE")
         .bind(number)
         .fetch_optional(&mut **tx)
@@ -583,6 +586,9 @@ pub struct TicketDetail {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_requesters: Option<Vec<crate::key_requesters::KeyRequester>>,
     pub assignee: Option<Party>,
+    /// The add-on that opened the ticket, by name, when an add-on did; empty for a ticket an agent
+    /// or a message opened.
+    pub opened_by_addon: Option<String>,
     /// Assets of the ticket's customer the ticket is about.
     pub assets: Vec<crate::catalog::LinkedAsset>,
     /// Services of the help desk the ticket is about.
@@ -683,7 +689,10 @@ pub struct MessageEntry {
 #[derive(Serialize, ToSchema, sqlx::FromRow)]
 pub struct NoteEntry {
     pub id: Uuid,
+    /// The name of the agent who wrote it, or of the add-on.
     pub author_name: String,
+    /// An add-on wrote it, not an agent.
+    pub by_addon: bool,
     pub body: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -706,6 +715,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
         requester_departed: Option<bool>,
         assignee_id: Option<Uuid>,
         assignee_name: Option<String>,
+        opened_by_addon: Option<String>,
         created_at: OffsetDateTime,
         updated_at: OffsetDateTime,
     }
@@ -716,11 +726,13 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
                 r.name AS requester_name,
                 (SELECT count(*) FROM tickets o WHERE o.requester_id = r.id) AS requester_tickets,
                 r.departed_at IS NOT NULL AS requester_departed,
-                a.id AS assignee_id, a.name AS assignee_name, t.created_at, t.updated_at
+                a.id AS assignee_id, a.name AS assignee_name, ad.name AS opened_by_addon,
+                t.created_at, t.updated_at
          FROM tickets t
          JOIN customers c ON c.id = t.customer_id
          LEFT JOIN requesters r ON r.id = t.requester_id
          LEFT JOIN agents a ON a.id = t.assignee_id
+         LEFT JOIN addons ad ON ad.id = t.opened_by_addon_id
          WHERE t.number = $1",
     )
     .bind(number)
@@ -740,8 +752,11 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
     .fetch_all(db)
     .await?;
     let notes: Vec<NoteEntry> = sqlx::query_as(
-        "SELECT n.id, a.name AS author_name, n.body, n.created_at
-         FROM notes n JOIN agents a ON a.id = n.author_id
+        "SELECT n.id, coalesce(a.name, ad.name) AS author_name, n.addon_id IS NOT NULL AS by_addon,
+                n.body, n.created_at
+         FROM notes n
+         LEFT JOIN agents a ON a.id = n.author_id
+         LEFT JOIN addons ad ON ad.id = n.addon_id
          WHERE n.ticket_id = $1",
     )
     .bind(row.id)
@@ -801,6 +816,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
             id,
             name: row.assignee_name.unwrap_or_default(),
         }),
+        opened_by_addon: row.opened_by_addon,
         assets,
         services,
         parent,

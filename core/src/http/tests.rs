@@ -2149,6 +2149,198 @@ async fn add_ons_do_not_read_key_requesters(db: PgPool) {
     );
 }
 
+/// An add-on with `tickets:write` opens a ticket and adds notes, which agents see as the
+/// add-on's; without the scope both are refused with the sentence the other calls give.
+#[sqlx::test]
+async fn an_addon_opens_tickets_and_adds_notes_through_the_api(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let harbor = testing::customer(&db, "Harbor Lane").await;
+    let server = testing::asset(&db, brightfield, "Server", "SRV-01").await;
+    let theirs = testing::asset(&db, harbor, "Server", "HL-SRV-07").await;
+    let backup = crate::catalog::create_service(&db, "Backup", "")
+        .await
+        .unwrap();
+    crate::catalog::use_service(&db, backup, brightfield)
+        .await
+        .unwrap();
+    let watchtower = crate::addons::register(
+        &db,
+        "watchtower",
+        "http://127.0.0.1:9",
+        &[],
+        &[crate::addons::TICKETS_WRITE.into()],
+    )
+    .await
+    .unwrap();
+    let reader = crate::addons::register(
+        &db,
+        "reader",
+        "http://127.0.0.1:9",
+        &[],
+        &[crate::addons::TICKETS_READ.into()],
+    )
+    .await
+    .unwrap();
+    let bot = Client::new_with_token(&db, &watchtower.token, api.agent);
+    let blind = Client::new_with_token(&db, &reader.token, api.agent);
+    let ticket = serde_json::json!({
+        "customer_id": brightfield,
+        "title": "SRV-01: backup failed",
+        "description": "The nightly job ended with error 4.",
+        "priority": "urgent",
+        "asset_ids": [server],
+        "service_ids": [backup],
+    });
+
+    let (status, refused) = blind
+        .call("POST", "/api/addon/tickets", Some(ticket.clone()))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        refused["error"],
+        "The add-on reader lacks the scope tickets:write."
+    );
+    let mut wrong = ticket.clone();
+    wrong["asset_ids"] = serde_json::json!([server, theirs]);
+    let (status, refused) = bot.call("POST", "/api/addon/tickets", Some(wrong)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        refused["error"],
+        "The asset HL-SRV-07 belongs to another customer than Brightfield."
+    );
+
+    let (status, opened) = bot.call("POST", "/api/addon/tickets", Some(ticket)).await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let n = opened["number"].as_i64().unwrap();
+    let note = serde_json::json!({"body": "The rerun succeeded."});
+    let (status, refused) = blind
+        .call(
+            "POST",
+            &format!("/api/addon/tickets/{n}/notes"),
+            Some(note.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        refused["error"],
+        "The add-on reader lacks the scope tickets:write."
+    );
+    let (status, _) = bot
+        .call("POST", &format!("/api/addon/tickets/{n}/notes"), Some(note))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _) = bot
+        .call(
+            "POST",
+            "/api/addon/tickets/9999/notes",
+            Some(serde_json::json!({"body": "Hello."})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let seen = api.get(&format!("/api/tickets/{n}")).await;
+    assert_eq!(seen["opened_by_addon"], "watchtower");
+    assert_eq!(seen["requester"], Value::Null);
+    assert_eq!(seen["priority"], "urgent");
+    assert_eq!(seen["assets"][0]["name"], "SRV-01");
+    assert_eq!(seen["services"][0]["name"], "Backup");
+    let notes: Vec<(&str, bool, &str)> = seen["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            assert_eq!(e["kind"], "note", "{e}");
+            (
+                e["author_name"].as_str().unwrap(),
+                e["by_addon"].as_bool().unwrap(),
+                e["body"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            ("watchtower", true, "The nightly job ended with error 4."),
+            ("watchtower", true, "The rerun succeeded."),
+        ]
+    );
+    let by_hand = testing::ticket(&db, brightfield, None, "h1@brightfield.test").await;
+    let by_hand = api.get(&format!("/api/tickets/{by_hand}")).await;
+    assert_eq!(by_hand["opened_by_addon"], Value::Null);
+}
+
+/// An add-on's token, whatever its scopes, opens no agent's call: it cannot reply, assign or
+/// change anything else on a ticket. Among the add-on's own calls, only these change something;
+/// a new one fails here until it is added.
+#[sqlx::test]
+async fn an_addon_s_token_changes_nothing_but_its_own_calls(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let number = testing::ticket(&db, brightfield, None, "<one@brightfield.test>").await;
+    let scopes: Vec<String> = crate::addons::SCOPES
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    let everything = crate::addons::register(&db, "watchtower", "http://127.0.0.1:9", &[], &scopes)
+        .await
+        .unwrap();
+    let bot = Client::new_with_token(&db, &everything.token, api.agent);
+
+    let spec = serde_json::to_value(super::openapi()).unwrap();
+    let mut addon_writes = Vec::new();
+    let mut checked = 0;
+    for (path, operations) in spec["paths"].as_object().unwrap() {
+        for (method, operation) in operations.as_object().unwrap() {
+            if method == "get" {
+                continue;
+            }
+            if path.starts_with("/api/addon/") {
+                addon_writes.push(format!("{} {path}", method.to_uppercase()));
+                continue;
+            }
+            // Signing in and out are open to anyone and need no session.
+            if path == "/api/session" {
+                continue;
+            }
+            let uri = path
+                .replace("{number}", &number.to_string())
+                .replace("{name}", "watchtower")
+                .replace("{domain}", "brightfield.test")
+                .replace("{address}", "ada%40brightfield.test")
+                .replace("{id}", &Uuid::new_v4().to_string())
+                .replace("{asset}", &Uuid::new_v4().to_string())
+                .replace("{service}", &Uuid::new_v4().to_string())
+                .replace("{customer}", &Uuid::new_v4().to_string());
+            let body = operation
+                .pointer("/requestBody/content/application~1json/schema")
+                .map(|schema| sample(&spec, schema));
+            let (status, json) = bot.call(&method.to_uppercase(), &uri, body).await;
+            assert_eq!(
+                status,
+                StatusCode::UNAUTHORIZED,
+                "{} {uri} answered {status}: {json}",
+                method.to_uppercase()
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 40, "only {checked} routes checked");
+    addon_writes.sort();
+    assert_eq!(
+        addon_writes,
+        [
+            "POST /api/addon/proposals",
+            "POST /api/addon/tickets",
+            "POST /api/addon/tickets/{number}/notes",
+        ]
+    );
+    let ticket = api.get(&format!("/api/tickets/{number}")).await;
+    assert_eq!(ticket["state"], "open");
+    assert_eq!(ticket["assignee"], Value::Null);
+    assert_eq!(ticket["timeline"].as_array().unwrap().len(), 1);
+}
+
 #[sqlx::test]
 async fn an_import_is_previewed_then_applied(db: PgPool) {
     let api = Client::new(&db).await;

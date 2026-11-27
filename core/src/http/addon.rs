@@ -13,7 +13,8 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use super::{ApiError, AppState, Problem};
-use crate::addons::{self, Caller, DIRECTORY_READ, PROPOSALS_WRITE, TICKETS_READ};
+use crate::addon_tickets;
+use crate::addons::{self, Caller, DIRECTORY_READ, PROPOSALS_WRITE, TICKETS_READ, TICKETS_WRITE};
 use crate::catalog::Asset;
 use crate::external_references::{self, NameInSystem};
 use crate::proposals::{self, Content, Target};
@@ -29,6 +30,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(open_tickets))
         .routes(routes!(ticket))
         .routes(routes!(propose))
+        .routes(routes!(open_ticket))
+        .routes(routes!(add_note))
         .merge(super::addon_catalog::routes())
 }
 
@@ -353,4 +356,50 @@ async fn customer_services(
             .filter(|s| s.retired_at.is_none())
             .collect(),
     ))
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct AddonTicketOpened {
+    number: i64,
+}
+
+/// Opens a ticket without a requester for an active customer, with a priority and the customer's
+/// active assets and services it is about; replies on it go to the customer's key requesters. The
+/// description becomes the ticket's first internal note, by the add-on. An asset or service that
+/// does not fit refuses the ticket, with a sentence naming it. Scope `tickets:write`.
+#[utoipa::path(post, path = "/api/addon/tickets", tag = "add-ons",
+    request_body = addon_tickets::NewTicket,
+    responses((status = CREATED, body = AddonTicketOpened), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn open_ticket(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(new): Json<addon_tickets::NewTicket>,
+) -> Result<(StatusCode, Json<AddonTicketOpened>), ApiError> {
+    caller.require(TICKETS_WRITE)?;
+    let number = addon_tickets::open(&state.db, caller.id, &new).await?;
+    Ok((StatusCode::CREATED, Json(AddonTicketOpened { number })))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct AddonNote {
+    body: String,
+}
+
+/// Adds an internal note, seen only by agents, to any ticket, closed ones too; agents see the
+/// add-on as its author. Scope `tickets:write`.
+#[utoipa::path(post, path = "/api/addon/tickets/{number}/notes", tag = "add-ons",
+    params(("number" = i64, Path, description = "The ticket's number")),
+    request_body = AddonNote,
+    responses((status = CREATED), (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, body = Problem), (status = UNAUTHORIZED, body = Problem)))]
+async fn add_note(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(number): Path<i64>,
+    Json(note): Json<AddonNote>,
+) -> Result<StatusCode, ApiError> {
+    caller.require(TICKETS_WRITE)?;
+    addon_tickets::add_note(&state.db, caller.id, number, &note.body).await?;
+    Ok(StatusCode::CREATED)
 }
