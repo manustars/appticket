@@ -10,6 +10,192 @@
     "version": "0.4.0"
   },
   "paths": {
+    "/api/addon/assets": {
+      "post": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "Creates an asset of a customer known by the add-on's reference, or updates the one the add-on\nalready supplied with that reference (bringing it back if it retired it), so that the add-on\ncan send its whole inventory again safely: 201 when created, 200 when updated. Its kind and its\nsite are named; what is left out is cleared, and its holder, whom agents choose, stays. Scope\n`catalog:write`.",
+        "operationId": "supply_asset",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuppliedAsset"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddonAsset"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddonAsset"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/addon/assets/{id}": {
+      "put": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "Updates an asset the add-on is the source of, as supplying it again does; an asset entered by\nhand or supplied by another add-on is refused. Scope `catalog:write`.",
+        "operationId": "update_supplied_asset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The asset",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuppliedUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddonAsset"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/addon/assets/{id}/retire": {
+      "post": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "Retires an asset the add-on is the source of, when it leaves the add-on's system: it stays on\nthe tickets that refer to it, gets no new links and loses its holder. Retiring it again changes\nnothing; an asset entered by hand or supplied by another add-on is refused. Scope\n`catalog:write`.",
+        "operationId": "retire_supplied_asset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The asset",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/addon/customers": {
       "get": {
         "tags": [
@@ -5764,6 +5950,13 @@
           "name": {
             "type": "string"
           },
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Your own reference for it, when you are its source; another add-on's is not given."
+          },
           "retired_at": {
             "type": [
               "string",
@@ -6266,7 +6459,14 @@
               "string",
               "null"
             ],
-            "description": "The add-on it came from, when an add-on supplies it."
+            "description": "The add-on it came from, when an add-on supplies it: only that add-on changes its kind,\nname, serial number and site, and retires it."
+          },
+          "source_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That add-on's own reference for it."
           }
         }
       },
@@ -8602,6 +8802,71 @@
             "$ref": "#/components/schemas/TicketState"
           }
         }
+      },
+      "SuppliedAsset": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SuppliedDetails"
+          },
+          {
+            "type": "object",
+            "required": [
+              "reference",
+              "customer_id"
+            ],
+            "properties": {
+              "customer_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The customer that owns the asset; an asset never changes customer."
+              },
+              "reference": {
+                "type": "string",
+                "description": "The add-on's own identifier for the asset, such as a host's id in its system: the same\nreference always names the same asset. Compared exactly, once trimmed."
+              }
+            }
+          }
+        ],
+        "description": "An asset as its source supplies it, known by the add-on's own reference."
+      },
+      "SuppliedDetails": {
+        "type": "object",
+        "description": "What an add-on supplies of an asset: everything but its customer, which never changes, and its\nholder, whom agents choose.",
+        "required": [
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "The name of its asset kind, one of the help desk's list, compared ignoring case."
+          },
+          "name": {
+            "type": "string"
+          },
+          "serial_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Empty or left out for none."
+          },
+          "site": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name of one of its customer's active sites, compared ignoring case; empty or left out\nfor none."
+          }
+        }
+      },
+      "SuppliedUpdate": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SuppliedDetails"
+          }
+        ],
+        "description": "What an add-on sends to update an asset it is the source of."
       },
       "Switch": {
         "type": "object",

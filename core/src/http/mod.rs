@@ -26,6 +26,7 @@ use crate::sign_in_limits::{Guarded, SignInLimits};
 use client_address::ClientAddress;
 
 mod addon;
+mod addon_catalog;
 mod admin;
 mod catalog;
 mod client_address;

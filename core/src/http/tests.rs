@@ -14,6 +14,8 @@ use uuid::Uuid;
 use super::{AppState, router};
 use crate::testing;
 
+mod addon_catalog;
+
 /// A signed-in client of the API.
 pub struct Client {
     state: AppState,
