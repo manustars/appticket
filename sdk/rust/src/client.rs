@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::{
-    Asset, Customer, Identity, Service, Supplied, SuppliedAsset, SuppliedDetails, Ticket,
-    TicketSummary,
+    Asset, Customer, ExternalReference, Identity, Service, Supplied, SuppliedAsset,
+    SuppliedDetails, Ticket, TicketSummary,
 };
 use crate::conflicts::Conflict;
 use crate::names::SystemNames;
@@ -220,6 +220,14 @@ impl Client {
     /// `directory:read`.
     pub async fn customers(&self) -> Result<Vec<Customer>, Error> {
         self.get("/customers", &[]).await
+    }
+
+    /// The external references of offboarded customers, by system and name, without the
+    /// customers, which [`Client::customers`] does not list: those names stay covered, with the
+    /// names nested in them, even inside an active customer's name, so the add-on imports nothing
+    /// of them for either customer. Scope `directory:read`.
+    pub async fn offboarded_references(&self) -> Result<Vec<ExternalReference>, Error> {
+        self.get("/external-references/offboarded", &[]).await
     }
 
     /// A customer's active assets. Scope `directory:read`.

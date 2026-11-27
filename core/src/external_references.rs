@@ -21,7 +21,7 @@ pub struct ExternalReference {
 }
 
 /// An external reference as add-ons read it: a name in a system, without the core's id.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
 pub struct NameInSystem {
     pub system: String,
     pub name: String,
@@ -68,6 +68,19 @@ pub async fn by_customer(db: &PgPool) -> Result<HashMap<Uuid, Vec<NameInSystem>>
             });
     }
     Ok(grouped)
+}
+
+/// The external references of offboarded customers, by system and name, without the customers:
+/// they stay covered, so an add-on imports nothing of them, even inside an active customer's name.
+pub async fn of_offboarded(db: &PgPool) -> Result<Vec<NameInSystem>> {
+    Ok(sqlx::query_as(
+        "SELECT r.system, r.name FROM external_references r
+         JOIN customers c ON c.id = r.customer_id
+         WHERE c.offboarded_at IS NOT NULL
+         ORDER BY lower(r.system), lower(r.name)",
+    )
+    .fetch_all(db)
+    .await?)
 }
 
 /// The systems external references are in, across all customers, so that a system is spelled

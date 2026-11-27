@@ -53,6 +53,10 @@ async fn fake_core() -> (String, Posted) {
             }),
         )
         .route(
+            "/api/addon/external-references/offboarded",
+            get(|| async { Json(json!([{"system": "Watchtower", "name": "Old Quay"}])) }),
+        )
+        .route(
             "/api/addon/customers/{id}/assets",
             get(|Path(id): Path<Uuid>| async move {
                 Json(json!([{"id": "5a1d0c3e-7b2f-4e6a-9c8d-1f0e2d3c4b5a", "customer_id": id,
@@ -215,6 +219,11 @@ async fn reads_what_an_addon_needs_and_ignores_the_rest() {
     assert_eq!(
         (reference.system.as_str(), reference.name.as_str()),
         ("Watchtower", "Brightfield/Offices")
+    );
+    let offboarded = client.offboarded_references().await.unwrap();
+    assert_eq!(
+        (offboarded[0].system.as_str(), offboarded[0].name.as_str()),
+        ("Watchtower", "Old Quay")
     );
     let customer = customers[0].id;
     assert_eq!(

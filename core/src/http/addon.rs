@@ -26,6 +26,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(whoami))
         .routes(routes!(customers))
+        .routes(routes!(offboarded_references))
         .routes(routes!(customer_assets))
         .routes(routes!(customer_services))
         .routes(routes!(open_tickets))
@@ -120,6 +121,21 @@ async fn customers(
         customer.external_references = references.remove(&customer.id).unwrap_or_default();
     }
     Ok(Json(customers))
+}
+
+/// The external references of offboarded customers, by system and name, without the customers,
+/// which add-ons do not read: those names stay covered, and so do the names nested in them, even
+/// inside an active customer's name, so that an add-on imports nothing of them for either
+/// customer. Scope `directory:read`.
+#[utoipa::path(get, path = "/api/addon/external-references/offboarded", tag = "add-ons",
+    responses((status = OK, body = Vec<NameInSystem>), (status = CONFLICT, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn offboarded_references(
+    State(state): State<AppState>,
+    caller: Caller,
+) -> Result<Json<Vec<NameInSystem>>, ApiError> {
+    caller.require(DIRECTORY_READ)?;
+    Ok(Json(external_references::of_offboarded(&state.db).await?))
 }
 
 /// An asset as add-ons read it: what an add-on can be the source of, with its own site, but not
