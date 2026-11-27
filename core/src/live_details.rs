@@ -488,8 +488,9 @@ mod tests {
         );
     }
 
-    /// An add-on that answers late, with an error status or with something that is not live
-    /// details has its details unavailable, and a switched-off one is not even asked; they are
+    /// An add-on that answers late, with an error status, with something that is not live
+    /// details or more than 64 KiB, or that nothing answers for, has its details unavailable,
+    /// and a switched-off one is not even asked; they are
     /// asked all at once, so one slow add-on does not hold up the others, and the answer comes
     /// within the timeout. An add-on that answers 404 has no live details of that asset.
     #[sqlx::test]
@@ -501,6 +502,7 @@ mod tests {
             "garbage" => Answer::Garbage,
             "wrong-shape" => Answer::Json(json!({"state": "fine", "fields": []})),
             "unknown" => Answer::Status(StatusCode::NOT_FOUND),
+            "too-large" => Answer::Json(json!({"state": "ok", "padding": "x".repeat(70_000)})),
             _ => Answer::Json(healthy()),
         })
         .await;
@@ -525,6 +527,16 @@ mod tests {
         }
         let off = supplied(&db, brightfield, "PC-0042", "inventory", "pc-42").await;
         assets.push(off);
+        // More than 64 KiB, though live details otherwise.
+        let too_large = supplied(&db, brightfield, "too-large", "watchtower", "too-large").await;
+        assets.push(too_large);
+        // Nothing listens where this add-on is.
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let down_url = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        addon_at(&db, "printers", &down_url).await;
+        let down = supplied(&db, brightfield, "PRN-01", "printers", "prn-1").await;
+        assets.push(down);
 
         let client = crate::addons::http_client().unwrap();
         let started = std::time::Instant::now();
@@ -545,9 +557,11 @@ mod tests {
             // assets[5]: no live details of it.
             (assets[6], "watchtower", true),
             (off, "inventory", false),
+            (too_large, "watchtower", false),
+            (down, "printers", false),
         ];
         assert_eq!(got, expected);
-        assert_eq!(asked.lock().unwrap().len(), 7);
+        assert_eq!(asked.lock().unwrap().len(), 8);
         assert!(
             off_asked.lock().unwrap().is_empty(),
             "a switched-off add-on is not asked"

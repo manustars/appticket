@@ -47,9 +47,9 @@ async fn agents_read_the_live_details_of_a_customer_s_assets(db: PgPool) {
 #[sqlx::test]
 async fn a_ticket_s_assets_have_their_live_details_and_a_slow_addon_holds_nothing_up(db: PgPool) {
     let api = Client::new(&db).await;
-    let (fast, _) = fake_addon(|_| Answer::Json(live_details_answer())).await;
+    let (fast, fast_asked) = fake_addon(|_| Answer::Json(live_details_answer())).await;
     addon_at(&db, "watchtower", &fast).await;
-    let (slow, _) =
+    let (slow, slow_asked) =
         fake_addon(|_| Answer::Late(Duration::from_secs(5), live_details_answer())).await;
     addon_at(&db, "inventory", &slow).await;
     let brightfield = testing::customer(&db, "Brightfield").await;
@@ -86,14 +86,25 @@ async fn a_ticket_s_assets_have_their_live_details_and_a_slow_addon_holds_nothin
             )
         })
         .collect();
-    let mut expected = vec![
-        (srv.to_string(), "watchtower".to_owned(), true),
-        (pc.to_string(), "inventory".to_owned(), false),
-    ];
-    let mut got_sorted = got.clone();
-    got_sorted.sort();
-    expected.sort();
-    assert_eq!(got_sorted, expected);
+    // In the order the ticket lists its assets: by kind, then name.
+    assert_eq!(
+        got,
+        [
+            (pc.to_string(), "inventory".to_owned(), false),
+            (srv.to_string(), "watchtower".to_owned(), true),
+        ]
+    );
+    // Each add-on was asked with its own reference, and only for the assets the ticket links.
+    let references = |asked: &testing::Asked| -> Vec<String> {
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(r, _)| r.clone())
+            .collect()
+    };
+    assert_eq!(references(&fast_asked), ["host-1042"]);
+    assert_eq!(references(&slow_asked), ["pc-42"]);
 
     let (status, _) = api
         .call("GET", "/api/tickets/999999/assets/live-details", None)
