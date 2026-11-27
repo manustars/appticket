@@ -11,4 +11,5 @@ pub mod kinds;
 pub mod rules;
 pub mod sync;
 pub mod text;
+pub mod webhook;
 pub mod zabbix;

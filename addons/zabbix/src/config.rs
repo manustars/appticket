@@ -42,6 +42,10 @@ pub struct Config {
     /// The event secret, printed by `hd addon add`, with which the core signs its reads; needed
     /// to answer them, not by `check`.
     pub event_secret: Option<String>,
+    /// The secret Zabbix's webhook media type sends with each event, read from the file
+    /// `webhook.secret_file` names; none without a `[webhook]` section, when the add-on receives
+    /// no alerts.
+    pub webhook_secret: Option<String>,
 }
 
 /// Everything but the two tokens and the event secret.
@@ -74,7 +78,18 @@ struct File {
     alerts: AlertsSection,
     #[serde(default)]
     addon: AddonSection,
+    #[serde(default)]
+    webhook: Option<WebhookSection>,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WebhookSection {
+    secret_file: String,
+}
+
+/// The fewest characters of the webhook's secret.
+const WEBHOOK_SECRET_MIN: usize = 16;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -212,6 +227,10 @@ impl Config {
             Some(url) => checked_url("zabbix.frontend_url", url)?,
             None => zabbix_url.clone(),
         };
+        let webhook_secret = match &file.webhook {
+            Some(webhook) => Some(webhook_secret(&webhook.secret_file)?),
+            None => None,
+        };
         Ok(Config {
             core_url: checked_url("core.url", &file.core.url)?,
             core_token: secret("HD_ZABBIX_TOKEN")?,
@@ -234,6 +253,7 @@ impl Config {
                     .map(PathBuf::from)
                     .as_deref(),
             )?,
+            webhook_secret,
         })
     }
 
@@ -279,6 +299,29 @@ fn read_secret(
         }
         (None, None) => Ok(None),
     }
+}
+
+/// The webhook's secret, read from the file `webhook.secret_file` names, trimmed of surrounding
+/// whitespace.
+fn webhook_secret(file: &str) -> anyhow::Result<String> {
+    let file = file.trim();
+    if file.is_empty() {
+        bail!("webhook.secret_file is blank: name the file that holds the webhook's secret");
+    }
+    let content = std::fs::read_to_string(file)
+        .with_context(|| format!("reading webhook.secret_file {file}"))?;
+    let secret = content.trim();
+    if secret.is_empty() {
+        bail!("webhook.secret_file {file} is empty");
+    }
+    let characters = secret.chars().count();
+    if characters < WEBHOOK_SECRET_MIN {
+        bail!(
+            "webhook.secret_file {file} holds {characters} characters: give a secret of \
+             {WEBHOOK_SECRET_MIN} or more"
+        );
+    }
+    Ok(secret.to_owned())
 }
 
 /// Checks an http(s) URL and drops a trailing `/`.
@@ -502,6 +545,51 @@ default_kind = "Server"
         .unwrap_err();
         assert!(format!("{empty:#}").contains("is empty"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_webhook_s_secret_is_read_from_the_file_the_configuration_names() {
+        assert_eq!(parse(SMALLEST).unwrap().webhook_secret, None, "no webhook");
+        let dir = std::env::temp_dir().join(format!("hd-zabbix-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("webhook-secret");
+        let with_webhook = format!(
+            "{SMALLEST}\n[webhook]\nsecret_file = {:?}\n",
+            file.to_str().unwrap()
+        );
+        std::fs::write(&file, "  0123456789abcdef-webhook\n").unwrap();
+        assert_eq!(
+            parse(&with_webhook).unwrap().webhook_secret.as_deref(),
+            Some("0123456789abcdef-webhook")
+        );
+        assert!(
+            !format!("{:?}", parse(&with_webhook).unwrap()).contains("0123456789abcdef"),
+            "the secret is not logged"
+        );
+
+        std::fs::write(&file, "\n").unwrap();
+        let empty = error(&with_webhook);
+        assert!(
+            empty.starts_with("webhook.secret_file ") && empty.ends_with(" is empty"),
+            "{empty}"
+        );
+        std::fs::write(&file, "short").unwrap();
+        let short = error(&with_webhook);
+        assert!(
+            short.ends_with(" holds 5 characters: give a secret of 16 or more"),
+            "{short}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+        let missing = error(&with_webhook);
+        assert!(
+            missing.starts_with("reading webhook.secret_file "),
+            "{missing}"
+        );
+        let blank = format!("{SMALLEST}\n[webhook]\nsecret_file = \" \"\n");
+        assert_eq!(
+            error(&blank),
+            "webhook.secret_file is blank: name the file that holds the webhook's secret"
+        );
     }
 
     #[test]

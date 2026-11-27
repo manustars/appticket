@@ -7,6 +7,7 @@ use hd_zabbix::check::{self, CheckArgs};
 use hd_zabbix::config::Config;
 use hd_zabbix::details::{self, Details};
 use hd_zabbix::sync::Syncer;
+use hd_zabbix::webhook::{self, Alerts};
 use hd_zabbix::zabbix::Zabbix;
 use tracing_subscriber::EnvFilter;
 
@@ -75,17 +76,32 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("listening on {}", config.listen))?;
     tracing::info!(listen = %config.listen, "answering the core's reads of live details");
+    let mut app = details::router(Arc::new(details), Verifier::new(event_secret));
+    match &config.webhook_secret {
+        Some(secret) => {
+            let alerts = Alerts::new(
+                Client::new(&config.core_url, &config.core_token)?,
+                Zabbix::new(&config.zabbix_url, &config.zabbix_token, webhook::DEADLINE)?,
+                config.system.clone(),
+                config.rules.clone(),
+            );
+            app = app.merge(webhook::router(Arc::new(alerts), secret.clone()));
+            tracing::info!(listen = %config.listen, path = webhook::PATH,
+                "receiving Zabbix's alerts through its webhook");
+        }
+        None => tracing::warn!(
+            "no [webhook] in the configuration: Zabbix's alerts are not received, and open no \
+             tickets"
+        ),
+    }
     // It stops when told to, after the rounds: ending before then is a failure.
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let mut server = tokio::spawn(
-        axum::serve(
-            listener,
-            details::router(Arc::new(details), Verifier::new(event_secret)),
-        )
-        .with_graceful_shutdown(async {
-            let _ = stopped.await;
-        })
-        .into_future(),
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .into_future(),
     );
     let mut ticks = tokio::time::interval(config.interval);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
