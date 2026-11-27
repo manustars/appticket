@@ -39,7 +39,8 @@ Apache-2.0, like the rest of `sdk/`.
   customers' external references in that system from the latest list.
 - `conflicts`: `Conflict`, what of its system the add-on does not import, with a `sentence` per
   language (`new` from `(tag, sentence)` pairs, `in_english` with only English), in the whole
-  list that `replace_conflicts` sends; administrators read the latest list in the add-on's state.
+  list that `replace_conflicts` sends; those who manage add-ons read the latest list in the
+  add-on's state.
 - `live_details`: `LiveDetails`, what the add-on answers when the core asks for the live details
   of an asset it is the source of or is linked to: a `DetailState` (`Ok`, `Warning`, `Problem`), `Field`s and
   `Link`s, each with a `Label` per language (`in_english` makes one with only English).

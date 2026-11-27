@@ -2,7 +2,7 @@
 // to them goes. Registering one stays on the server's command line, where its secrets are made.
 import { useId, type ReactNode } from 'react'
 import { addonName, inLanguage } from './addon'
-import { listAddons, setAddonEnabled, type AddonRow, type ConflictList, type NameListState } from './api/client'
+import { listAddons, setAddonEnabled, type AddonState, type ConflictList, type NameListState } from './api/client'
 import { useI18n } from './i18n/context'
 import { Problem } from './Problem'
 import { useAction, useLoad } from './useAction'
@@ -15,7 +15,7 @@ export function AdminAddons({ onSignedOut }: { onSignedOut: () => void }) {
   const action = useAction(onSignedOut)
   const id = useId()
 
-  function toggle(a: AddonRow) {
+  function toggle(a: AddonState) {
     void action.run(() => setAddonEnabled(a.name, !a.enabled)).then(() => addons.reload())
   }
 
@@ -56,7 +56,7 @@ export function AdminAddons({ onSignedOut }: { onSignedOut: () => void }) {
 
 /** An add-on's row, and below it why its latest delivery failed, if one did. */
 function AddonRows({ addon: a, busy, list, onToggle }: {
-  addon: AddonRow
+  addon: AddonState
   busy: boolean
   list: (items: string[]) => ReactNode
   onToggle: () => void
@@ -110,16 +110,13 @@ function UncoveredNames({ names }: { names: NameListState }) {
   if (names.uncovered.length === 0) {
     return <p className="muted small">{t('addons.allCovered', { system: names.system, time })}</p>
   }
-  // A name that no external reference covers is nested in one that none covers either.
-  const depth = new Map<string, number>()
-  for (const n of names.uncovered) depth.set(n.name, n.parent ? (depth.get(n.parent) ?? -1) + 1 : 0)
   return (
     <details className="addon-state-list">
       <summary>{t('addons.uncovered', { count: names.uncovered.length, system: names.system, time })}</summary>
       <p className="muted small">{t('addons.uncoveredHint')}</p>
       <ul className="uncovered-names">
         {names.uncovered.map((n) => (
-          <li key={n.name} style={{ paddingInlineStart: `${depth.get(n.name) ?? 0}rem` }}>{n.name}</li>
+          <li key={n.name} style={{ paddingInlineStart: `${n.depth}rem` }}>{n.name}</li>
         ))}
       </ul>
     </details>

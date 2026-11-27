@@ -1,6 +1,6 @@
 //! The conflicts an add-on reports, with the scope `conflicts:write` (docs/domain-rules.md,
-//! "Add-ons"): the add-on replaces the whole list, and administrators read the latest one in its
-//! state.
+//! "Add-ons"): the add-on replaces the whole list, and those who manage add-ons read the latest
+//! one in its state.
 
 use axum::{
     Json,
@@ -35,7 +35,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
 /// The whole list of the conflicts the add-on reports, as the add-on sends it.
 #[derive(Deserialize, ToSchema)]
 pub struct ReportedConflicts {
-    /// The conflicts, in the order administrators read them; none when there are none.
+    /// The conflicts, in the order those who manage add-ons read them; none when there are none.
     conflicts: Vec<ReportedConflict>,
 }
 
@@ -44,10 +44,10 @@ fn description() -> String {
     format!(
         "Replaces the list of conflicts the add-on reports, such as a host of its system in two \
          groups that two customers have as external references, which it therefore does not \
-         import: administrators read the latest list in the add-on's state, also while the \
-         add-on is switched off, and an empty list says there are none. Each conflict has a \
-         sentence an administrator can act on, one per language of the agents' UI or a single \
-         one taken as English, at most {MAX_SENTENCE_LENGTH} characters once trimmed in each of \
+         import: those who manage add-ons read the latest list in the add-on's state, also \
+         while the add-on is switched off, and an empty list says there are none. Each conflict \
+         has a sentence those who manage add-ons can act on, one per language of the agents' UI \
+         or a single one taken as English, at most {MAX_SENTENCE_LENGTH} characters once trimmed in each of \
          at most {MAX_LANGUAGES} languages, without control characters. At most {MAX_CONFLICTS} \
          conflicts, in at most {} MiB of JSON (413 above), which the largest list fits written \
          as UTF-8. A list with a conflict that does not fit is refused whole, and the list \

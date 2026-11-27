@@ -113,7 +113,7 @@ export interface paths {
         get?: never;
         /**
          * Replaces the list of conflicts the add-on reports
-         * @description Replaces the list of conflicts the add-on reports, such as a host of its system in two groups that two customers have as external references, which it therefore does not import: administrators read the latest list in the add-on's state, also while the add-on is switched off, and an empty list says there are none. Each conflict has a sentence an administrator can act on, one per language of the agents' UI or a single one taken as English, at most 500 characters once trimmed in each of at most 4 languages, without control characters. At most 1000 conflicts, in at most 8 MiB of JSON (413 above), which the largest list fits written as UTF-8. A list with a conflict that does not fit is refused whole, and the list before stays. Scope `conflicts:write`.
+         * @description Replaces the list of conflicts the add-on reports, such as a host of its system in two groups that two customers have as external references, which it therefore does not import: those who manage add-ons read the latest list in the add-on's state, also while the add-on is switched off, and an empty list says there are none. Each conflict has a sentence those who manage add-ons can act on, one per language of the agents' UI or a single one taken as English, at most 500 characters once trimmed in each of at most 4 languages, without control characters. At most 1000 conflicts, in at most 8 MiB of JSON (413 above), which the largest list fits written as UTF-8. A list with a conflict that does not fit is refused whole, and the list before stays. Scope `conflicts:write`.
          */
         put: operations["replace_conflicts"];
         post?: never;
@@ -332,7 +332,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every add-on with its deliveries; never its token or event secret. */
+        /** Every add-on with its deliveries and its state; never its token or event secret. */
         get: operations["list_addons"];
         put?: never;
         post?: never;
@@ -2091,7 +2091,6 @@ export interface components {
         };
         /** @description An add-on as the command line and those who manage add-ons see it; never its secrets. */
         AddonRow: {
-            conflicts?: components["schemas"]["ConflictList"] | null;
             enabled: boolean;
             /** @description Event kinds it receives. */
             events: string[];
@@ -2103,7 +2102,6 @@ export interface components {
             /** @description Why the latest failed delivery failed. */
             last_error?: string | null;
             name: string;
-            names?: components["schemas"]["NameListState"] | null;
             /**
              * Format: int64
              * @description Events not yet delivered.
@@ -2112,6 +2110,14 @@ export interface components {
             /** @description What its token may do. */
             scopes: string[];
             url: string;
+        };
+        /**
+         * @description An add-on with its state, as those who manage add-ons see it: its deliveries, the names of its
+         *     system no external reference covers and the conflicts it reports.
+         */
+        AddonState: components["schemas"]["AddonRow"] & {
+            conflicts?: components["schemas"]["ConflictList"] | null;
+            names?: components["schemas"]["NameListState"] | null;
         };
         AddonTicketOpened: {
             /** Format: int64 */
@@ -2340,7 +2346,7 @@ export interface components {
             /** @description What is not imported and why, in each language the add-on wrote it in. */
             sentence: components["schemas"]["BTreeMap"];
         };
-        /** @description An add-on's latest list of conflicts, as administrators read it in the add-on's state. */
+        /** @description An add-on's latest list of conflicts, as those who manage add-ons read it in the add-on's state. */
         ConflictList: {
             /** @description The conflicts, in the order the add-on sent them. */
             conflicts: components["schemas"]["Conflict"][];
@@ -2776,12 +2782,12 @@ export interface components {
             updated_at: string;
         };
         /**
-         * @description An add-on's latest name list as administrators see it in the add-on's state: the names they
-         *     still have to give a customer.
+         * @description An add-on's latest name list as those who manage add-ons see it in the add-on's state: the names
+         *     agents still have to give a customer.
          */
         NameListState: {
             /** @description How many names the list holds. */
-            listed: number;
+            name_count: number;
             /** @description The system the list names. */
             system: string;
             /**
@@ -2839,7 +2845,7 @@ export interface components {
              * @description Why the add-on suggests it: one sentence per UI language (`{"en": "...", "it": "..."}`,
              *     see `languages` in whoami), or a single English sentence.
              */
-            rationale?: components["schemas"]["RationaleInput"];
+            rationale?: components["schemas"]["SentenceInput"];
             /**
              * Format: int64
              * @description For anything else: the ticket.
@@ -2994,8 +3000,6 @@ export interface components {
             /** @description What the sign-in button names. */
             label: string;
         };
-        /** @description A rationale as an add-on sends it. */
-        RationaleInput: components["schemas"]["BTreeMap"] | string;
         RelatedTicket: {
             customer_name: string;
             /** Format: int64 */
@@ -3006,14 +3010,14 @@ export interface components {
         /** @description A conflict as the add-on reports it. */
         ReportedConflict: {
             /**
-             * @description What is not imported and why, so that an administrator can act on it: written in every
-             *     language of the agents' UI, as a rationale is, or a single sentence taken as English.
+             * @description What is not imported and why, so that those who manage add-ons can act on it: written in
+             *     every language of the agents' UI, as a rationale is, or a single sentence taken as English.
              */
             sentence: components["schemas"]["SentenceInput"];
         };
         /** @description The whole list of the conflicts the add-on reports, as the add-on sends it. */
         ReportedConflicts: {
-            /** @description The conflicts, in the order administrators read them; none when there are none. */
+            /** @description The conflicts, in the order those who manage add-ons read them; none when there are none. */
             conflicts: components["schemas"]["ReportedConflict"][];
         };
         Requester: {
@@ -3172,7 +3176,7 @@ export interface components {
             name: string;
             permissions: components["schemas"]["Permission"][];
         };
-        /** @description A sentence as an add-on sends it. */
+        /** @description Sentences as an add-on sends them. */
         SentenceInput: components["schemas"]["BTreeMap"] | string;
         Service: {
             /**
@@ -3435,6 +3439,12 @@ export interface components {
         };
         /** @description A name of a name list that no external reference covers. */
         UncoveredName: {
+            /**
+             * Format: int32
+             * @description How deep it is nested: 0 at the top, one more at each level below.
+             */
+            depth: number;
+            /** @description The name, as the add-on spells it. */
             name: string;
             /** @description The name it is nested in; none at the top. */
             parent?: string | null;
@@ -4170,7 +4180,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AddonRow"][];
+                    "application/json": components["schemas"]["AddonState"][];
                 };
             };
             401: {

@@ -42,6 +42,7 @@ mod proposals;
 mod requesters;
 mod roles;
 mod secret;
+mod sentences;
 mod sign_in_limits;
 mod sites;
 mod supplied_assets;

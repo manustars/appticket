@@ -1,8 +1,6 @@
 //! Proposals: what an add-on such as the Assistant suggests on an inbox message or a ticket. A
 //! proposal takes effect only when an agent accepts it (ADR 0006, docs/domain-rules.md).
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -17,32 +15,12 @@ use crate::tickets::{Priority, TicketState};
 pub const UI_LANGUAGES: &[&str] = &["en", "it"];
 
 /// Why a proposal is made, one sentence per language: `{"en": "...", "it": "..."}`.
-pub type Rationale = BTreeMap<String, String>;
+pub type Rationale = crate::sentences::PerLanguage;
 
 /// Checks a rationale: language tags of 2 to 8 lowercase letters, each with a non-empty sentence of
 /// at most 500 characters. Returns it trimmed.
 pub fn clean_rationale(rationale: &Rationale) -> Result<Rationale> {
-    let mut clean = Rationale::new();
-    for (language, text) in rationale {
-        let valid_tag =
-            (2..=8).contains(&language.len()) && language.chars().all(|c| c.is_ascii_lowercase());
-        if !valid_tag {
-            return rule(format!(
-                "{language:?} is not a language tag such as \"en\" or \"it\""
-            ));
-        }
-        let text = text.trim();
-        if text.is_empty() {
-            continue;
-        }
-        if text.chars().count() > 500 {
-            return rule(format!(
-                "the {language} rationale is longer than 500 characters"
-            ));
-        }
-        clean.insert(language.clone(), text.to_owned());
-    }
-    Ok(clean)
+    crate::sentences::clean(rationale, 500, "rationale").map_err(Error::Rule)
 }
 
 /// What is proposed.

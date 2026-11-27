@@ -1,9 +1,9 @@
 //! The conflicts an add-on reports, such as a host of a monitoring tool in two groups that are
 //! external references of two customers, which the add-on therefore does not import: the add-on
-//! replaces the whole list and administrators read the latest one in its state. Rules are in
-//! docs/domain-rules.md ("Add-ons").
+//! replaces the whole list and those who manage add-ons read the latest one in its state. Rules
+//! are in docs/domain-rules.md ("Add-ons").
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -11,6 +11,8 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 
 use crate::error::{Result, rule};
+pub use crate::sentences::SentenceInput;
+use crate::sentences::{self, PerLanguage};
 
 /// The most conflicts a list holds.
 pub const MAX_CONFLICTS: usize = 1000;
@@ -20,27 +22,17 @@ pub const MAX_LANGUAGES: usize = 4;
 pub const MAX_SENTENCE_LENGTH: usize = 500;
 
 /// What a conflict is, one sentence per language: `{"en": "...", "it": "..."}`.
-pub type Sentence = BTreeMap<String, String>;
-
-/// A sentence as an add-on sends it.
-#[derive(Deserialize, ToSchema)]
-#[serde(untagged)]
-pub enum SentenceInput {
-    /// One sentence per language.
-    PerLanguage(Sentence),
-    /// A single sentence, taken as English.
-    English(String),
-}
+pub type Sentence = PerLanguage;
 
 /// A conflict as the add-on reports it.
 #[derive(Deserialize, ToSchema)]
 pub struct ReportedConflict {
-    /// What is not imported and why, so that an administrator can act on it: written in every
-    /// language of the agents' UI, as a rationale is, or a single sentence taken as English.
+    /// What is not imported and why, so that those who manage add-ons can act on it: written in
+    /// every language of the agents' UI, as a rationale is, or a single sentence taken as English.
     pub sentence: SentenceInput,
 }
 
-/// An add-on's latest list of conflicts, as administrators read it in the add-on's state.
+/// An add-on's latest list of conflicts, as those who manage add-ons read it in the add-on's state.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ConflictList {
     /// When the add-on last sent the list.
@@ -57,39 +49,18 @@ pub struct Conflict {
     pub sentence: Sentence,
 }
 
-/// `sentence` with language tags of 2 to 8 lowercase letters, each text trimmed, empty ones
-/// dropped, at least one left; `which` says which conflict it is.
+/// `sentence` as [`sentences::clean`] leaves it, without control characters, in at least one
+/// language and at most [`MAX_LANGUAGES`]; `which` says which conflict it is.
 fn clean(sentence: SentenceInput, which: usize) -> Result<Sentence> {
-    let sentence = match sentence {
-        SentenceInput::PerLanguage(sentence) => sentence,
-        SentenceInput::English(text) => Sentence::from([("en".to_owned(), text)]),
-    };
-    let mut clean = Sentence::new();
-    for (language, text) in sentence {
-        let valid_tag =
-            (2..=8).contains(&language.len()) && language.chars().all(|c| c.is_ascii_lowercase());
-        if !valid_tag {
-            return rule(format!(
-                "conflict number {which}: {language:?} is not a language tag such as \"en\" or \
-                 \"it\""
-            ));
-        }
-        let text = text.trim();
-        if text.is_empty() {
-            continue;
-        }
-        if text.chars().any(char::is_control) {
-            return rule(format!(
-                "conflict number {which}: the {language} sentence holds a control character"
-            ));
-        }
-        if text.chars().count() > MAX_SENTENCE_LENGTH {
-            return rule(format!(
-                "conflict number {which}: the {language} sentence is longer than \
-                 {MAX_SENTENCE_LENGTH} characters"
-            ));
-        }
-        clean.insert(language, text.to_owned());
+    let clean = sentences::clean(&sentence.into_map(), MAX_SENTENCE_LENGTH, "sentence")
+        .or_else(|why| rule(format!("conflict number {which}: {why}")))?;
+    if let Some(language) = clean
+        .iter()
+        .find_map(|(language, text)| text.chars().any(char::is_control).then_some(language))
+    {
+        return rule(format!(
+            "conflict number {which}: the {language} sentence holds a control character"
+        ));
     }
     if clean.is_empty() {
         return rule(format!("conflict number {which} has no sentence"));
@@ -212,7 +183,7 @@ mod tests {
 
     /// The sentences of each add-on's state, by add-on, none for an add-on that reported none.
     async fn reported(db: &PgPool) -> Vec<(String, Option<Vec<Sentence>>)> {
-        crate::addons::list(db)
+        crate::addons::states(db)
             .await
             .unwrap()
             .into_iter()
@@ -220,7 +191,7 @@ mod tests {
                 let sentences = a
                     .conflicts
                     .map(|l| l.conflicts.into_iter().map(|c| c.sentence).collect());
-                (a.name, sentences)
+                (a.addon.name, sentences)
             })
             .collect()
     }

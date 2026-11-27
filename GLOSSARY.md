@@ -46,7 +46,7 @@ _Avoid_: Group list, catalog of names, mapping table
 **Conflict**:
 Something of an add-on's system that the add-on does not import because no external reference
 covers it or two do, such as a host in groups of two customers; the add-on reports it with a
-sentence an administrator can act on, and the add-on's state shows the latest list.
+sentence those who manage add-ons can act on, and the add-on's state shows the latest list.
 _Avoid_: Import error, clash, mapping error
 
 **Requester**:

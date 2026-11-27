@@ -336,16 +336,16 @@ async fn list_permissions(_agent: SignedIn) -> Json<Vec<Permission>> {
     Json(Permission::ALL.to_vec())
 }
 
-/// Every add-on with its deliveries; never its token or event secret.
+/// Every add-on with its deliveries and its state; never its token or event secret.
 #[utoipa::path(get, path = "/api/admin/addons", tag = "admin",
-    responses((status = OK, body = Vec<crate::addons::AddonRow>), (status = FORBIDDEN, body = Problem),
+    responses((status = OK, body = Vec<crate::addons::AddonState>), (status = FORBIDDEN, body = Problem),
         (status = UNAUTHORIZED, body = Problem)))]
 async fn list_addons(
     State(state): State<AppState>,
     agent: SignedIn,
-) -> Result<Json<Vec<crate::addons::AddonRow>>, ApiError> {
+) -> Result<Json<Vec<crate::addons::AddonState>>, ApiError> {
     agent.grant.require(Permission::ManageAddons)?;
-    Ok(Json(crate::addons::list(&state.db).await?))
+    Ok(Json(crate::addons::states(&state.db).await?))
 }
 
 #[derive(Deserialize, ToSchema)]
