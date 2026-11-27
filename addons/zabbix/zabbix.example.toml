@@ -33,3 +33,45 @@ kind = "Printer"
 [[assets.kinds]]
 template = "Windows by Zabbix agent"
 kind = "Desktop"
+
+[alerts]
+# What an alert does: the first rule whose conditions all hold decides, and an alert no rule
+# matches is ignored. A condition left out matches anything. Without rules, the default list opens
+# a ticket with priority urgent for a disaster and one with priority high for a high, and ignores
+# the rest. `hd-zabbix check` tells which rule a problem meets.
+
+[[alerts.rules]]
+name = "Backups"
+# The trigger's name contains this text, ignoring case.
+trigger_contains = "backup"
+outcome = "ignore"
+
+[[alerts.rules]]
+name = "Mail at Brightfield"
+# A customer, by name, or a host_group, which includes the groups nested in it; not both.
+customer = "Brightfield"
+# This severity or higher: not classified, information, warning, average, high or disaster.
+min_severity = "average"
+# Event tags that must all be present, each with this value or with any.
+tags = [{ tag = "service", value = "mail" }, { tag = "scope" }]
+outcome = "open"
+# low, normal, high or urgent.
+priority = "high"
+# Linked to the ticket when the customer uses it.
+service = "Hosted mail"
+# When the problem recovers: resolve_if_not_worked_on (the default), resolve or note.
+on_recovery = "resolve_if_not_worked_on"
+# Close the problem in Zabbix when an agent resolves the ticket (default false).
+close_in_zabbix = false
+
+[[alerts.rules]]
+name = "Disaster"
+min_severity = "disaster"
+outcome = "open"
+priority = "urgent"
+
+[[alerts.rules]]
+name = "High"
+min_severity = "high"
+outcome = "open"
+priority = "high"

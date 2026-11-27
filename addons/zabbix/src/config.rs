@@ -9,6 +9,7 @@ use anyhow::{Context, bail};
 use serde::Deserialize;
 
 use crate::kinds::{KindMapping, Kinds};
+use crate::rules::Rules;
 
 /// The add-on's settings.
 #[derive(Clone)]
@@ -30,6 +31,8 @@ pub struct Config {
     pub interval: Duration,
     /// The asset kind of each host.
     pub kinds: Kinds,
+    /// What each alert does.
+    pub rules: Rules,
 }
 
 /// Everything but the two tokens.
@@ -42,6 +45,7 @@ impl std::fmt::Debug for Config {
             .field("system", &self.system)
             .field("interval", &self.interval)
             .field("kinds", &self.kinds)
+            .field("rules", &self.rules)
             .finish_non_exhaustive()
     }
 }
@@ -55,6 +59,8 @@ struct File {
     #[serde(default)]
     sync: SyncSection,
     assets: AssetsSection,
+    #[serde(default)]
+    alerts: AlertsSection,
 }
 
 #[derive(Deserialize)]
@@ -94,6 +100,14 @@ struct AssetsSection {
     default_kind: String,
     #[serde(default)]
     kinds: Vec<KindMapping>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct AlertsSection {
+    /// The rules as written, each read with its position, so that a sentence names it.
+    #[serde(default)]
+    rules: Vec<toml::Value>,
 }
 
 fn default_system() -> String {
@@ -144,6 +158,9 @@ impl Config {
         if file.sync.interval_minutes == 0 {
             bail!("sync.interval_minutes is 0: give 1 or more");
         }
+        let rules = Rules::read(file.alerts.rules)
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("the configuration file {} is not valid", path.display()))?;
         let default = file.assets.default_kind.trim().to_owned();
         if default.is_empty() {
             bail!("assets.default_kind is blank: give an asset kind of the help desk's list");
@@ -160,6 +177,7 @@ impl Config {
                 mappings: file.assets.kinds,
                 default,
             },
+            rules,
         })
     }
 
@@ -306,6 +324,7 @@ default_kind = "Server"
     fn the_example_in_the_readme_s_folder_is_a_valid_configuration() {
         let config = parse(include_str!("../zabbix.example.toml")).unwrap();
         assert_eq!(config.kinds.mappings.len(), 2);
+        assert_eq!(config.rules.rules().len(), 4);
     }
 
     #[test]
@@ -405,5 +424,28 @@ default_kind = "Server"
         .unwrap_err();
         assert!(format!("{empty:#}").contains("is empty"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_alert_rules_are_read_in_order_and_an_invalid_one_stops_the_add_on() {
+        assert!(parse(SMALLEST).unwrap().rules.is_default());
+        let with_alerts = format!("{SMALLEST}\n[alerts]\n");
+        assert!(parse(&with_alerts).unwrap().rules.is_default());
+
+        let rules = format!(
+            "{SMALLEST}\n[[alerts.rules]]\nname = \"Backups\"\ntrigger_contains = \"backup\"\n\
+             outcome = \"ignore\"\n\n[[alerts.rules]]\noutcome = \"open\"\npriority = \"low\"\n"
+        );
+        let config = parse(&rules).unwrap();
+        assert!(!config.rules.is_default());
+        assert_eq!(config.rules.rules()[0].name.as_deref(), Some("Backups"));
+        assert_eq!(config.rules.rules().len(), 2);
+
+        let invalid = rules.replace("\"low\"", "\"soon\"");
+        assert_eq!(
+            error(&invalid),
+            "the configuration file zabbix.toml is not valid: alerts.rules: rule 2: priority is \
+             \"soon\": give low, normal, high or urgent"
+        );
     }
 }
