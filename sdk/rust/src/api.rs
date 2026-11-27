@@ -57,6 +57,46 @@ pub struct Asset {
     /// through them.
     #[serde(default)]
     pub site: Option<SiteRef>,
+    /// The add-on it came from, when an add-on supplies it.
+    #[serde(default)]
+    pub source_addon: Option<String>,
+    /// The add-on's own reference for it, when the add-on reading it is its source.
+    #[serde(default)]
+    pub reference: Option<String>,
+}
+
+/// What an add-on supplies of an asset it is the source of (scope `catalog:write`): everything but
+/// its customer, which never changes, and its holder, whom agents choose. What is left out is
+/// cleared.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetDetails {
+    /// The name of an asset kind of the help desk's list, compared ignoring case: the add-on maps
+    /// its own kinds to that list.
+    pub kind: String,
+    pub name: String,
+    pub serial_number: Option<String>,
+    /// The name of one of the customer's active sites, compared ignoring case.
+    pub site: Option<String>,
+}
+
+/// An asset of a customer as the add-on supplies it, known by the add-on's own reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SuppliedAsset {
+    /// The add-on's own identifier for the asset, such as a host's id in its system: the same
+    /// reference always names the same asset, of the same customer.
+    pub reference: String,
+    pub customer_id: Uuid,
+    #[serde(flatten)]
+    pub details: AssetDetails,
+}
+
+/// The asset an add-on supplied, as the core stored it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Supplied {
+    pub asset: Asset,
+    /// Whether supplying it created it; otherwise it updated the asset the add-on supplied
+    /// before with that reference.
+    pub created: bool,
 }
 
 /// A site of a customer, by id and name.

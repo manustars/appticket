@@ -8,7 +8,10 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{Asset, Customer, Identity, Service, Ticket, TicketSummary};
+use crate::api::{
+    Asset, AssetDetails, Customer, Identity, Service, Supplied, SuppliedAsset, Ticket,
+    TicketSummary,
+};
 use crate::proposals::{Content, Rationale, Target};
 
 /// Why a call to the core failed.
@@ -148,10 +151,23 @@ impl Client {
     }
 
     async fn read<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, Error> {
-        let status = response.status();
-        if status.is_success() {
+        if response.status().is_success() {
             return Ok(response.json().await?);
         }
+        Err(Self::refusal(response).await)
+    }
+
+    /// An answer without a body, such as 204.
+    async fn read_nothing(response: reqwest::Response) -> Result<(), Error> {
+        if response.status().is_success() {
+            return Ok(());
+        }
+        Err(Self::refusal(response).await)
+    }
+
+    /// The core's sentence for an error status.
+    async fn refusal(response: reqwest::Response) -> Error {
+        let status = response.status();
         let text = response.text().await.unwrap_or_default();
         let message = serde_json::from_str::<Problem>(&text)
             .map(|p| p.error)
@@ -161,10 +177,10 @@ impl Client {
                     .unwrap_or("unexpected answer")
                     .to_owned()
             });
-        Err(Error::Api {
+        Error::Api {
             status: status.as_u16(),
             message,
-        })
+        }
     }
 
     async fn get<T: DeserializeOwned>(
@@ -227,6 +243,51 @@ impl Client {
     /// A ticket with its conversation and links. Scope `tickets:read`.
     pub async fn ticket(&self, number: i64) -> Result<Ticket, Error> {
         self.get(&format!("/tickets/{number}"), &[]).await
+    }
+
+    /// Creates the asset the add-on knows by `asset.reference`, or updates the one it supplied
+    /// before with that reference (bringing it back if it retired it), so that the add-on can send
+    /// its whole inventory again safely. The core refuses (409) an unknown kind, a site that is not
+    /// one of the customer's active sites, and a reference of another customer's asset. Scope
+    /// `catalog:write`.
+    pub async fn supply_asset(&self, asset: &SuppliedAsset) -> Result<Supplied, Error> {
+        let response = self
+            .http
+            .post(self.url("/assets"))
+            .bearer_auth(&self.token)
+            .json(asset)
+            .send()
+            .await?;
+        let created = response.status() == reqwest::StatusCode::CREATED;
+        Ok(Supplied {
+            asset: Self::read(response).await?,
+            created,
+        })
+    }
+
+    /// Updates an asset the add-on is the source of; the core refuses (409) one entered by hand or
+    /// supplied by another add-on. Scope `catalog:write`.
+    pub async fn update_asset(&self, id: Uuid, details: &AssetDetails) -> Result<Asset, Error> {
+        let response = self
+            .http
+            .put(self.url(&format!("/assets/{id}")))
+            .bearer_auth(&self.token)
+            .json(details)
+            .send()
+            .await?;
+        Self::read(response).await
+    }
+
+    /// Retires an asset the add-on is the source of, when it leaves the add-on's system; retiring
+    /// it again changes nothing. Scope `catalog:write`.
+    pub async fn retire_asset(&self, id: Uuid) -> Result<(), Error> {
+        let response = self
+            .http
+            .post(self.url(&format!("/assets/{id}/retire")))
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+        Self::read_nothing(response).await
     }
 
     /// Proposes `content` on `target`, with a `rationale` the agent reads: one sentence per
