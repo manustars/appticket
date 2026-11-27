@@ -122,7 +122,7 @@ condition left out matches anything, so a rule without conditions matches every 
 | `customer` | The host is an asset of this customer, by name. A host no customer covers, or two do, has no customer. |
 | `host_group` | One of the host's groups is this one or nested in it by name: `Brightfield` holds for `Brightfield/Offices/Floor 2`, not for `Brightfield East`. |
 | `tags` | Each of these event tags is among the problem's: `{ tag = "service", value = "mail" }`, or `{ tag = "scope" }` for any value. |
-| `trigger_contains` | The trigger's name, with its macros resolved as the problem shows it, contains this text. |
+| `trigger_contains` | The trigger's name, with its macros resolved as the problem shows it, contains this text. It is the event's name: for a trigger with an event name of its own (*Event name* in the trigger's form), that one. |
 
 A rule names a customer or a host group, not both. Names, values and texts are compared ignoring
 case. The outcome of a rule is `outcome = "ignore"`, or `outcome = "open"` with:

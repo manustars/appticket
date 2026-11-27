@@ -78,7 +78,8 @@ async fn check_tells_the_rule_a_problem_of_zabbix_meets_by_event_id_or_by_its_fi
         .call(
             "item.create",
             json!({"hostid": host, "name": "Mail queue", "key_": "hd.queue",
-                   "type": 2, "value_type": 3}),
+                   "type": 2, "value_type": 3,
+                   "tags": [{"tag": "component", "value": "queue"}]}),
         )
         .await
         .unwrap();
@@ -134,14 +135,15 @@ async fn check_tells_the_rule_a_problem_of_zabbix_meets_by_event_id_or_by_its_fi
     std::fs::write(dir.join("zabbix.toml"), format!("{config}{RULES}")).unwrap();
     let p = |name: &str| zabbix.name(name);
 
-    // By event id: severity, tags (the trigger's and the host's) and name come from Zabbix, the
-    // customer from the external reference of the group the host's group is nested in.
+    // By event id: severity, tags (the trigger's, the item's and the host's) and name come from
+    // Zabbix, the customer from the external reference of the group the host's group is nested
+    // in.
     assert_eq!(
         check(&dir, &core, &zabbix, &["--event", &event]).unwrap(),
         format!(
             "Host \"{visible}\", in the host group \"{}\": an asset of Brightfield.\n\
              Problem: event {event}, severity high, trigger \"Mail queue of {visible} is too \
-             long\", the tags \"service=mail\" and \"site=north\".\n\
+             long\", the tags \"component=queue\", \"service=mail\" and \"site=north\".\n\
              Rule 2 (\"Mail\") matches: a ticket opened with priority high, linking the service \
              \"Hosted mail\" when the customer uses it; on recovery, a note, and the ticket \
              resolved only when no agent has worked on it; once an agent resolves the ticket, \
