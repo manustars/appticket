@@ -1,7 +1,7 @@
 -- The conflicts an add-on reports (docs/domain-rules.md, "Add-ons"): what of its system it does
--- not import because no external reference covers it or two do, each with a sentence an
--- administrator can act on. The add-on sends the whole list and the core keeps the latest one, to
--- show in the add-on's state, also while the add-on is switched off.
+-- not import because no external reference covers it or two do, each with a sentence those who
+-- manage add-ons can act on. The add-on sends the whole list and the core keeps the latest one,
+-- to show in the add-on's state, also while the add-on is switched off.
 
 CREATE TABLE conflict_lists (
     addon       text PRIMARY KEY REFERENCES addons (name),
