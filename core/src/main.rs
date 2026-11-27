@@ -28,6 +28,7 @@ mod imap;
 mod import;
 mod key_requesters;
 mod linked_addons;
+mod live_details;
 mod local_sign_in;
 mod mail;
 mod mail_status;
@@ -280,6 +281,7 @@ async fn main() -> anyhow::Result<()> {
                 trusted_proxies,
                 identity_provider,
                 identity_provider_activity,
+                addons: addons::http_client()?,
             };
             http::serve(state, listen, web_dir).await
         }

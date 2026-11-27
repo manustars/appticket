@@ -2539,6 +2539,50 @@
         }
       }
     },
+    "/api/customers/{id}/assets/live-details": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "The live details of the customer's active assets, from the add-on each comes from, asked\nwhen this is read. Each add-on is asked within 2 seconds, all at once; one that does not\nanswer in time, answers with an error or is switched off has `details` null, and one that has\nno live details of an asset (it answered 404) is left out.",
+        "operationId": "customer_asset_live_details",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The customer",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AssetLiveDetails"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/customers/{id}/bring-back": {
       "post": {
         "tags": [
@@ -5282,6 +5326,59 @@
         }
       }
     },
+    "/api/tickets/{number}/assets/live-details": {
+      "get": {
+        "tags": [
+          "tickets"
+        ],
+        "summary": "The live details of the active assets the ticket links, as for a customer's assets.",
+        "operationId": "ticket_asset_live_details",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The ticket's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AssetLiveDetails"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tickets/{number}/assets/{asset}": {
       "put": {
         "tags": [
@@ -6184,6 +6281,56 @@
     }
   },
   "webhooks": {
+    "live_details": {
+      "get": {
+        "summary": "The live details of an asset",
+        "description": "Asked as `GET <url>/assets/{reference}` of the add-on an asset comes from, with the add-on's reference for it, whenever agents look at the asset. The core waits 2 seconds at most; an add-on that does not answer in time, answers with another status or with something that is not live details has its details shown as unavailable. A label may also be a single string, taken as English.",
+        "parameters": [
+          {
+            "name": "reference",
+            "in": "path",
+            "description": "The add-on's reference for the asset, percent-encoded as one path segment.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hd-timestamp",
+            "in": "header",
+            "description": "Seconds since the Unix epoch when the core asked.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hd-signature",
+            "in": "header",
+            "description": "`sha256=` and the hex HMAC-SHA-256 of `<hd-timestamp>.GET /assets/<reference>`, the reference not percent-encoded, keyed with the add-on's event secret.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The asset's live details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The add-on has no live details of the asset: agents see none."
+          }
+        }
+      }
+    },
     "ticket.state_changed": {
       "post": {
         "summary": "A ticket's state changed",
@@ -7065,6 +7212,35 @@
           }
         }
       },
+      "AssetLiveDetails": {
+        "type": "object",
+        "description": "The live details one add-on gives of one asset.",
+        "required": [
+          "asset_id",
+          "addon"
+        ],
+        "properties": {
+          "addon": {
+            "type": "string",
+            "description": "The add-on asked."
+          },
+          "asset_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "details": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LiveDetails",
+                "description": "`null` when they are unavailable: the add-on did not answer in time, answered with an\nerror or with something that is not live details, or is switched off."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "AssigneeChange": {
         "type": "object",
         "properties": {
@@ -7527,6 +7703,48 @@
             "minimum": 0
           }
         }
+      },
+      "DetailField": {
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "properties": {
+          "label": {
+            "$ref": "#/components/schemas/BTreeMap",
+            "description": "Per language; agents read theirs, else English."
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "DetailLink": {
+        "type": "object",
+        "required": [
+          "label",
+          "url"
+        ],
+        "properties": {
+          "label": {
+            "$ref": "#/components/schemas/BTreeMap",
+            "description": "Per language; agents read theirs, else English."
+          },
+          "url": {
+            "type": "string",
+            "description": "An `http` or `https` URL in the add-on's system."
+          }
+        }
+      },
+      "DetailState": {
+        "type": "string",
+        "description": "How the asset is doing, as the add-on sees it.",
+        "enum": [
+          "ok",
+          "warning",
+          "problem"
+        ]
       },
       "Direction": {
         "type": "string",
@@ -8009,6 +8227,32 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "LiveDetails": {
+        "type": "object",
+        "description": "What an add-on says of an asset now.",
+        "required": [
+          "state",
+          "fields",
+          "links"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DetailField"
+            }
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DetailLink"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/DetailState"
           }
         }
       },

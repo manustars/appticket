@@ -15,6 +15,7 @@ use super::{AppState, router};
 use crate::testing;
 
 mod addon_catalog;
+mod live_details;
 
 /// A signed-in client of the API.
 pub struct Client {

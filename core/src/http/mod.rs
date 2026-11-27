@@ -48,7 +48,7 @@ pub use web::with_web;
         title = "Help desk core API",
         description = "API of the help desk core."
     ),
-    components(schemas(TicketStateChangedEvent))
+    components(schemas(TicketStateChangedEvent, crate::live_details::LiveDetails))
 )]
 struct ApiDoc;
 
@@ -98,9 +98,73 @@ fn with_events(mut spec: utoipa::openapi::OpenApi) -> utoipa::openapi::OpenApi {
                 crate::addons::TICKET_STATE_CHANGED,
                 PathItem::new(HttpMethod::Post, operation),
             )
+            .path(
+                "live_details",
+                PathItem::new(HttpMethod::Get, live_details()),
+            )
             .build(),
     );
     spec
+}
+
+/// The read the core makes of an add-on for an asset's live details (sdk/README.md).
+fn live_details() -> utoipa::openapi::path::Operation {
+    use utoipa::openapi::{
+        ContentBuilder, Ref, Required, Response,
+        path::{OperationBuilder, ParameterBuilder, ParameterIn},
+        schema::{ObjectBuilder, Type},
+    };
+    let parameter = |name: &str, place: ParameterIn, description: &str| {
+        ParameterBuilder::new()
+            .name(name)
+            .parameter_in(place)
+            .required(Required::True)
+            .description(Some(description))
+            .schema(Some(ObjectBuilder::new().schema_type(Type::String)))
+            .build()
+    };
+    OperationBuilder::new()
+        .summary(Some("The live details of an asset"))
+        .description(Some(
+            "Asked as `GET <url>/assets/{reference}` of the add-on an asset comes from, with \
+             the add-on's reference for it, whenever agents look at the asset. The core waits \
+             2 seconds at most; an add-on that does not answer in time, answers with another \
+             status or with something that is not live details has its details shown as \
+             unavailable. A label may also be a single string, taken as English.",
+        ))
+        .parameter(parameter(
+            "reference",
+            ParameterIn::Path,
+            "The add-on's reference for the asset, percent-encoded as one path segment.",
+        ))
+        .parameter(parameter(
+            crate::addons::HEADER_TIMESTAMP,
+            ParameterIn::Header,
+            "Seconds since the Unix epoch when the core asked.",
+        ))
+        .parameter(parameter(
+            crate::addons::HEADER_SIGNATURE,
+            ParameterIn::Header,
+            "`sha256=` and the hex HMAC-SHA-256 of `<hd-timestamp>.GET /assets/<reference>`, \
+             the reference not percent-encoded, keyed with the add-on's event secret.",
+        ))
+        .response(
+            "200",
+            Response::builder()
+                .description("The asset's live details.")
+                .content(
+                    "application/json",
+                    ContentBuilder::new()
+                        .schema(Some(Ref::from_schema_name("LiveDetails")))
+                        .build(),
+                )
+                .build(),
+        )
+        .response(
+            "404",
+            Response::new("The add-on has no live details of the asset: agents see none."),
+        )
+        .build()
 }
 
 /// What every handler can reach.
@@ -119,12 +183,15 @@ pub struct AppState {
     pub identity_provider: Option<Arc<crate::oidc::Provider>>,
     /// What signing in through the identity provider last did, when one is configured.
     pub identity_provider_activity: Option<crate::mail_status::Tracker>,
+    /// The client the core asks add-ons for the live details of assets with.
+    pub addons: reqwest::Client,
 }
 
 #[cfg(test)]
 impl AppState {
     pub fn for_tests(db: &PgPool) -> AppState {
         AppState {
+            addons: crate::addons::http_client().expect("an HTTP client"),
             db: db.clone(),
             sender: Some(crate::testing::sender()),
             mail: MailStatus::default(),

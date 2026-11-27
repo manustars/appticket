@@ -760,6 +760,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/customers/{id}/assets/live-details": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The live details of the customer's active assets, from the add-on each comes from, asked
+         *     when this is read. Each add-on is asked within 2 seconds, all at once; one that does not
+         *     answer in time, answers with an error or is switched off has `details` null, and one that has
+         *     no live details of an asset (it answered 404) is left out.
+         */
+        get: operations["customer_asset_live_details"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/customers/{id}/bring-back": {
         parameters: {
             query?: never;
@@ -1568,6 +1590,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tickets/{number}/assets/live-details": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The live details of the active assets the ticket links, as for a customer's assets. */
+        get: operations["ticket_asset_live_details"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tickets/{number}/assets/{asset}": {
         parameters: {
             query?: never;
@@ -1768,6 +1807,60 @@ export interface paths {
     };
 }
 export interface webhooks {
+    live_details: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The live details of an asset
+         * @description Asked as `GET <url>/assets/{reference}` of the add-on an asset comes from, with the add-on's reference for it, whenever agents look at the asset. The core waits 2 seconds at most; an add-on that does not answer in time, answers with another status or with something that is not live details has its details shown as unavailable. A label may also be a single string, taken as English.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Seconds since the Unix epoch when the core asked. */
+                    "hd-timestamp": string;
+                    /** @description `sha256=` and the hex HMAC-SHA-256 of `<hd-timestamp>.GET /assets/<reference>`, the reference not percent-encoded, keyed with the add-on's event secret. */
+                    "hd-signature": string;
+                };
+                path: {
+                    /** @description The add-on's reference for the asset, percent-encoded as one path segment. */
+                    reference: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The asset's live details. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["LiveDetails"];
+                    };
+                };
+                /** @description The add-on has no live details of the asset: agents see none. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "ticket.state_changed": {
         parameters: {
             query?: never;
@@ -2135,6 +2228,14 @@ export interface components {
             /** @description The serial number the add-on sent last, if any. */
             serial_number?: string | null;
         };
+        /** @description The live details one add-on gives of one asset. */
+        AssetLiveDetails: {
+            /** @description The add-on asked. */
+            addon: string;
+            /** Format: uuid */
+            asset_id: string;
+            details?: components["schemas"]["LiveDetails"] | null;
+        };
         AssigneeChange: {
             /**
              * Format: uuid
@@ -2277,6 +2378,22 @@ export interface components {
              */
             unassigned: number;
         };
+        DetailField: {
+            /** @description Per language; agents read theirs, else English. */
+            label: components["schemas"]["BTreeMap"];
+            value: string;
+        };
+        DetailLink: {
+            /** @description Per language; agents read theirs, else English. */
+            label: components["schemas"]["BTreeMap"];
+            /** @description An `http` or `https` URL in the add-on's system. */
+            url: string;
+        };
+        /**
+         * @description How the asset is doing, as the add-on sees it.
+         * @enum {string}
+         */
+        DetailState: "ok" | "warning" | "problem";
         /**
          * @description Whether the help desk received a message or sent it.
          * @enum {string}
@@ -2448,6 +2565,12 @@ export interface components {
             /** Format: uuid */
             id: string;
             name: string;
+        };
+        /** @description What an add-on says of an asset now. */
+        LiveDetails: {
+            fields: components["schemas"]["DetailField"][];
+            links: components["schemas"]["DetailLink"][];
+            state: components["schemas"]["DetailState"];
         };
         MailState: {
             /** @description The address replies come from; null when agents cannot reply. */
@@ -5193,6 +5316,36 @@ export interface operations {
             };
         };
     };
+    customer_asset_live_details: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The customer */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetLiveDetails"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     bring_back: {
         parameters: {
             query?: never;
@@ -7366,6 +7519,44 @@ export interface operations {
                 };
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    ticket_asset_live_details: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's number */
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetLiveDetails"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
