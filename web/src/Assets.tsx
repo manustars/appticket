@@ -30,6 +30,20 @@ export function WhereItIs({ asset: a }: { asset: Asset }) {
   )
 }
 
+/** The add-on an asset comes from, when one supplies it, with its reference there. */
+export function AssetSource({ asset: a }: { asset: Asset }) {
+  const { t } = useI18n()
+  if (!a.source_addon) return null
+  return (
+    <>
+      {' '}
+      <span className="marker source" title={a.source_ref ?? undefined}>
+        {t('assets.fromAddon', { addon: a.source_addon })}
+      </span>
+    </>
+  )
+}
+
 /** The assets a requester holds, as their page lists them. */
 export function HeldAssets({ assets }: { assets: Asset[] }) {
   const { t } = useI18n()
@@ -46,7 +60,7 @@ export function HeldAssets({ assets }: { assets: Asset[] }) {
         {assets.map((a) => (
           <tr key={a.id}>
             <td>{a.kind}</td>
-            <td>{a.name}</td>
+            <td>{a.name}<AssetSource asset={a} /></td>
             <td>{a.serial_number ?? none}</td>
             <td><WhereItIs asset={a} /></td>
           </tr>
@@ -59,6 +73,8 @@ export function HeldAssets({ assets }: { assets: Asset[] }) {
 /** What is picked and typed for the asset being edited. */
 interface Draft {
   id: string
+  /** The add-on it comes from: only that add-on changes its kind, name, serial number and site. */
+  source: string | null
   kindId: string
   name: string
   serialNumber: string
@@ -68,6 +84,7 @@ interface Draft {
 
 const draftOf = (a: Asset): Draft => ({
   id: a.id,
+  source: a.source_addon ?? null,
   kindId: a.kind_id,
   name: a.name,
   serialNumber: a.serial_number ?? '',
@@ -170,27 +187,39 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
               // Its own key: reusing the shown row would turn the clicked Edit button into Save,
               // and the click would then submit the form.
               <tr key={`${a.id}-edit`}>
-                <td>
-                  <select form={`${id}-edit`} aria-label={t('assets.kind')} required value={editing.kindId}
-                    onChange={(e) => setEditing({ ...editing, kindId: e.target.value })}>
-                    {kindOptions}
-                  </select>
-                </td>
-                <td>
-                  <input form={`${id}-edit`} aria-label={t('assets.name')} required value={editing.name}
-                    onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
-                </td>
-                <td>
-                  <input form={`${id}-edit`} aria-label={t('assets.serialNumber')} value={editing.serialNumber}
-                    onChange={(e) => setEditing({ ...editing, serialNumber: e.target.value })} />
-                </td>
-                <td>
-                  <select form={`${id}-edit`} aria-label={t('assets.ownSite')} value={editing.siteId}
-                    onChange={(e) => setEditing({ ...editing, siteId: e.target.value })}>
-                    <option value="">{t('assets.noSite')}</option>
-                    {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
-                </td>
+                {editing.source ? (
+                  // What its source supplied is changed in the add-on's system, not here.
+                  <>
+                    <td>{a.kind}</td>
+                    <td>{a.name}<AssetSource asset={a} /></td>
+                    <td>{a.serial_number ?? none}</td>
+                    <td>{a.site?.name ?? none}</td>
+                  </>
+                ) : (
+                  <>
+                    <td>
+                      <select form={`${id}-edit`} aria-label={t('assets.kind')} required value={editing.kindId}
+                        onChange={(e) => setEditing({ ...editing, kindId: e.target.value })}>
+                        {kindOptions}
+                      </select>
+                    </td>
+                    <td>
+                      <input form={`${id}-edit`} aria-label={t('assets.name')} required value={editing.name}
+                        onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+                    </td>
+                    <td>
+                      <input form={`${id}-edit`} aria-label={t('assets.serialNumber')} value={editing.serialNumber}
+                        onChange={(e) => setEditing({ ...editing, serialNumber: e.target.value })} />
+                    </td>
+                    <td>
+                      <select form={`${id}-edit`} aria-label={t('assets.ownSite')} value={editing.siteId}
+                        onChange={(e) => setEditing({ ...editing, siteId: e.target.value })}>
+                        <option value="">{t('assets.noSite')}</option>
+                        {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                    </td>
+                  </>
+                )}
                 <td>
                   <select form={`${id}-edit`} aria-label={t('assets.holder')} value={editing.holderId}
                     onChange={(e) => setEditing({ ...editing, holderId: e.target.value })}>
@@ -212,6 +241,7 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
                 <td>{a.kind}</td>
                 <td>
                   {a.name}
+                  <AssetSource asset={a} />
                   {a.retired_at && (
                     <> <span className="marker retired">{t('assets.retired', { date: formatTime(a.retired_at) })}</span></>
                   )}
@@ -226,16 +256,27 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
                 <td className="row-actions">
                   {!readOnly && !a.retired_at && (
                     <>
-                      <button type="button" className="link" disabled={action.busy}
-                        aria-label={t('assets.editNamed', { name: a.name })}
-                        onClick={() => { setEditing(draftOf(a)); action.clear() }}>
-                        {t('action.edit')}
-                      </button>
-                      <button type="button" className="link danger" disabled={action.busy}
-                        aria-label={t('assets.retireNamed', { name: a.name })}
-                        onClick={() => retire(a)}>
-                        {t('assets.retire')}
-                      </button>
+                      {a.source_addon ? (
+                        // Only its holder is the agents' to change; its source retires it.
+                        <button type="button" className="link" disabled={action.busy}
+                          aria-label={t('assets.setHolderNamed', { name: a.name })}
+                          onClick={() => { setEditing(draftOf(a)); action.clear() }}>
+                          {t('assets.setHolder')}
+                        </button>
+                      ) : (
+                        <>
+                          <button type="button" className="link" disabled={action.busy}
+                            aria-label={t('assets.editNamed', { name: a.name })}
+                            onClick={() => { setEditing(draftOf(a)); action.clear() }}>
+                            {t('action.edit')}
+                          </button>
+                          <button type="button" className="link danger" disabled={action.busy}
+                            aria-label={t('assets.retireNamed', { name: a.name })}
+                            onClick={() => retire(a)}>
+                            {t('assets.retire')}
+                          </button>
+                        </>
+                      )}
                     </>
                   )}
                 </td>
@@ -244,6 +285,7 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
           </tbody>
         </table>
       )}
+      {assets.data?.some((a) => a.source_addon) && <p className="hint">{t('assets.suppliedHint')}</p>}
       {editing && <form id={`${id}-edit`} onSubmit={save} />}
       {!readOnly && kinds.data?.length === 0 && (
         <p className="hint">
