@@ -95,6 +95,10 @@ pub struct TicketStateChanged {
     /// The state the ticket is in now; never the old one.
     pub new_state: TicketState,
     pub changed_by: StateChangedBy,
+    /// The add-on's own reference for the ticket, when it opened it with one: what maps the
+    /// change back to the problem the add-on opened the ticket for. Never another add-on's.
+    #[serde(default)]
+    pub reference: Option<String>,
 }
 
 /// Who or what changed a ticket's state.
@@ -178,6 +182,7 @@ mod tests {
                 old_state: TicketState::Waiting,
                 new_state: TicketState::Open,
                 changed_by,
+                reference: None,
             })
         };
 
@@ -215,5 +220,25 @@ mod tests {
                 .unwrap(),
             event(StateChangedBy::Other)
         );
+    }
+
+    /// The add-on that opened the ticket with a reference gets it with each change of state.
+    #[test]
+    fn a_change_of_state_carries_the_addon_s_reference() {
+        let mut envelope = Envelope {
+            id: Uuid::nil(),
+            kind: TICKET_STATE_CHANGED.into(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            data: serde_json::json!({"ticket_number": 42, "old_state": "open",
+                "new_state": "resolved", "changed_by": {"kind": "addon", "addon": "watchtower"},
+                "reference": "4711"}),
+        };
+        let reference = |envelope: &Envelope| match envelope.event().unwrap() {
+            Event::TicketStateChanged(changed) => changed.reference,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(reference(&envelope).as_deref(), Some("4711"));
+        envelope.data.as_object_mut().unwrap().remove("reference");
+        assert_eq!(reference(&envelope), None);
     }
 }

@@ -15,7 +15,7 @@ use crate::api::{
 use crate::conflicts::Conflict;
 use crate::names::SystemNames;
 use crate::proposals::{Content, Rationale, Target};
-use crate::tickets::NewTicket;
+use crate::tickets::{NewTicket, OpenedTicket};
 
 /// Why a call to the core failed.
 #[derive(Debug)]
@@ -258,6 +258,21 @@ impl Client {
         self.get(&format!("/tickets/{number}"), &[]).await
     }
 
+    /// The ticket the add-on opened with `reference`, in any state, closed included, as
+    /// [`Client::ticket`] reads it; the core answers 404 for a reference the add-on never gave,
+    /// another add-on's included. Scope `tickets:read`.
+    pub async fn ticket_by_reference(&self, reference: &str) -> Result<Ticket, Error> {
+        self.get("/tickets/by-reference", &[("reference", reference)])
+            .await
+    }
+
+    /// Every ticket the add-on opened that is not closed, with its reference when it gave one,
+    /// most recent first: what it needs to pick its tickets up again, such as after a restart.
+    /// Scope `tickets:read`.
+    pub async fn opened_tickets(&self) -> Result<Vec<TicketSummary>, Error> {
+        self.get("/tickets/opened", &[]).await
+    }
+
     /// Creates the asset the add-on knows by `asset.reference`, or updates the one it supplied
     /// before with that reference (bringing it back if it retired it), so that the add-on can send
     /// its whole inventory again safely. When it would create the asset and the customer already
@@ -358,10 +373,31 @@ impl Client {
 
     /// Opens a ticket without a requester for an active customer, with a priority and the
     /// customer's active assets and services; replies on it go to the customer's key requesters.
-    /// Returns its number. The core answers 409, with a sentence naming it, when an asset or
-    /// service does not fit the customer or is retired, and 404 when one does not exist. Scope
+    /// With a [`NewTicket::reference`] the add-on gave before, the core opens nothing and answers
+    /// the ticket opened then, unchanged, with [`OpenedTicket::created`] false: retrying, or
+    /// catching up after being down, opens no second ticket. The core answers 409, with a sentence
+    /// naming it, when an asset or service does not fit the customer or is retired, or the
+    /// reference does not fit, and 404 when an asset or service does not exist. Scope
     /// `tickets:write`.
-    pub async fn open_ticket(&self, ticket: &NewTicket) -> Result<i64, Error> {
+    ///
+    /// ```no_run
+    /// # async fn example(core: &hd_addon_sdk::Client, customer: uuid::Uuid) -> Result<(), hd_addon_sdk::Error> {
+    /// use hd_addon_sdk::NewTicket;
+    ///
+    /// let opened = core
+    ///     .open_ticket(&NewTicket {
+    ///         // The id of the problem the ticket is about.
+    ///         reference: Some("4711".into()),
+    ///         ..NewTicket::new(customer, "SRV-01: disk almost full")
+    ///     })
+    ///     .await?;
+    /// if !opened.created {
+    ///     // Opened before for this problem: the ticket is as it was, maybe closed.
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn open_ticket(&self, ticket: &NewTicket) -> Result<OpenedTicket, Error> {
         let response = self
             .http
             .post(self.url("/tickets"))
@@ -369,7 +405,11 @@ impl Client {
             .json(ticket)
             .send()
             .await?;
-        Ok(Self::read::<Opened>(response).await?.number)
+        let created = response.status() == reqwest::StatusCode::CREATED;
+        Ok(OpenedTicket {
+            number: Self::read::<Opened>(response).await?.number,
+            created,
+        })
     }
 
     /// Replaces the name list of the add-on's system, which agents who manage customers pick

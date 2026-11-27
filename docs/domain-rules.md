@@ -271,14 +271,23 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   its state (even to the one it had, as when attaching an inbox message to it), priority, links or
   customer, or a child attached to or detached from it, or it to or from a parent. It stays so,
   also once they are unassigned. Notes of add-ons and messages received are no work of an agent.
+- An add-on can give a ticket it opens a reference of its own, such as the id of the problem of
+  its system the ticket is about, which names that ticket for good: nothing adds, changes or
+  removes it later. Opening a ticket again with a reference the add-on gave before opens no second
+  ticket, also when two opens come at once: the add-on gets the ticket opened then, in any state,
+  closed included, and nothing on it changes, whatever else it sends. A reference names one ticket
+  of one add-on, and another add-on's references are its own. Only the add-on that gave it reads
+  it, on the ticket and in the changes of its state it is told of; agents and other add-ons do
+  not.
 - Add-ons registered for `ticket.state_changed` are told of every change of a ticket's state,
   once, with the state it left, the state it reached and who changed it: an agent, a received
   message that reopened it, or the add-on that resolved a ticket it opened. A move to the state
   the ticket is already in is no change.
 - An alert opens a ticket of the customer of the asset it is about, only when the monitoring
-  add-on's rules say so, and at most one ticket per problem of the monitoring system. When the
-  problem recovers, the add-on adds a note and resolves the ticket only if no agent has worked on
-  it (as above), unless its rule says otherwise.
+  add-on's rules say so, and at most one ticket per problem of the monitoring system: the add-on
+  gives the ticket the problem's id as its reference. When the problem recovers, the add-on adds a
+  note and resolves the ticket only if no agent has worked on it (as above), unless its rule says
+  otherwise.
 
 ## Assistant
 

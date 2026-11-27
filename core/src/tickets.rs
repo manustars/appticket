@@ -181,6 +181,10 @@ pub struct TicketStateChanged {
     /// The state the ticket is in now; never the old one.
     pub new_state: TicketState,
     pub changed_by: StateChangedBy,
+    /// Your own reference for the ticket, when you opened it with one; never sent to other
+    /// add-ons. The core adds it as it delivers the event and does not keep it in the event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
 }
 
 /// Who or what changed a ticket's state. More kinds may come: read `kind` and skip the ones you
@@ -271,6 +275,7 @@ async fn move_state(
         old_state: from,
         new_state: to,
         changed_by,
+        reference: None,
     };
     crate::addons::emit(
         tx,
@@ -747,6 +752,10 @@ pub struct TicketDetail {
     /// The add-on that opened the ticket, by name, when an add-on did; empty for a ticket an agent
     /// or a message opened.
     pub opened_by_addon: Option<String>,
+    /// The add-on's own reference for the ticket, given only to the add-on that opened it with
+    /// one: never to agents or other add-ons.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
     /// Whether an agent has worked on the ticket: once they have been its assignee, written a
     /// reply, a note or an announcement on it, or changed it by hand (its state, even to the one it
     /// had, as when attaching an inbox message to it; its priority, links or customer; a child
@@ -982,6 +991,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
             name: row.assignee_name.unwrap_or_default(),
         }),
         opened_by_addon: row.opened_by_addon,
+        reference: None,
         worked_on_by_agent: row.worked_on_by_agent,
         assets,
         services,

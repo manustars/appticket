@@ -108,7 +108,7 @@ struct Checked {
 
 /// `text` trimmed, refused when it is blank, holds a control character or is longer than `max`
 /// characters; `what` says what it is.
-fn trimmed(text: &str, max: usize, what: impl Fn() -> String) -> Result<&str> {
+pub(crate) fn trimmed(text: &str, max: usize, what: impl Fn() -> String) -> Result<&str> {
     let text = text.trim();
     if text.is_empty() {
         return rule(format!("{} cannot be blank", what()));

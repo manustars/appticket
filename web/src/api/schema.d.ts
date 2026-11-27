@@ -231,13 +231,52 @@ export interface paths {
         get: operations["open_tickets"];
         put?: never;
         /**
-         * Opens a ticket without a requester for an active customer, with a priority and the customer's
-         *     active assets and services it is about; replies on it go to the customer's key requesters. The
-         *     description becomes the ticket's first internal note, by the add-on. An asset or service that
-         *     does not fit refuses the ticket, with a sentence naming it; one that does not exist is not
-         *     found. Scope `tickets:write`.
+         * Opens a ticket without a requester
+         * @description Opens a ticket without a requester for an active customer, with a priority and the customer's active assets and services it is about; replies on it go to the customer's key requesters. The description becomes the ticket's first internal note, by the add-on. An asset or service that does not fit refuses the ticket, with a sentence naming it; one that does not exist is not found. A `reference`, the add-on's own for the ticket such as the id of the problem it is about, names the ticket for good: at most 255 characters once trimmed, neither blank nor with control characters, compared exactly. Opening again with a reference the add-on gave before opens nothing and answers 200 with the ticket opened then, in any state and unchanged, whatever else the request says; another add-on's references are its own. Scope `tickets:write`.
          */
         post: operations["open_ticket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/addon/tickets/by-reference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The ticket the add-on opened with this reference, in any state, closed included, as
+         *     `GET /api/addon/tickets/{number}` gives it; not found for a reference the add-on never gave,
+         *     another add-on's included. Scope `tickets:read`.
+         */
+        get: operations["ticket_by_reference"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/addon/tickets/opened": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every ticket the add-on opened that is not closed, with its reference when it gave one, most
+         *     recent first: what it needs to pick up its tickets again, such as after a restart. Scope
+         *     `tickets:read`.
+         */
+        get: operations["opened_tickets"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -253,8 +292,8 @@ export interface paths {
         };
         /**
          * A ticket with its messages and links, without internal notes, announcements and its customer's
-         *     key requesters; `worked_on_by_agent` says whether an agent has worked on it all the same.
-         *     Scope `tickets:read`.
+         *     key requesters; `worked_on_by_agent` says whether an agent has worked on it all the same, and
+         *     `reference` is given to the add-on that opened it with one. Scope `tickets:read`.
          */
         get: operations["ticket"];
         put?: never;
@@ -2082,6 +2121,13 @@ export interface components {
              */
             description?: string | null;
             priority?: components["schemas"]["Priority"] | null;
+            /**
+             * @description The add-on's own reference for the ticket, such as the id of the problem it is about,
+             *     compared exactly once trimmed: it names this ticket for good, and opening again with it
+             *     answers this ticket, unchanged. Not blank, without control characters, at most
+             *     [`MAX_REFERENCE_LENGTH`] characters. Without one, each open opens a new ticket.
+             */
+            reference?: string | null;
             /** @description Active services the customer uses that the ticket is about. */
             service_ids?: string[];
             title: string;
@@ -2129,6 +2175,11 @@ export interface components {
             /** Format: int64 */
             number: number;
             priority: components["schemas"]["Priority"];
+            /**
+             * @description Your own reference for the ticket, when you opened it with one; another add-on's is not
+             *     given.
+             */
+            reference?: string | null;
             /**
              * @description The address a reply goes to: the one the requester last wrote from on the ticket, else the
              *     one an agent last picked there, else the first they registered.
@@ -3342,6 +3393,11 @@ export interface components {
             priority: components["schemas"]["Priority"];
             /** @description Open proposals of add-ons such as the Assistant. */
             proposals: components["schemas"]["ProposalView"][];
+            /**
+             * @description The add-on's own reference for the ticket, given only to the add-on that opened it with
+             *     one: never to agents or other add-ons.
+             */
+            reference?: string | null;
             requester?: components["schemas"]["Requester"] | null;
             /** @description Services of the help desk the ticket is about. */
             services: components["schemas"]["LinkedService"][];
@@ -3369,6 +3425,11 @@ export interface components {
             new_state: components["schemas"]["TicketState"];
             /** @description The state the ticket left. */
             old_state: components["schemas"]["TicketState"];
+            /**
+             * @description Your own reference for the ticket, when you opened it with one; never sent to other
+             *     add-ons. The core adds it as it delivers the event and does not keep it in the event.
+             */
+            reference?: string | null;
             /** Format: int64 */
             ticket_number: number;
         };
@@ -3967,6 +4028,16 @@ export interface operations {
             };
         };
         responses: {
+            /** @description The ticket the add-on opened before with the same reference, unchanged */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddonTicketOpened"];
+                };
+            };
+            /** @description A new ticket */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -3984,6 +4055,87 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    ticket_by_reference: {
+        parameters: {
+            query: {
+                /** @description The reference the add-on gave the ticket when it opened it, compared exactly once trimmed. */
+                reference: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketDetail"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    opened_tickets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddonTicketSummary"][];
+                };
+            };
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
