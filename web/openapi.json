@@ -6904,7 +6904,7 @@
               "string",
               "null"
             ],
-            "description": "The add-on's own reference for the ticket, such as the id of the problem it is about,\ncompared exactly once trimmed: it names this ticket for good, and opening again with it\nanswers this ticket, unchanged. Not blank, without control characters, at most\n[`MAX_REFERENCE_LENGTH`] characters. Without one, each open opens a new ticket.",
+            "description": "The add-on's own reference for the ticket, such as the id of the problem it is about,\ncompared exactly once trimmed: it names this ticket for good, and opening again with it\nanswers this ticket, unchanged. Not blank, without control characters, at most 255\ncharacters. Without one, each open opens a new ticket.",
             "maxLength": 255
           },
           "service_ids": {

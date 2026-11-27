@@ -2124,8 +2124,8 @@ export interface components {
             /**
              * @description The add-on's own reference for the ticket, such as the id of the problem it is about,
              *     compared exactly once trimmed: it names this ticket for good, and opening again with it
-             *     answers this ticket, unchanged. Not blank, without control characters, at most
-             *     [`MAX_REFERENCE_LENGTH`] characters. Without one, each open opens a new ticket.
+             *     answers this ticket, unchanged. Not blank, without control characters, at most 255
+             *     characters. Without one, each open opens a new ticket.
              */
             reference?: string | null;
             /** @description Active services the customer uses that the ticket is about. */
