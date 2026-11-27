@@ -161,7 +161,8 @@ export interface paths {
          * Opens a ticket without a requester for an active customer, with a priority and the customer's
          *     active assets and services it is about; replies on it go to the customer's key requesters. The
          *     description becomes the ticket's first internal note, by the add-on. An asset or service that
-         *     does not fit refuses the ticket, with a sentence naming it. Scope `tickets:write`.
+         *     does not fit refuses the ticket, with a sentence naming it; one that does not exist is not
+         *     found. Scope `tickets:write`.
          */
         post: operations["open_ticket"];
         delete?: never;
@@ -1748,6 +1749,25 @@ export interface components {
             name: string;
             scopes: string[];
         };
+        /** @description A ticket an add-on opens. */
+        AddonNewTicket: {
+            /** @description Active assets of the customer the ticket is about. */
+            asset_ids?: string[];
+            /**
+             * Format: uuid
+             * @description The customer the ticket is for; an offboarded customer gets no new tickets.
+             */
+            customer_id: string;
+            /**
+             * @description What the add-on knows of the problem, such as the alert it saw. It becomes the ticket's
+             *     first internal note, by the add-on: seen by agents only, never sent to the customer.
+             */
+            description?: string | null;
+            priority?: components["schemas"]["Priority"] | null;
+            /** @description Active services the customer uses that the ticket is about. */
+            service_ids?: string[];
+            title: string;
+        };
         AddonNote: {
             body: string;
         };
@@ -3244,7 +3264,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["NewTicket"];
+                "application/json": components["schemas"]["AddonNewTicket"];
             };
         };
         responses: {

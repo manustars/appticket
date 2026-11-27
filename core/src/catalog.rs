@@ -801,24 +801,70 @@ async fn open_ticket(tx: &mut Transaction<'_, Postgres>, number: i64) -> Result<
     }
 }
 
+/// Refuses an asset that a ticket of `customer` cannot link: one of another customer, or retired;
+/// the refusal names it. The asset stays shared-locked until the transaction ends, so that
+/// retiring it waits for the link.
+pub(crate) async fn ensure_asset_fits(
+    conn: &mut PgConnection,
+    asset: Uuid,
+    customer: Uuid,
+) -> Result<()> {
+    let row: Option<(String, bool, bool, String)> = sqlx::query_as(
+        "SELECT a.name, a.customer_id = c.id, a.retired_at IS NOT NULL, c.name
+         FROM assets a, customers c WHERE a.id = $1 AND c.id = $2
+         FOR SHARE OF a",
+    )
+    .bind(asset)
+    .bind(customer)
+    .fetch_optional(&mut *conn)
+    .await?;
+    match row {
+        None => Err(Error::NotFound("asset")),
+        Some((name, false, _, customer_name)) => rule(format!(
+            "the asset {name} belongs to another customer than {customer_name}"
+        )),
+        Some((name, _, true, _)) => rule(format!("the asset {name} is retired")),
+        Some(_) => Ok(()),
+    }
+}
+
+/// Refuses a service that a ticket of `customer` cannot link: one that is retired, or that the
+/// customer does not use; the refusal names it. The service stays shared-locked until the
+/// transaction ends, so that retiring it waits for the link; the link's key to the customer's use
+/// of the service keeps the customer from stopping meanwhile.
+pub(crate) async fn ensure_service_fits(
+    conn: &mut PgConnection,
+    service: Uuid,
+    customer: Uuid,
+) -> Result<()> {
+    let row: Option<(String, bool, bool, String)> = sqlx::query_as(
+        "SELECT s.name, s.retired_at IS NOT NULL,
+                EXISTS (SELECT 1 FROM customer_services cs
+                        WHERE cs.service_id = s.id AND cs.customer_id = c.id),
+                c.name
+         FROM services s, customers c WHERE s.id = $1 AND c.id = $2
+         FOR SHARE OF s",
+    )
+    .bind(service)
+    .bind(customer)
+    .fetch_optional(&mut *conn)
+    .await?;
+    match row {
+        None => Err(Error::NotFound("service")),
+        Some((name, true, _, _)) => rule(format!("the service {name} is retired")),
+        Some((name, _, false, customer_name)) => {
+            rule(format!("{customer_name} does not use the service {name}"))
+        }
+        Some(_) => Ok(()),
+    }
+}
+
 /// Links an asset of the ticket's customer to the ticket, or unlinks it.
 pub async fn link_asset(db: &PgPool, number: i64, asset: Uuid, linked: bool) -> Result<()> {
     let mut tx = db.begin().await?;
     let (ticket, customer) = open_ticket(&mut tx, number).await?;
     if linked {
-        let row: Option<(Uuid, bool)> =
-            sqlx::query_as("SELECT customer_id, retired_at IS NOT NULL FROM assets WHERE id = $1")
-                .bind(asset)
-                .fetch_optional(&mut *tx)
-                .await?;
-        match row {
-            None => return Err(Error::NotFound("asset")),
-            Some((owner, _)) if owner != customer => {
-                return rule("the asset belongs to another customer than the ticket");
-            }
-            Some((_, true)) => return rule("the asset is retired"),
-            Some(_) => {}
-        }
+        ensure_asset_fits(&mut tx, asset, customer).await?;
         sqlx::query(
             "INSERT INTO ticket_assets (ticket_id, customer_id, asset_id) VALUES ($1, $2, $3)
              ON CONFLICT DO NOTHING",
@@ -848,22 +894,7 @@ pub async fn link_service(db: &PgPool, number: i64, service: Uuid, linked: bool)
     let mut tx = db.begin().await?;
     let (ticket, customer) = open_ticket(&mut tx, number).await?;
     if linked {
-        let row: Option<(bool, bool)> = sqlx::query_as(
-            "SELECT s.retired_at IS NOT NULL,
-                    EXISTS (SELECT 1 FROM customer_services cs
-                            WHERE cs.service_id = s.id AND cs.customer_id = $2)
-             FROM services s WHERE s.id = $1",
-        )
-        .bind(service)
-        .bind(customer)
-        .fetch_optional(&mut *tx)
-        .await?;
-        match row {
-            None => return Err(Error::NotFound("service")),
-            Some((true, _)) => return rule("the service is retired"),
-            Some((_, false)) => return rule("the ticket's customer does not use this service"),
-            Some(_) => {}
-        }
+        ensure_service_fits(&mut tx, service, customer).await?;
         sqlx::query(
             "INSERT INTO ticket_services (ticket_id, customer_id, service_id) VALUES ($1, $2, $3)
              ON CONFLICT DO NOTHING",

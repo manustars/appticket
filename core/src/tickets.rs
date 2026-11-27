@@ -80,24 +80,62 @@ fn not_closed(state: TicketState) -> Result<()> {
     Ok(())
 }
 
+/// Who writes a note: an agent or an add-on.
+#[derive(Debug, Clone, Copy)]
+pub enum NoteAuthor {
+    Agent(Uuid),
+    Addon(Uuid),
+}
+
+/// Adds an internal note by an agent, closed tickets included, and clears their draft there.
 pub async fn add_note(db: &PgPool, number: i64, author: Uuid, body: &str) -> Result<Uuid> {
+    write_note(db, number, NoteAuthor::Agent(author), body).await
+}
+
+/// Adds an internal note to any ticket, closed ones too; an agent's draft there is cleared.
+pub(crate) async fn write_note(
+    db: &PgPool,
+    number: i64,
+    author: NoteAuthor,
+    body: &str,
+) -> Result<Uuid> {
     let body = body.trim();
     if body.is_empty() {
         return rule("a note cannot be empty");
     }
     let mut tx = db.begin().await?;
     let (ticket_id, _) = lock(&mut tx, number).await?;
-    let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO notes (id, ticket_id, author_id, body) VALUES ($1, $2, $3, $4)")
-        .bind(id)
-        .bind(ticket_id)
-        .bind(author)
-        .bind(body)
-        .execute(&mut *tx)
-        .await?;
-    crate::drafts::clear(&mut tx, ticket_id, author).await?;
+    let id = insert_note(&mut tx, ticket_id, author, body).await?;
+    if let NoteAuthor::Agent(agent) = author {
+        crate::drafts::clear(&mut tx, ticket_id, agent).await?;
+    }
     touch(&mut tx, ticket_id).await?;
     tx.commit().await?;
+    Ok(id)
+}
+
+/// Writes the note `body`, already trimmed and not empty, on the ticket.
+pub(crate) async fn insert_note(
+    tx: &mut Transaction<'_, Postgres>,
+    ticket: Uuid,
+    author: NoteAuthor,
+    body: &str,
+) -> Result<Uuid> {
+    let (agent, addon) = match author {
+        NoteAuthor::Agent(agent) => (Some(agent), None),
+        NoteAuthor::Addon(addon) => (None, Some(addon)),
+    };
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO notes (id, ticket_id, author_id, addon_id, body) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(id)
+    .bind(ticket)
+    .bind(agent)
+    .bind(addon)
+    .bind(body)
+    .execute(&mut **tx)
+    .await?;
     Ok(id)
 }
 
@@ -404,13 +442,7 @@ pub async fn open(
     .await?;
     emit_opened(&mut tx, number).await?;
     if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
-        sqlx::query("INSERT INTO notes (id, ticket_id, author_id, body) VALUES ($1, $2, $3, $4)")
-            .bind(Uuid::new_v4())
-            .bind(id)
-            .bind(author)
-            .bind(note)
-            .execute(&mut *tx)
-            .await?;
+        insert_note(&mut tx, id, NoteAuthor::Agent(author), note).await?;
     }
     tx.commit().await?;
     Ok(number)
@@ -562,7 +594,8 @@ pub(crate) fn ticket_subject(title: &str, number: i64) -> String {
     format!("{bare} [#{number}]")
 }
 
-async fn touch(tx: &mut Transaction<'_, Postgres>, ticket_id: Uuid) -> Result<()> {
+/// Marks the ticket as just updated.
+pub(crate) async fn touch(tx: &mut Transaction<'_, Postgres>, ticket_id: Uuid) -> Result<()> {
     sqlx::query("UPDATE tickets SET updated_at = now() WHERE id = $1")
         .bind(ticket_id)
         .execute(&mut **tx)

@@ -334,7 +334,8 @@ impl Client {
     /// Opens a ticket without a requester for an active customer, with a priority and the
     /// customer's active assets and services; replies on it go to the customer's key requesters.
     /// Returns its number. The core answers 409, with a sentence naming it, when an asset or
-    /// service does not fit the customer or is retired. Scope `tickets:write`.
+    /// service does not fit the customer or is retired, and 404 when one does not exist. Scope
+    /// `tickets:write`.
     pub async fn open_ticket(&self, ticket: &NewTicket) -> Result<i64, Error> {
         let response = self
             .http

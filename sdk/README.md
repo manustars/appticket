@@ -195,7 +195,8 @@ it, the customer never does. `priority` is `low`, `normal` (when omitted), `high
 `asset_ids` are active assets of the customer, `service_ids` active services it uses, both
 optional. The core answers 201 with the ticket's `number`, or refuses the whole ticket (409) with a
 sentence naming what does not fit: an offboarded customer, an asset of another customer, a retired
-asset or service, a service the customer does not use.
+asset or service, a service the customer does not use. A customer, asset or service that does not
+exist is not found (404), as when an agent links it.
 
 `POST /api/addon/tickets/{number}/notes` with `{"body": "…"}` adds an internal note to any ticket,
 closed ones too. Agents see the add-on as the author of the ticket and of its notes; a ticket read
