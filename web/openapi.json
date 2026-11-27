@@ -16,7 +16,7 @@
           "add-ons"
         ],
         "summary": "Creates an asset of a customer known by the add-on's reference, or updates the one the add-on\nalready supplied with that reference (bringing it back if it retired it), so that the add-on\ncan send its whole inventory again safely: 201 when created, 200 when updated. Its kind and its\nsite are named; what is left out is cleared, and its holder, whom agents choose, stays.",
-        "description": "When the add-on would create the asset and its customer already has an active one with the same\nserial number, else the same name, both ignoring case, that the add-on is not the source of,\nnothing is created: the answer is 202 with the link proposal recorded for the agents, which\nsays which asset matched. Sending the asset again while the proposal is open answers the same\nproposal, with the name and serial number just sent, even when the asset it matched was renamed\nor retired since; once agents discard it, the next attempt creates the asset. Scope\n`catalog:write`.",
+        "description": "When the add-on would create the asset and its customer already has an active one with the same\nserial number, else the same name, both ignoring case, that the add-on is not the source of,\nnothing is created: the answer is 202 with the link proposal recorded for the agents, which\nsays which asset matched. Sending the asset again while the proposal is open answers the same\nproposal, with the name and serial number just sent, even when the asset it matched was renamed\nor retired since; once agents discard it, the next attempt creates the asset.\n\nOnce agents accept it, the add-on is linked to that asset and the reference reaches it: sending\nwhat the asset has answers it with 200 and changes nothing, while any change to its kind, name,\nserial number or site is refused, since only its source changes them. Scope `catalog:write`.",
         "operationId": "supply_asset",
         "requestBody": {
           "content": {
@@ -92,7 +92,7 @@
         "tags": [
           "add-ons"
         ],
-        "summary": "Updates an asset the add-on is the source of, as supplying it again does, but refuses a retired\none, which only supplying it again with its reference brings back; an asset entered by\nhand or supplied by another add-on is refused. Scope `catalog:write`.",
+        "summary": "Updates an asset the add-on is the source of, as supplying it again does, but refuses a retired\none, which only supplying it again with its reference brings back; an asset entered by\nhand or supplied by another add-on is refused. For an asset the add-on is linked to, sending\nwhat it has changes nothing, and any change is refused. Scope `catalog:write`.",
         "operationId": "update_supplied_asset",
         "parameters": [
           {
@@ -161,8 +161,59 @@
         "tags": [
           "add-ons"
         ],
-        "summary": "Retires an asset the add-on is the source of, when it leaves the add-on's system: it stays on\nthe tickets that refer to it, gets no new links and loses its holder. Retiring it again changes\nnothing; an asset entered by hand or supplied by another add-on is refused. Scope\n`catalog:write`.",
+        "summary": "Retires an asset the add-on is the source of, when it leaves the add-on's system: it stays on\nthe tickets that refer to it, gets no new links and loses its holder. Retiring it again changes\nnothing; an asset entered by hand or supplied by another add-on is refused, and an add-on linked\nto an asset unlinks itself instead. Scope `catalog:write`.",
         "operationId": "retire_supplied_asset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The asset",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/addon/assets/{id}/unlink": {
+      "post": {
+        "tags": [
+          "add-ons"
+        ],
+        "summary": "Unlinks the add-on from an asset it is linked to, when the asset leaves the add-on's system:\nthe asset stays as it was, retired or not, and the add-on's reference no longer reaches it.\nUnlinking again changes nothing; the asset's source is refused, which retires it instead, as is\nan asset of an offboarded customer. Scope `catalog:write`.",
+        "operationId": "unlink_asset",
         "parameters": [
           {
             "name": "id",
@@ -1853,6 +1904,66 @@
         "responses": {
           "204": {},
           "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/asset-link-proposals/{id}/accept": {
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Accepts an open link proposal: the add-on is linked to the asset it matched, with its\nreference, which from then on reaches that asset without changing anything of it. Refused when\nthe asset was retired meanwhile or the add-on is linked to it already by another reference.\nNeeds managing the catalog; an offboarded customer's proposals are not accepted.",
+        "operationId": "accept_asset_link_proposal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The link proposal",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
             "content": {
               "application/json": {
                 "schema": {
@@ -6179,7 +6290,8 @@
           "customer_name",
           "kind_id",
           "kind",
-          "name"
+          "name",
+          "linked_addons"
         ],
         "properties": {
           "customer_id": {
@@ -6201,6 +6313,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "linked_addons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The other add-ons linked to it, by name: they change nothing of it, and only supply live\ndetails and links."
+          },
           "name": {
             "type": "string"
           },
@@ -6209,7 +6328,7 @@
               "string",
               "null"
             ],
-            "description": "Your own reference for it, when you are its source; another add-on's is not given."
+            "description": "Your own reference for it, when you are its source or linked to it; another add-on's is not\ngiven."
           },
           "retired_at": {
             "type": [
@@ -6708,7 +6827,8 @@
           "kind_id",
           "kind",
           "moves_with_holder",
-          "name"
+          "name",
+          "linked_addons"
         ],
         "properties": {
           "at_site": {
@@ -6751,6 +6871,13 @@
           "kind_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "linked_addons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkedAddon"
+            },
+            "description": "The other add-ons linked to it, by name, each with the reference it knows it by: they\nchange nothing of it, and only supply live details and links."
           },
           "moves_with_holder": {
             "type": "boolean",
@@ -7828,6 +7955,23 @@
               "null"
             ],
             "description": "One of the requester's addresses, where the messages for key requesters go. It can be\nleft out for a requester with one address, and for a key requester, who keeps theirs."
+          }
+        }
+      },
+      "LinkedAddon": {
+        "type": "object",
+        "description": "An add-on linked to an asset, which is not its source, with the reference it knows it by.",
+        "required": [
+          "addon",
+          "reference"
+        ],
+        "properties": {
+          "addon": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string",
+            "description": "The add-on's own reference for the asset, which is not an external reference."
           }
         }
       },

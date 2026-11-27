@@ -155,8 +155,12 @@ pub struct AddonAsset {
     site: Option<SiteRef>,
     /// The add-on it came from, when an add-on supplies it.
     source_addon: Option<String>,
-    /// Your own reference for it, when you are its source; another add-on's is not given.
+    /// Your own reference for it, when you are its source or linked to it; another add-on's is not
+    /// given.
     reference: Option<String>,
+    /// The other add-ons linked to it, by name: they change nothing of it, and only supply live
+    /// details and links.
+    linked_addons: Vec<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     retired_at: Option<OffsetDateTime>,
 }
@@ -164,9 +168,15 @@ pub struct AddonAsset {
 impl AddonAsset {
     /// The asset as `caller` reads it.
     pub(super) fn seen_by(a: Asset, caller: &Caller) -> AddonAsset {
-        let reference = a
-            .reference
-            .filter(|_| a.source_addon.as_deref() == Some(caller.name.as_str()));
+        let reference = if a.source_addon.as_deref() == Some(caller.name.as_str()) {
+            a.reference
+        } else {
+            a.linked_addons
+                .iter()
+                .find(|l| l.addon == caller.name)
+                .map(|l| l.reference.clone())
+        };
+        let linked_addons = a.linked_addons.into_iter().map(|l| l.addon).collect();
         AddonAsset {
             id: a.id,
             customer_id: a.customer_id,
@@ -178,6 +188,7 @@ impl AddonAsset {
             site: a.site,
             source_addon: a.source_addon,
             reference,
+            linked_addons,
             retired_at: a.retired_at,
         }
     }

@@ -65,12 +65,26 @@ pub async fn supply(
     .bind(&reference)
     .fetch_optional(&mut *tx)
     .await?;
-    if let Some((_, owner)) = existing
+    // Else the asset the add-on is linked to by that reference.
+    let linked = match existing {
+        Some(_) => None,
+        None => crate::linked_addons::linked_by(&mut tx, addon, &reference).await?,
+    };
+    if let Some((_, owner)) = existing.or(linked)
         && owner != customer
     {
         return rule(reference_of_another_customer(&reference));
     }
     let checked = checked(&mut tx, customer, details).await?;
+    if let Some((id, _)) = linked {
+        let asset = crate::catalog::lock_stored(&mut tx, id).await?;
+        unchanged_by_linked(&asset, addon, &checked)?;
+        tx.commit().await?;
+        return Ok(Supplied::Asset {
+            asset: crate::catalog::asset(db, id).await?,
+            created: false,
+        });
+    }
     let (id, created) = match existing {
         Some((id, _)) => {
             write(&mut tx, id, &checked).await?;
@@ -108,9 +122,14 @@ pub async fn supply(
             .execute(&mut *tx)
             .await
             .map_err(|e| match e {
-                // The same reference, given at the same time for another customer.
+                // The same reference, given at the same time for another customer, or linked
+                // meanwhile to one of its assets.
                 sqlx::Error::Database(d)
-                    if d.constraint() == Some("assets_source_addon_source_ref_key") =>
+                    if matches!(
+                        d.constraint(),
+                        Some("assets_source_addon_source_ref_key")
+                            | Some("addon_reference_names_one_asset")
+                    ) =>
                 {
                     Error::Rule(reference_of_another_customer(&reference))
                 }
@@ -131,7 +150,12 @@ pub async fn supply(
 /// only supplying it again with its reference brings it back.
 pub async fn update(db: &PgPool, addon: &str, id: Uuid, details: &SuppliedDetails) -> Result<()> {
     let mut tx = db.begin().await?;
-    let (customer, asset) = lock_own(&mut tx, addon, id).await?;
+    let (customer, asset, known) = lock_known(&mut tx, addon, id).await?;
+    if known == Known::Linked {
+        // What it sends changes nothing, retired or not.
+        let checked = checked(&mut tx, customer, details).await?;
+        return unchanged_by_linked(&asset, addon, &checked);
+    }
     if asset.retired {
         return rule(format!(
             "{} is retired: supplying it again with its reference brings it back",
@@ -148,7 +172,14 @@ pub async fn update(db: &PgPool, addon: &str, id: Uuid, details: &SuppliedDetail
 /// holder. Retiring it again changes nothing.
 pub async fn retire(db: &PgPool, addon: &str, id: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
-    lock_own(&mut tx, addon, id).await?;
+    let (_, asset, known) = lock_known(&mut tx, addon, id).await?;
+    if known == Known::Linked {
+        return rule(format!(
+            "{addon} is linked to {}: an add-on linked to an asset unlinks itself from it, and \
+             never retires it",
+            asset.name
+        ));
+    }
     sqlx::query(
         "UPDATE assets SET retired_at = now(), holder_id = NULL
          WHERE id = $1 AND retired_at IS NULL",
@@ -160,11 +191,39 @@ pub async fn retire(db: &PgPool, addon: &str, id: Uuid) -> Result<()> {
     Ok(())
 }
 
+/// How an add-on knows an asset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Known {
+    /// It is the asset's source.
+    Source,
+    /// It is linked to the asset, which it changes nothing of.
+    Linked,
+}
+
 /// Locks the asset's customer, refused when offboarded, then the asset, refused unless `addon` is
-/// its source. Returns the customer and the asset as stored.
-async fn lock_own(
+/// its source or linked to it. Returns the customer, the asset as stored and how the add-on knows
+/// it.
+async fn lock_known(
     tx: &mut Transaction<'_, Postgres>,
     addon: &str,
+    id: Uuid,
+) -> Result<(Uuid, StoredAsset, Known)> {
+    let (customer, asset) = lock_with_customer(tx, id).await?;
+    if asset.source_addon.as_deref() != Some(addon)
+        && crate::linked_addons::reference_of(tx, addon, id)
+            .await?
+            .is_some()
+    {
+        return Ok((customer, asset, Known::Linked));
+    }
+    its_own(&asset, addon)?;
+    Ok((customer, asset, Known::Source))
+}
+
+/// Locks the asset's customer, refused when offboarded, then the asset. Returns the customer and
+/// the asset as stored.
+pub(crate) async fn lock_with_customer(
+    tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
 ) -> Result<(Uuid, StoredAsset)> {
     // An asset never changes customer, so its customer can be read before it is locked; the
@@ -176,8 +235,28 @@ async fn lock_own(
         .ok_or(Error::NotFound("asset"))?;
     crate::customers::lock_active(tx, customer).await?;
     let asset = crate::catalog::lock_stored(tx, id).await?;
-    its_own(&asset, addon)?;
     Ok((customer, asset))
+}
+
+/// Refuses what an add-on linked to the asset sends when it differs from what the asset has: it
+/// changes nothing of it.
+fn unchanged_by_linked(asset: &StoredAsset, addon: &str, checked: &Checked) -> Result<()> {
+    if asset.kind_id == checked.kind
+        && asset.name == checked.name
+        && asset.serial_number == checked.serial_number
+        && asset.site_id == checked.site
+    {
+        return Ok(());
+    }
+    let whence = match &asset.source_addon {
+        Some(source) => format!("comes from the add-on {source}"),
+        None => "was entered by hand".to_owned(),
+    };
+    rule(format!(
+        "{} {whence}: {addon} is linked to it, and an add-on changes only the assets it is the \
+         source of",
+        asset.name
+    ))
 }
 
 /// Refuses an asset `addon` is not the source of.
