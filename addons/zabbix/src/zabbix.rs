@@ -246,11 +246,19 @@ pub struct Event {
     pub tags: Vec<(String, String)>,
     /// The ids of the hosts of the trigger's items; usually one.
     pub host_ids: Vec<String>,
+    /// When the problem started, in seconds since the Unix epoch.
+    pub clock: i64,
+    /// The trigger's operational data, with its macros resolved when the problem started; empty
+    /// when the trigger has none.
+    pub operational_data: String,
+    /// The id of the event that recovered the problem; none while it is open.
+    pub recovery_id: Option<String>,
 }
 
 /// A host by its visible name, with its host groups.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostWithGroups {
+    pub id: String,
     /// The visible name, or the technical one when it has none.
     pub name: String,
     pub groups: Vec<HostGroup>,
@@ -263,6 +271,12 @@ struct RawEvent {
     value: String,
     severity: String,
     name: String,
+    clock: String,
+    #[serde(default)]
+    opdata: String,
+    /// `0` while the problem is open.
+    #[serde(default)]
+    r_eventid: String,
     #[serde(default)]
     tags: Vec<RawTag>,
     #[serde(default)]
@@ -288,12 +302,21 @@ impl RawEvent {
                     self.eventid, self.severity
                 )
             })?;
+        let clock = self.clock.parse().with_context(|| {
+            format!(
+                "Zabbix's event {} started at {:?}, which is no time",
+                self.eventid, self.clock
+            )
+        })?;
         Ok(Event {
             id: self.eventid,
             severity,
             name: self.name,
             tags: self.tags.into_iter().map(|t| (t.tag, t.value)).collect(),
             host_ids: self.hosts.into_iter().map(|h| h.hostid).collect(),
+            clock,
+            operational_data: self.opdata.trim().to_owned(),
+            recovery_id: Some(self.r_eventid).filter(|id| !id.is_empty() && id != "0"),
         })
     }
 }
@@ -302,6 +325,7 @@ impl From<RawHost> for HostWithGroups {
     fn from(raw: RawHost) -> HostWithGroups {
         HostWithGroups {
             name: raw.visible_name(),
+            id: raw.hostid,
             groups: raw
                 .hostgroups
                 .into_iter()
@@ -323,7 +347,8 @@ impl Zabbix {
                 "event.get",
                 json!({
                     "eventids": [id],
-                    "output": ["eventid", "value", "severity", "name"],
+                    "output": ["eventid", "value", "severity", "name", "clock", "opdata",
+                               "r_eventid"],
                     "selectTags": ["tag", "value"],
                     "selectHosts": ["hostid", "host", "name"],
                 }),
@@ -335,6 +360,43 @@ impl Zabbix {
                 "Zabbix has no event {id} of a trigger's problem that the add-on's user can read"
             ),
         }
+    }
+
+    /// When the event with this id happened, in seconds since the Unix epoch, such as a
+    /// problem's recovery event.
+    pub async fn event_clock(&self, id: &str) -> anyhow::Result<i64> {
+        #[derive(Deserialize)]
+        struct Clock {
+            clock: String,
+        }
+        let events: Vec<Clock> = self
+            .call("event.get", json!({"eventids": [id], "output": ["clock"]}))
+            .await?;
+        let clock = events
+            .into_iter()
+            .next()
+            .with_context(|| format!("Zabbix has no event {id} that the add-on's user can read"))?
+            .clock;
+        clock
+            .parse()
+            .with_context(|| format!("Zabbix's event {id} happened at {clock:?}, which is no time"))
+    }
+
+    /// The username of the Zabbix user whose API token the add-on calls Zabbix with.
+    pub async fn username(&self) -> anyhow::Result<String> {
+        #[derive(Deserialize)]
+        struct User {
+            username: String,
+        }
+        // Zabbix answers it only to a call without a token in the header.
+        let user: User = self
+            .send(
+                "user.checkAuthentication",
+                json!({"token": self.token}),
+                false,
+            )
+            .await?;
+        Ok(user.username)
     }
 
     /// The hosts that `filter` selects, such as `{"hostids": [...]}`, with their groups.
@@ -379,7 +441,8 @@ mod tests {
     fn a_problem_event_is_read_with_its_severity_name_tags_and_hosts() {
         let raw: RawEvent = serde_json::from_value(json!(
             {"eventid": "4213", "value": "1", "severity": "4",
-             "name": "Mail queue of SRV-01 is too long",
+             "name": "Mail queue of SRV-01 is too long", "clock": "1795801516",
+             "opdata": "Queue: 1200", "r_eventid": "0",
              "tags": [{"tag": "service", "value": "mail"}, {"tag": "scope", "value": ""}],
              "hosts": [{"hostid": "10683", "host": "srv-01", "name": "SRV-01"}]}
         ))
@@ -395,7 +458,20 @@ mod tests {
                     ("scope".into(), String::new())
                 ],
                 host_ids: vec!["10683".into()],
+                clock: 1_795_801_516,
+                operational_data: "Queue: 1200".into(),
+                recovery_id: None,
             }
+        );
+        // Recovered: the id of its recovery event.
+        let recovered: RawEvent = serde_json::from_value(json!(
+            {"eventid": "4213", "value": "1", "severity": "4", "name": "Disk full",
+             "clock": "1795801516", "opdata": "", "r_eventid": "4220"}
+        ))
+        .unwrap();
+        assert_eq!(
+            recovered.read().unwrap().recovery_id.as_deref(),
+            Some("4220")
         );
     }
 
@@ -403,7 +479,7 @@ mod tests {
     fn a_recovery_event_is_no_alert() {
         let raw: RawEvent = serde_json::from_value(json!(
             {"eventid": "4220", "value": "0", "severity": "0", "name": "Mail queue is too long",
-             "tags": [], "hosts": []}
+             "clock": "1795801522", "opdata": "", "r_eventid": "0", "tags": [], "hosts": []}
         ))
         .unwrap();
         assert_eq!(
@@ -425,6 +501,7 @@ mod tests {
             hosts,
             [
                 HostWithGroups {
+                    id: "10683".into(),
                     name: "SRV-01 (Brightfield)".into(),
                     groups: vec![HostGroup {
                         id: "22".into(),
@@ -432,6 +509,7 @@ mod tests {
                     }],
                 },
                 HostWithGroups {
+                    id: "10685".into(),
                     name: "printer-02".into(),
                     groups: vec![],
                 },

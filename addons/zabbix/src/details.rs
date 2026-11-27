@@ -289,7 +289,7 @@ fn availability(host: &RawHost, items: &[RawItem]) -> Availability {
 }
 
 /// A severity as Zabbix's frontend names it by default.
-fn severity_name(severity: Severity) -> &'static str {
+pub(crate) fn severity_name(severity: Severity) -> &'static str {
     match severity {
         Severity::NotClassified => "Not classified",
         Severity::Information => "Information",
