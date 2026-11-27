@@ -126,8 +126,9 @@ fn live_details() -> utoipa::openapi::path::Operation {
     OperationBuilder::new()
         .summary(Some("The live details of an asset"))
         .description(Some(format!(
-            "Asked as `GET <url>/assets/{{reference}}` of the add-on an asset comes from, with \
-             the add-on's reference for it, whenever agents look at the asset; at most {} reads \
+            "Asked as `GET <url>/assets/{{reference}}` of the source of an asset and of each \
+             add-on linked to it, each with its own reference for the asset, whenever agents look \
+             at the asset; at most {} reads \
              of one add-on at once. The core waits {} seconds at most; an add-on that does not \
              answer in time, answers another status (404 too) or something that is not live \
              details has its details shown as unavailable. A label may also be a single string, \

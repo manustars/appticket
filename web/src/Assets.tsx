@@ -26,6 +26,10 @@ import { useAction, useLoad } from './useAction'
 
 const none = <span className="muted">—</span>
 
+/** The add-ons the core asks for an asset's live details: its source, then those linked to it. */
+const asked = (a: Asset): string[] =>
+  [...(a.source_addon ? [a.source_addon] : []), ...a.linked_addons.map((l) => l.addon).sort()]
+
 /** The site the asset is at, following its kind, and whether that is its holder's. */
 export function WhereItIs({ asset: a }: { asset: Asset }) {
   const { t } = useI18n()
@@ -353,7 +357,7 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
                   )}
                   {!a.retired_at && (
                     <LiveDetails details={liveByAsset?.get(a.id) ?? (liveByAsset ? [] : undefined)}
-                      asking={live.error ? null : a.source_addon} />
+                      asking={live.error ? [] : asked(a)} />
                   )}
                 </td>
                 <td>{a.serial_number ?? none}</td>

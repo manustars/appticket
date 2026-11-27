@@ -99,8 +99,8 @@ or `message.received`.
 ## Live details: core to add-on
 
 Whenever agents look at an asset, on a customer's assets or on a ticket, the core asks the add-on
-the asset comes from (its source) for the asset's live details, with the add-on's own reference
-for it:
+the asset comes from (its source) and each add-on linked to it for the asset's live details, each
+with its own reference for it:
 
 ```
 GET <url>/assets/{reference}
@@ -131,7 +131,7 @@ read the label in their language; when it is missing, in English; and only when 
 missing, in the first language the add-on gave. They see the fields, state and links beside the
 asset.
 
-An add-on answers for every asset it supplies (or, once linking exists, is linked to). The core
+An add-on answers for every asset it supplies or is linked to. The core
 asks every add-on at once, at most 8 reads of one add-on at a time, the others waiting their
 turn, and all of them end within one deadline 2 seconds after the agents' page asked, whatever
 is still under way, so one slow add-on holds nothing else up. When the add-on does not answer by
@@ -143,8 +143,8 @@ its details are unavailable. Answer from what the add-on already knows rather th
 own system on every read.
 
 Retired assets and the assets of offboarded customers are not asked about. Being asked needs no
-scope. Once assets can be linked to several add-ons, each linked add-on is asked the same way,
-with its own reference.
+scope. A linked add-on is asked with the reference it was linked by, the one its link proposal
+carried.
 
 ## Calls: add-on to core
 
