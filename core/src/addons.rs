@@ -17,7 +17,7 @@ use crate::error::{Error, Result, rule};
 pub const EVENT_KINDS: &[&str] = &[MESSAGE_RECEIVED, TICKET_OPENED];
 /// A message arrived and was routed to a ticket or to the inbox.
 pub const MESSAGE_RECEIVED: &str = "message.received";
-/// An agent opened a ticket, by hand or from an inbox message.
+/// An agent opened a ticket, by hand or from an inbox message, or an add-on opened one.
 pub const TICKET_OPENED: &str = "ticket.opened";
 
 /// What an add-on's token may do.

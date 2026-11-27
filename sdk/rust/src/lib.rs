@@ -4,6 +4,7 @@
 //! - [`signature`]: checking the `hd-signature` of an event before trusting its body;
 //! - [`Client`]: the add-on API, called with the add-on's token;
 //! - [`proposals`]: what an add-on can propose to the agents;
+//! - [`tickets`]: the tickets an add-on opens;
 //! - `server` (feature `axum`): a ready `/events` endpoint that verifies events for a handler.
 
 pub mod api;
@@ -13,8 +14,10 @@ pub mod proposals;
 #[cfg(feature = "axum")]
 pub mod server;
 pub mod signature;
+pub mod tickets;
 
 pub use client::{Client, Error, http_client};
 pub use events::{Envelope, Event, MessageReceived, TicketOpened};
 pub use proposals::{Content, Rationale, Target, Triage};
 pub use signature::{Verifier, VerifyError};
+pub use tickets::NewTicket;
