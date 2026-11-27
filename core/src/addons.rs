@@ -38,7 +38,7 @@ pub const TICKETS_READ: &str = "tickets:read";
 pub const PROPOSALS_WRITE: &str = "proposals:write";
 /// Create, update and retire the assets the add-on is the source of.
 pub const CATALOG_WRITE: &str = "catalog:write";
-/// Open tickets without a requester and add notes to tickets.
+/// Open tickets without a requester, add notes to tickets and resolve the tickets it opened.
 pub const TICKETS_WRITE: &str = "tickets:write";
 
 /// After this many failed attempts a delivery stops being retried.
