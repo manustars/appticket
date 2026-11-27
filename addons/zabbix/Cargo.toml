@@ -27,4 +27,6 @@ uuid = { version = "1.29.3", features = ["serde"] }
 [dev-dependencies]
 # A database of its own on the test server, for the core the tests against Zabbix run.
 sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio", "postgres", "tls-rustls"] }
+# The tests' writes to Zabbix take turns.
+tokio = { version = "1.54.1", features = ["sync"] }
 uuid = { version = "1.29.3", features = ["v4", "serde"] }
