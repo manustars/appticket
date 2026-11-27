@@ -47,6 +47,7 @@ pub async fn set_priority(db: &PgPool, number: i64, priority: Priority) -> Resul
         .bind(priority)
         .execute(&mut *tx)
         .await?;
+    worked_on(&mut tx, ticket_id).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -73,10 +74,21 @@ pub(crate) async fn lock(
         .ok_or(Error::NotFound("ticket"))
 }
 
-fn not_closed(state: TicketState) -> Result<()> {
+pub(crate) fn not_closed(state: TicketState) -> Result<()> {
     if state == TicketState::Closed {
         return rule("the ticket is closed; a closed ticket cannot change");
     }
+    Ok(())
+}
+
+/// Records that an agent has worked on the ticket by changing it by hand; it stays so. The
+/// database records it by itself for an assignee and for what agents write on the ticket (see
+/// `worked_on_by_agent` in [`TicketDetail`]).
+pub(crate) async fn worked_on(tx: &mut Transaction<'_, Postgres>, ticket: Uuid) -> Result<()> {
+    sqlx::query("UPDATE tickets SET worked_on_by_agent = true WHERE id = $1")
+        .bind(ticket)
+        .execute(&mut **tx)
+        .await?;
     Ok(())
 }
 
@@ -230,6 +242,9 @@ async fn move_state(
         .bind(to)
         .execute(&mut **tx)
         .await?;
+    if let StateChanger::Agent(_) = by {
+        worked_on(tx, ticket).await?;
+    }
     if from == to {
         return Ok(());
     }
@@ -632,6 +647,7 @@ pub async fn move_to_customer(
             Moved { moved: 1, unlinked }
         }
     };
+    worked_on(&mut tx, ticket_id).await?;
     tx.commit().await?;
     Ok(moved)
 }
@@ -731,8 +747,10 @@ pub struct TicketDetail {
     /// The add-on that opened the ticket, by name, when an add-on did; empty for a ticket an agent
     /// or a message opened.
     pub opened_by_addon: Option<String>,
-    /// Whether an agent has worked on the ticket: it has an assignee, or an agent wrote a reply,
-    /// a note or an announcement on it. Notes of add-ons and messages received do not count.
+    /// Whether an agent has worked on the ticket: once they have been its assignee, written a
+    /// reply, a note or an announcement on it, or changed it by hand (its state, priority, links,
+    /// customer or parent). It stays so, also once the agent is unassigned. Notes of add-ons and
+    /// messages received do not count.
     pub worked_on_by_agent: bool,
     /// Assets of the ticket's customer the ticket is about.
     pub assets: Vec<crate::catalog::LinkedAsset>,
@@ -873,14 +891,7 @@ pub async fn detail(db: &PgPool, number: i64) -> Result<TicketDetail> {
                 (SELECT count(*) FROM tickets o WHERE o.requester_id = r.id) AS requester_tickets,
                 r.departed_at IS NOT NULL AS requester_departed,
                 a.id AS assignee_id, a.name AS assignee_name, ad.name AS opened_by_addon,
-                t.assignee_id IS NOT NULL
-                    OR EXISTS (SELECT 1 FROM messages m
-                               WHERE m.ticket_id = t.id AND m.author_id IS NOT NULL)
-                    OR EXISTS (SELECT 1 FROM notes n
-                               WHERE n.ticket_id = t.id AND n.author_id IS NOT NULL)
-                    OR EXISTS (SELECT 1 FROM announcements n WHERE n.ticket_id = t.id)
-                    AS worked_on_by_agent,
-                t.created_at, t.updated_at
+                t.worked_on_by_agent, t.created_at, t.updated_at
          FROM tickets t
          JOIN customers c ON c.id = t.customer_id
          LEFT JOIN requesters r ON r.id = t.requester_id
@@ -1895,17 +1906,24 @@ mod tests {
         )
         .await
         .unwrap();
+        // Written directly: the code of today writes columns this schema does not have yet.
         let by_asset = testing::ticket(&db, c, Some(ada), "a1@brightfield.test").await;
-        crate::catalog::link_asset(&db, by_asset, printer_2f, true)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO ticket_assets (ticket_id, customer_id, asset_id)
+             SELECT id, customer_id, $2 FROM tickets WHERE number = $1",
+        )
+        .bind(by_asset)
+        .bind(printer_2f)
+        .execute(&db)
+        .await
+        .unwrap();
         let by_requester = testing::ticket(&db, c, Some(ada), "a2@brightfield.test").await;
         let open = testing::ticket(&db, c, Some(ada), "a3@brightfield.test").await;
-        for n in [by_asset, by_requester] {
-            testing::set_state(&db, n, TicketState::Closed)
-                .await
-                .unwrap();
-        }
+        sqlx::query("UPDATE tickets SET state = 'closed' WHERE number = ANY($1)")
+            .bind([by_asset, by_requester])
+            .execute(&db)
+            .await
+            .unwrap();
 
         migrator.run(&db).await.unwrap();
         put_at(&db, ada, Some(lab)).await;

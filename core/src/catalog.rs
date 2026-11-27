@@ -897,6 +897,7 @@ pub async fn link_asset(db: &PgPool, number: i64, asset: Uuid, linked: bool) -> 
         .bind(ticket)
         .execute(&mut *tx)
         .await?;
+    crate::tickets::worked_on(&mut tx, ticket).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -927,6 +928,7 @@ pub async fn link_service(db: &PgPool, number: i64, service: Uuid, linked: bool)
         .bind(ticket)
         .execute(&mut *tx)
         .await?;
+    crate::tickets::worked_on(&mut tx, ticket).await?;
     tx.commit().await?;
     Ok(())
 }
