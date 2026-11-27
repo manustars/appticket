@@ -16,8 +16,8 @@ Apache-2.0, like the rest of `sdk/`.
   `open_tickets_of_requester`, `open_tickets_of_customer`, `ticket`, `propose`, `open_ticket`,
   `add_note` and `resolve_ticket` for the tickets the add-on opens, `supply_asset`,
   `update_asset`, `retire_asset` for the assets the add-on is the source of, and `unlink_asset`
-  for those it is linked to). Errors
-  carry the core's sentence. Answers keep only the fields an add-on needs and ignore the rest.
+  for those it is linked to). Errors carry the core's sentence. Answers keep only the fields an
+  add-on needs and ignore the rest.
   A `Ticket` says whether an agent has worked on it (`worked_on_by_agent`, true from a core that
   does not say), without giving its notes, so that an add-on resolves only what its rules allow.
   `whoami` lists the `languages` of the agents' UI;

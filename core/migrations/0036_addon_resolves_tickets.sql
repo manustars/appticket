@@ -35,6 +35,9 @@ WHERE t.assignee_id IS NOT NULL
    OR EXISTS (SELECT 1 FROM messages m WHERE m.ticket_id = t.id AND m.author_id IS NOT NULL)
    OR EXISTS (SELECT 1 FROM notes n WHERE n.ticket_id = t.id AND n.author_id IS NOT NULL)
    OR EXISTS (SELECT 1 FROM announcements a WHERE a.ticket_id = t.id)
+   -- Only agents attach a child to a parent.
+   OR t.parent_id IS NOT NULL
+   OR EXISTS (SELECT 1 FROM tickets c WHERE c.parent_id = t.id)
    OR EXISTS (SELECT 1 FROM events e
               WHERE e.kind = 'ticket.state_changed'
                 AND e.data -> 'changed_by' ->> 'kind' = 'agent'

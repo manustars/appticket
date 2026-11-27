@@ -85,7 +85,24 @@ pub async fn attach(db: &PgPool, child: i64, parent: i64) -> Result<()> {
 
 pub async fn detach(db: &PgPool, child: i64) -> Result<()> {
     let mut tx = db.begin().await?;
+    // The parent is locked before the child, as when attaching, so the two never wait on each
+    // other; the child's parent is read first and checked again once both are locked.
+    let parent: Option<Uuid> =
+        sqlx::query_scalar("SELECT parent_id FROM tickets WHERE number = $1")
+            .bind(child)
+            .fetch_optional(&mut *tx)
+            .await?
+            .flatten();
+    if let Some(parent) = parent {
+        sqlx::query("SELECT 1 FROM tickets WHERE id = $1 FOR UPDATE")
+            .bind(parent)
+            .execute(&mut *tx)
+            .await?;
+    }
     let c = lock(&mut tx, child).await?;
+    if c.parent != parent {
+        return rule("the ticket has just changed; reload and try again");
+    }
     if c.state == TicketState::Closed {
         return rule("the ticket is closed; a closed ticket cannot change");
     }

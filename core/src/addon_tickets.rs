@@ -743,6 +743,30 @@ mod tests {
             .unwrap();
         assert!(worked_on(linked).await, "an asset linked by hand");
 
+        let mail = crate::catalog::create_service(&db, "Hosted mail", "")
+            .await
+            .unwrap();
+        crate::catalog::use_service(&db, mail, brightfield)
+            .await
+            .unwrap();
+        let served = opened("Mailbox full").await;
+        crate::catalog::link_service(&db, served, mail, true)
+            .await
+            .unwrap();
+        assert!(worked_on(served).await, "a service linked by hand");
+
+        // An inbox message an agent attaches, to an open ticket: no change of state, but work.
+        let attached = opened("Disk quota").await;
+        let message = testing::inbox_message(&db, "someone@elsewhere.test").await;
+        crate::triage::attach(&db, message, attached, marco)
+            .await
+            .unwrap();
+        assert_eq!(testing::state(&db, attached).await, "open");
+        assert!(
+            worked_on(attached).await,
+            "an inbox message attached by hand"
+        );
+
         let moved = opened("Printer offline").await;
         crate::tickets::move_to_customer(&db, moved, harbor, crate::tickets::RequesterMove::Remove)
             .await
@@ -782,7 +806,7 @@ mod tests {
         let announcing = open(&db, watchtower, &ticket_for(northgate, "Backup site down"))
             .await
             .unwrap();
-        let affected = testing::ticket(&db, brightfield, None, "b1@brightfield.test").await;
+        let affected = opened("Backups late").await;
         attach(affected, announcing).await;
         assert!(!worked_on(announcing).await);
         crate::announcements::send(
@@ -795,7 +819,42 @@ mod tests {
         .await
         .unwrap();
         assert!(worked_on(announcing).await, "an agent's announcement");
+        assert!(
+            !worked_on(affected).await,
+            "an announcement from its parent is no work on the child"
+        );
         assert!(!worked_on(untouched).await, "nothing reached the first one");
+
+        // A parent's children resolved by an agent: one is written to, one only resolved.
+        let failure = open(
+            &db,
+            watchtower,
+            &ticket_for(northgate, "Storage array down"),
+        )
+        .await
+        .unwrap();
+        let written = opened("Shares unreachable").await;
+        let quiet = open(&db, watchtower, &ticket_for(harbor, "Shares unreachable"))
+            .await
+            .unwrap();
+        for child in [written, quiet] {
+            attach(child, failure).await;
+        }
+        crate::parents::resolve_children(
+            &db,
+            &testing::sender(),
+            failure,
+            marco,
+            "The storage array is back.",
+        )
+        .await
+        .unwrap();
+        assert_eq!(testing::state(&db, quiet).await, "resolved");
+        assert!(worked_on(written).await, "resolved with a reply");
+        assert!(
+            worked_on(quiet).await,
+            "resolved by an agent, with nobody to write to"
+        );
     }
 
     /// The database keeps "worked on" also when the code is bypassed: an assignee and an agent's
@@ -886,7 +945,8 @@ mod tests {
     }
 
     /// Tickets from before "worked on" was kept are marked by what they show of agents: an
-    /// assignee, an agent's note or message, or a change of state by an agent among the events.
+    /// assignee, an agent's note or message, a change of state by an agent among the events, or
+    /// a parent and its child, which an agent attached.
     #[sqlx::test(migrations = false)]
     async fn tickets_from_before_are_marked_by_what_agents_did(db: PgPool) {
         let migrator = sqlx::migrate!();
@@ -951,6 +1011,19 @@ mod tests {
         )
         .await;
 
+        let northgate = testing::help_desk(&db).await;
+        let parent = testing::ticket(&db, northgate, None, "p1@northgate.test").await;
+        let child = ticket("u5@brightfield.test").await;
+        sqlx::query(
+            "UPDATE tickets SET parent_id = (SELECT id FROM tickets WHERE number = $1)
+             WHERE number = $2",
+        )
+        .bind(parent)
+        .bind(child)
+        .execute(&db)
+        .await
+        .unwrap();
+
         migrator.run(&db).await.unwrap();
         let marked: Vec<(i64, bool)> =
             sqlx::query_as("SELECT number, worked_on_by_agent FROM tickets ORDER BY number")
@@ -963,7 +1036,9 @@ mod tests {
                 (untouched, false),
                 (assigned, true),
                 (noted, true),
-                (moved, true)
+                (moved, true),
+                (parent, true),
+                (child, true),
             ]
         );
     }
