@@ -345,6 +345,66 @@ async fn an_addon_built_on_the_sdk_lists_its_names(db: PgPool) {
     );
 }
 
+/// An add-on does not read offboarded customers, but it reads the names they have, without who
+/// has them, since those names stay covered and nothing of them is to be imported, even inside an
+/// active customer's name.
+#[sqlx::test]
+async fn an_addon_reads_the_names_offboarded_customers_have_without_who_has_them(db: PgPool) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let old_quay = testing::customer(&db, "Old Quay").await;
+    let watchtower = addon(&db, &api, "watchtower", &[NAMES_WRITE, DIRECTORY_READ]).await;
+    let (status, json) = watchtower
+        .call("PUT", "/api/addon/names", Some(watchtower_groups()))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    for (customer, system, name) in [
+        (brightfield, "Watchtower", "Brightfield"),
+        (old_quay, "Watchtower", "Brightfield/Offices"),
+        (old_quay, "Ledger", "OQ-7"),
+    ] {
+        let (status, json) = api
+            .call(
+                "POST",
+                &format!("/api/customers/{customer}/external-references"),
+                Some(json!({"system": system, "name": name})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{json}");
+    }
+    assert_eq!(
+        watchtower
+            .get("/api/addon/external-references/offboarded")
+            .await,
+        json!([]),
+        "no customer is offboarded yet"
+    );
+
+    crate::customers::offboard(&db, old_quay).await.unwrap();
+    assert_eq!(
+        watchtower
+            .get("/api/addon/external-references/offboarded")
+            .await,
+        json!([
+            {"system": "Ledger", "name": "OQ-7"},
+            {"system": "Watchtower", "name": "Brightfield/Offices"}
+        ])
+    );
+    let customers = watchtower.get("/api/addon/customers").await;
+    assert_eq!(customers.as_array().unwrap().len(), 1, "{customers}");
+
+    // Reading them needs the scope that reads the customers.
+    let names_only = addon(&db, &api, "netscope", &[NAMES_WRITE]).await;
+    let (status, json) = names_only
+        .call("GET", "/api/addon/external-references/offboarded", None)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert_eq!(
+        json["error"],
+        "The add-on netscope lacks the scope directory:read."
+    );
+}
+
 /// The add-on contract gives the limits the core keeps.
 #[test]
 fn the_addon_contract_gives_the_limits_of_a_name_list() {
