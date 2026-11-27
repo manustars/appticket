@@ -228,9 +228,12 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   nothing of an offboarded customer. Agents give a supplied asset a holder, which the add-on
   supplying it again leaves, but change nothing else its source supplied, nor retire it.
 - An asset has at most one source and can be linked to other add-ons, which only supply live
-  details and links. An add-on that finds an asset matching one it would supply (same name or
-  serial number) proposes the link instead of creating it; accepting needs managing the catalog,
-  and a discarded link lets the add-on create its own asset.
+  details and links. When an add-on would create an asset and its customer already has an active
+  one with the same serial number or name (ignoring case), entered by hand or supplied by another
+  add-on, the core records a link proposal instead of a second asset; the serial number decides
+  over the name. A reference of an add-on has at most one open link proposal. Every agent sees it
+  on the customer's assets; accepting or discarding it needs managing the catalog, and once it is
+  discarded the add-on's next attempt with that reference creates its own asset.
 - Agents who manage customers set a customer's external references in an add-on's system,
   choosing from the names the add-on lists; the add-on only reads them. A name maps its subgroups
   too, unless a subgroup is mapped to another customer. Anything of the external system that maps

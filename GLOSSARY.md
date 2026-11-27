@@ -140,6 +140,11 @@ linked to the asset only show their live details. The source identifies the asse
 of its own, which is not an External reference (a customer's name in another system).
 _Avoid_: Origin, owner, provider
 
+**Link proposal**:
+A proposal, recorded by the core, that an asset an add-on would create is one its customer already
+has, with the same name or serial number; agents who manage the catalog accept or discard it.
+_Avoid_: Match, duplicate, merge request
+
 **Alert**:
 A problem that a monitoring add-on reports on an asset; it opens a ticket of the asset's customer
 when that add-on's rules say so.

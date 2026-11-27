@@ -17,8 +17,10 @@ Apache-2.0, like the rest of `sdk/`.
   for the assets the add-on is the source of). Errors carry the core's sentence. Answers keep only
   the fields an add-on needs and ignore the rest. `whoami` lists the `languages` of the agents' UI;
   each `Customer` carries its `external_references`. `api::SuppliedAsset` is an asset as the add-on
-  supplies it, known by its own `reference`; `supply_asset` tells whether it `created` the asset or
-  updated the one with that reference.
+  supplies it, known by its own `reference`; `supply_asset` answers `Supplied::Asset`, telling
+  whether it `created` the asset or updated the one with that reference, or
+  `Supplied::LinkProposed` with the `LinkProposal` the core recorded instead, when the customer
+  already has an asset with the same serial number or name.
 - `proposals`: `Content` and `Triage`, the same JSON as the core, and `Rationale`, one sentence
   per language (`{"en": …, "it": …}`) that `propose` sends; `in_english` makes one with only an
   English sentence, which agents in other languages then read.

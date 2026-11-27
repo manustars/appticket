@@ -111,7 +111,7 @@ sentence saying which scope is missing.
 | `GET /api/addon/tickets?requester_email=…` or `?customer=…` | `tickets:read` | Tickets that are not closed, of the requester the address belongs to (any of their addresses) or of a customer. |
 | `GET /api/addon/tickets/{number}` | `tickets:read` | A ticket with its messages, links and open proposals; internal notes and announcements are never given to add-ons. |
 | `POST /api/addon/proposals` | `proposals:write` | Proposes something to the agents. |
-| `POST /api/addon/assets` | `catalog:write` | Creates an asset of a customer known by the add-on's reference, or updates the one the add-on supplied with that reference. |
+| `POST /api/addon/assets` | `catalog:write` | Creates an asset of a customer known by the add-on's reference, or updates the one the add-on supplied with that reference; proposes a link instead when the customer already has a matching asset. |
 | `PUT /api/addon/assets/{id}` | `catalog:write` | Updates an asset the add-on is the source of. |
 | `POST /api/addon/assets/{id}/retire` | `catalog:write` | Retires an asset the add-on is the source of. |
 | `POST /api/addon/tickets` | `tickets:write` | Opens a ticket without a requester for a customer. |
@@ -175,6 +175,32 @@ else.
 
 Agents see which add-on an asset comes from; they still give it a holder, but do not change its
 kind, name, serial number or site, nor retire it.
+
+### Link proposals
+
+When `POST /api/addon/assets` would create an asset (a reference the add-on has not given before)
+and the customer already has an active asset with the same serial number or the same name, both
+compared ignoring case, entered by hand or supplied by another add-on, the core does not create a
+second one. It records a link proposal, that the add-on's asset is that existing one, and answers
+202 with it:
+
+```json
+{ "id": "…", "addon": "watchtower", "reference": "host-1042", "customer_id": "…",
+  "name": "PC-0042", "serial_number": "SN-0042", "matched_by": "serial_number",
+  "asset_id": "…", "asset_name": "PC-0042", "created_at": "2026-11-27T09:00:00Z" }
+```
+
+- `asset_id` and `asset_name` name the asset that matched, and `matched_by` says by what:
+  `serial_number` or `name`. When one asset has the serial number and another the name, the serial
+  number decides; among several, the oldest asset is proposed.
+- The add-on's own assets never match: two assets with the same name in the add-on's system are
+  two assets. Retired assets and assets of other customers do not match either.
+- Sending the asset again while the proposal is open records no second proposal: the answer is
+  the same proposal, still 202. The reference stays with its customer meanwhile: sending it for
+  another customer is refused (409).
+- Agents who manage the catalog see the proposal on the customer's assets and discard it; once
+  discarded, the add-on's next attempt with that reference creates its own asset (201), and later
+  ones update it as usual. Updating an asset by its id (`PUT`) never proposes a link.
 
 ### Proposals
 

@@ -258,9 +258,11 @@ impl Client {
 
     /// Creates the asset the add-on knows by `asset.reference`, or updates the one it supplied
     /// before with that reference (bringing it back if it retired it), so that the add-on can send
-    /// its whole inventory again safely. The core refuses (409) an unknown kind, a site that is not
-    /// one of the customer's active sites, and a reference of another customer's asset. Scope
-    /// `catalog:write`.
+    /// its whole inventory again safely. When it would create the asset and the customer already
+    /// has an active one with the same serial number or name, not supplied by this add-on, the
+    /// core creates nothing and answers with a link proposal for the agents. The core refuses (409)
+    /// an unknown kind, a site that is not one of the customer's active sites, and a reference of
+    /// another customer's asset. Scope `catalog:write`.
     pub async fn supply_asset(&self, asset: &SuppliedAsset) -> Result<Supplied, Error> {
         let response = self
             .http
@@ -269,10 +271,13 @@ impl Client {
             .json(asset)
             .send()
             .await?;
-        let created = response.status() == reqwest::StatusCode::CREATED;
-        Ok(Supplied {
+        let status = response.status();
+        if status == reqwest::StatusCode::ACCEPTED {
+            return Ok(Supplied::LinkProposed(Self::read(response).await?));
+        }
+        Ok(Supplied::Asset {
             asset: Self::read(response).await?,
-            created,
+            created: status == reqwest::StatusCode::CREATED,
         })
     }
 

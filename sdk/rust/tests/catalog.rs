@@ -8,7 +8,7 @@ use axum::{
     http::StatusCode,
     routing::{post, put},
 };
-use hd_addon_sdk::api::{SuppliedAsset, SuppliedDetails};
+use hd_addon_sdk::api::{MatchedBy, Supplied, SuppliedAsset, SuppliedDetails};
 use hd_addon_sdk::{Client, Error};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -16,6 +16,7 @@ use uuid::Uuid;
 const CUSTOMER: &str = "0e7b6a52-5d0f-4d5e-8a8e-3f2b1c0d9e8f";
 const ASSET: &str = "5a1d0c3e-7b2f-4e6a-9c8d-1f0e2d3c4b5a";
 const HAND_MADE: &str = "6b2e1d4f-8c3a-4f7b-8d9e-2a1f3e4d5c6b";
+const PROPOSAL: &str = "7c3f2e5a-9d4b-4a8c-9e0f-3b2a4f5e6d7c";
 
 type Seen = Arc<Mutex<Vec<(String, Value)>>>;
 
@@ -36,6 +37,18 @@ async fn fake_core() -> (String, Seen) {
             post({
                 let seen = seen.clone();
                 move |Json(body): Json<Value>| async move {
+                    if body["reference"] == "host-7" {
+                        // The customer has an asset with that serial number already.
+                        return (
+                            StatusCode::ACCEPTED,
+                            Json(json!({"id": PROPOSAL, "addon": "watchtower",
+                                "reference": "host-7", "customer_id": CUSTOMER,
+                                "name": body["name"], "serial_number": body["serial_number"],
+                                "matched_by": "serial_number", "asset_id": HAND_MADE,
+                                "asset_name": "PC-0001",
+                                "created_at": "2026-11-27T09:00:00Z"})),
+                        );
+                    }
                     let known = !seen.lock().unwrap().is_empty();
                     seen.lock().unwrap().push(("POST".into(), body.clone()));
                     let status = if known {
@@ -104,13 +117,18 @@ async fn an_addon_supplies_its_assets_in_the_core_shape() {
         details: laptop(),
     };
 
-    let first = client.supply_asset(&asset).await.unwrap();
-    assert!(first.created, "201: created");
+    let Supplied::Asset {
+        asset: first,
+        created: true,
+    } = client.supply_asset(&asset).await.unwrap()
+    else {
+        panic!("201: created");
+    };
     assert_eq!(
         (
-            first.asset.reference.as_deref(),
-            first.asset.source_addon.as_deref(),
-            first.asset.site.map(|s| s.name)
+            first.reference.as_deref(),
+            first.source_addon.as_deref(),
+            first.site.map(|s| s.name)
         ),
         (
             Some("host-1042"),
@@ -118,10 +136,15 @@ async fn an_addon_supplies_its_assets_in_the_core_shape() {
             Some("Head office".to_owned())
         )
     );
-    let again = client.supply_asset(&asset).await.unwrap();
-    assert!(!again.created, "200: updated");
+    assert!(
+        matches!(
+            client.supply_asset(&asset).await.unwrap(),
+            Supplied::Asset { created: false, .. }
+        ),
+        "200: updated"
+    );
 
-    let id = first.asset.id;
+    let id = first.id;
     let renamed = SuppliedDetails {
         name: "PC-0043".into(),
         serial_number: None,
@@ -151,6 +174,41 @@ async fn an_addon_supplies_its_assets_in_the_core_shape() {
         )
     );
     assert_eq!(seen[3], (format!("retire {id}"), Value::Null));
+}
+
+#[tokio::test]
+async fn an_asset_matching_one_the_customer_has_comes_back_as_a_link_proposal() {
+    let (url, seen) = fake_core().await;
+    let client = Client::new(&url, "token-of-the-test-addon").unwrap();
+    let asset = SuppliedAsset {
+        reference: "host-7".into(),
+        customer_id: Uuid::parse_str(CUSTOMER).unwrap(),
+        details: SuppliedDetails {
+            serial_number: Some("SN-0001".into()),
+            ..laptop()
+        },
+    };
+
+    let Supplied::LinkProposed(proposal) = client.supply_asset(&asset).await.unwrap() else {
+        panic!("202: a link proposal");
+    };
+    assert_eq!(
+        (
+            proposal.id,
+            proposal.reference.as_str(),
+            proposal.matched_by,
+            proposal.asset_id,
+            proposal.asset_name.as_str(),
+        ),
+        (
+            Uuid::parse_str(PROPOSAL).unwrap(),
+            "host-7",
+            MatchedBy::SerialNumber,
+            Uuid::parse_str(HAND_MADE).unwrap(),
+            "PC-0001",
+        )
+    );
+    assert!(seen.lock().unwrap().is_empty(), "no asset was created");
 }
 
 #[tokio::test]

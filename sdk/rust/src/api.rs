@@ -90,13 +90,44 @@ pub struct SuppliedAsset {
     pub details: SuppliedDetails,
 }
 
-/// The asset an add-on supplied, as the core stored it.
+/// What supplying an asset did.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Supplied {
-    pub asset: Asset,
-    /// Whether supplying it created it; otherwise it updated the asset the add-on supplied
-    /// before with that reference.
-    pub created: bool,
+pub enum Supplied {
+    /// The asset as the core stored it: created (201), or the one the add-on supplied before with
+    /// that reference updated (200).
+    Asset { asset: Asset, created: bool },
+    /// Nothing was created (202): the customer already has an asset with the same serial number or
+    /// name, and the core proposes to the agents that the add-on's asset is that one.
+    LinkProposed(LinkProposal),
+}
+
+/// A proposal, waiting for the agents, that the asset an add-on would create is one its customer
+/// already has, entered by hand or supplied by another add-on. Supplying the asset again while it
+/// is open answers the same proposal; once agents discard it, the next attempt creates the asset.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkProposal {
+    pub id: Uuid,
+    /// The add-on's reference for the asset it would supply.
+    pub reference: String,
+    pub customer_id: Uuid,
+    /// The name and serial number the add-on sent.
+    pub name: String,
+    #[serde(default)]
+    pub serial_number: Option<String>,
+    /// What the two assets have in common.
+    pub matched_by: MatchedBy,
+    /// The asset it matched, and that asset's name.
+    pub asset_id: Uuid,
+    pub asset_name: String,
+}
+
+/// What an asset an add-on would create has in common with one its customer already has: the
+/// serial number decides over the name, both compared ignoring case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchedBy {
+    SerialNumber,
+    Name,
 }
 
 /// A site of a customer, by id and name.
