@@ -119,8 +119,8 @@ the core signs its reads, in `HD_ZABBIX_EVENT_SECRET` or a file named by
 `HD_ZABBIX_EVENT_SECRET_FILE`.
 
 Upgrading from a version without live details, the add-on stops at startup until
-`HD_ZABBIX_EVENT_SECRET` is set: use the event secret `hd addon add` printed with the token. The
-core has no command that shows it again or issues a new one (`hd addon` has only `add`, `list`,
+`HD_ZABBIX_EVENT_SECRET` is set (`check` does not need it): use the event secret `hd addon add`
+printed with the token. The core has no command that shows it again or issues a new one (`hd addon` has only `add`, `list`,
 `enable` and `disable`), and a second `hd addon add zabbix` is refused while the add-on exists.
 When it was not kept, the only way out today is to register the add-on under another name, which
 gets a new token and event secret but none of the old add-on's assets: the old one keeps them as

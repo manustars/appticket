@@ -11,6 +11,7 @@ use hd_addon_sdk::{DetailState, Field, Link, LiveDetails, Verifier};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::rules::Severity;
 use crate::sync::host_of;
 use crate::zabbix::Zabbix;
 
@@ -287,17 +288,17 @@ fn availability(host: &RawHost, items: &[RawItem]) -> Availability {
     }
 }
 
-/// Zabbix's names of its severities, from 0.
-const SEVERITIES: [&str; 6] = [
-    "Not classified",
-    "Information",
-    "Warning",
-    "Average",
-    "High",
-    "Disaster",
-];
-/// High and Disaster.
-const SERIOUS: u8 = 4;
+/// A severity as Zabbix's frontend names it by default.
+fn severity_name(severity: Severity) -> &'static str {
+    match severity {
+        Severity::NotClassified => "Not classified",
+        Severity::Information => "Information",
+        Severity::Warning => "Warning",
+        Severity::Average => "Average",
+        Severity::High => "High",
+        Severity::Disaster => "Disaster",
+    }
+}
 
 /// Interface types in the order Zabbix's frontend picks the one it shows.
 const INTERFACE_PRIORITY: [InterfaceType; 4] = [
@@ -333,17 +334,17 @@ fn describe(
     let availability = availability(host, items);
     let highest = problems
         .iter()
-        .filter_map(|p| p.severity.parse::<u8>().ok())
-        .filter(|s| usize::from(*s) < SEVERITIES.len())
+        .filter_map(|p| p.severity.parse().ok().and_then(Severity::from_number))
         .max();
-    let state =
-        if availability == Availability::NotAvailable || highest.is_some_and(|s| s >= SERIOUS) {
-            DetailState::Problem
-        } else if availability != Availability::Available || !problems.is_empty() {
-            DetailState::Warning
-        } else {
-            DetailState::Ok
-        };
+    let state = if availability == Availability::NotAvailable
+        || highest.is_some_and(|s| s >= Severity::High)
+    {
+        DetailState::Problem
+    } else if availability != Availability::Available || !problems.is_empty() {
+        DetailState::Warning
+    } else {
+        DetailState::Ok
+    };
 
     let mut fields = vec![
         Field::new(label("Availability", "Disponibilità"), availability.value()),
@@ -355,7 +356,7 @@ fn describe(
     if let Some(highest) = highest {
         fields.push(Field::new(
             label("Highest severity", "Gravità massima"),
-            SEVERITIES[usize::from(highest)],
+            severity_name(highest),
         ));
     }
     if let Some(address) = main_interface(host) {
