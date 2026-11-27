@@ -264,7 +264,9 @@ A problem without a ticket, because none was opened for it, gets no note on reco
 
 1. Import the media type: *Alerts → Media types → Import*, the file `zabbix-media-type.yaml`.
    Zabbix 7.0 or later. It adds the entry *Help desk ticket* to the menu of each event the add-on
-   gave a ticket's page to (`{EVENT.TAGS.hd_ticket_url}`); Zabbix shows it only for those.
+   gave a ticket's page to (`{EVENT.TAGS.hd_ticket_url}`); Zabbix shows it only for those. A media
+   type imported from an earlier version of the file has no entry: import the file again with
+   *Update existing*, then set its parameters again as below.
 2. In the media type **Help desk**, set the parameter `url` to the add-on's webhook as the Zabbix
    server reaches it, such as `https://hd-zabbix.example.com/webhook`; `addon.listen` must then be
    an address the server reaches (`0.0.0.0:8091` behind a proxy with HTTPS, for one). Set
