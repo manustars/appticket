@@ -140,6 +140,12 @@ linked to the asset only show their live details. The source identifies the asse
 of its own, which is not an External reference (a customer's name in another system).
 _Avoid_: Origin, owner, provider
 
+**Live details**:
+What an add-on says of an asset now, asked when agents look at it and never stored: a state (ok,
+warning or problem), a few labelled values and links into the add-on's system; unavailable when
+the add-on does not answer in time.
+_Avoid_: Status, telemetry, live data
+
 **Link proposal**:
 A proposal, recorded by the core, that an asset an add-on would create is one its customer already
 has, with the same name or serial number; agents who manage the catalog accept it, linking the

@@ -1321,6 +1321,7 @@ dependencies = [
  "csv",
  "dotenvy",
  "futures-util",
+ "hd-addon-sdk",
  "hex",
  "hmac 0.13.0",
  "http-body-util",

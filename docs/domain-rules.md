@@ -243,8 +243,10 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   choosing from the names the add-on lists; the add-on only reads them. A name maps its subgroups
   too, unless a subgroup is mapped to another customer. Anything of the external system that maps
   to no customer, or to two, is not imported and is listed in the add-on's state.
-- The live details of an asset come from each add-on it is linked to, when the asset is shown;
-  when an add-on does not answer in time they are unavailable, and nothing else changes.
+- The live details of an asset come from its source and each add-on it is linked to, asked with
+  that add-on's reference when the asset is shown, and only for an active asset of a customer
+  that is not offboarded; when an add-on does not answer within 2 seconds, answers with an error
+  or is switched off, they are unavailable, and nothing else changes or waits for it.
 - An add-on allowed to work tickets opens tickets without a requester for a customer, with a
   priority, assets and services; it adds notes to any ticket and resolves the tickets it opened.
   It never replies and changes nothing else on tickets.

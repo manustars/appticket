@@ -1,5 +1,6 @@
 //! The signature of an event: `sha256=` and the hex HMAC-SHA-256 of `<hd-timestamp>.<raw body>`,
-//! keyed with the event secret the core printed when the add-on was registered.
+//! keyed with the event secret the core printed when the add-on was registered. The core signs
+//! its reads of live details the same way, over [`signed_read`] in place of a body.
 
 use std::fmt;
 use std::sync::Arc;
@@ -51,6 +52,13 @@ pub fn sign(secret: &str, timestamp: u64, body: &[u8]) -> String {
         .finalize()
         .into_bytes();
     format!("{PREFIX}{}", hex::encode(tag))
+}
+
+/// What the core signs, in place of a body, when it asks for the live details of the asset the
+/// add-on knows by `reference`: `GET /assets/<reference>`, the reference decoded, as the add-on
+/// gave it. Check a read with [`Verifier::verify`] over these bytes.
+pub fn signed_read(reference: &str) -> String {
+    format!("GET /assets/{reference}")
 }
 
 /// Checks an event against its `hd-timestamp` and `hd-signature` headers and its raw body, as
