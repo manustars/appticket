@@ -563,7 +563,7 @@ async fn tickets_are_listed_with_their_sites_and_filtered_by_site(db: PgPool) {
         .unwrap();
     let nowhere = testing::ticket(&db, brightfield, None, "c@brightfield.test").await;
     let closed = testing::ticket(&db, brightfield, Some(ada), "d@brightfield.test").await;
-    crate::tickets::set_state(&db, closed, crate::tickets::TicketState::Closed)
+    crate::testing::set_state(&db, closed, crate::tickets::TicketState::Closed)
         .await
         .unwrap();
     crate::sites::retire(&db, head).await.unwrap();
@@ -928,6 +928,102 @@ async fn an_addon_calls_with_its_token_and_receives_messages(db: PgPool) {
     assert_eq!(
         (kind.as_str(), subject.as_str(), pending),
         ("message.received", "Printer", 1)
+    );
+}
+
+/// An agent moving a ticket through the API reaches the add-ons registered for
+/// `ticket.state_changed`, signed, and no other add-on. Receiving the event needs no scope; reading
+/// the ticket afterwards needs `tickets:read`, as always.
+#[sqlx::test]
+async fn an_addon_receives_the_changes_of_a_ticket_s_state(db: PgPool) {
+    use axum::{body::Bytes, http::HeaderMap, routing::post};
+    use std::sync::{Arc, Mutex};
+    type Seen = Arc<Mutex<Vec<(HeaderMap, Bytes)>>>;
+    let seen: Seen = Arc::default();
+    let fake = axum::Router::new().route(
+        "/events",
+        post({
+            let seen = seen.clone();
+            move |headers: HeaderMap, body: Bytes| async move {
+                seen.lock().unwrap().push((headers, body));
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, fake).await });
+
+    let api = Client::new(&db).await;
+    let watchtower = crate::addons::register(
+        &db,
+        "watchtower",
+        &url,
+        &[crate::addons::TICKET_STATE_CHANGED.into()],
+        &[],
+    )
+    .await
+    .unwrap();
+    crate::addons::register(
+        &db,
+        "assistant",
+        &url,
+        &[crate::addons::TICKET_OPENED.into()],
+        &[],
+    )
+    .await
+    .unwrap();
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let n = testing::ticket(&db, brightfield, None, "<one@brightfield.test>").await;
+
+    let (status, json) = api
+        .call(
+            "PUT",
+            &format!("/api/tickets/{n}/state"),
+            Some(serde_json::json!({ "state": "resolved" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
+    let (status, _) = api
+        .call(
+            "PUT",
+            &format!("/api/tickets/{n}/state"),
+            Some(serde_json::json!({ "state": "resolved" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "the same state again");
+
+    let client = crate::addons::http_client().unwrap();
+    assert_eq!(
+        crate::addons::deliver_due(&db, &client).await.unwrap(),
+        1,
+        "one event, for watchtower only"
+    );
+    let (headers, body) = seen.lock().unwrap().pop().unwrap();
+    let timestamp: u64 = headers[crate::addons::HEADER_TIMESTAMP]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        headers[crate::addons::HEADER_SIGNATURE].to_str().unwrap(),
+        crate::addons::signature(&watchtower.event_secret, timestamp, &body)
+    );
+    let envelope: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(envelope["kind"], "ticket.state_changed");
+    assert_eq!(
+        envelope["data"],
+        serde_json::json!({"ticket_number": n, "old_state": "open", "new_state": "resolved",
+            "changed_by": {"kind": "agent", "agent": {"id": api.agent, "name": "marco"}}})
+    );
+
+    let bot = Client::new_with_token(&db, &watchtower.token, api.agent);
+    let (status, refused) = bot
+        .call("GET", &format!("/api/addon/tickets/{n}"), None)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        refused["error"],
+        "The add-on watchtower lacks the scope tickets:read."
     );
 }
 
@@ -2299,6 +2395,29 @@ fn the_specification_describes_the_ticket_an_addon_opens() {
             "service_ids",
             "title"
         ]
+    );
+}
+
+/// The specification describes `ticket.state_changed` as a webhook: the envelope the core posts,
+/// with the ticket, the two states and who changed it.
+#[test]
+fn the_specification_describes_the_event_ticket_state_changed() {
+    let spec = serde_json::to_value(super::openapi()).unwrap();
+    let schema = |reference: &Value| {
+        let name = reference.as_str().unwrap().rsplit('/').next().unwrap();
+        let properties = &spec["components"]["schemas"][name]["properties"];
+        let mut fields: Vec<String> = properties.as_object().unwrap().keys().cloned().collect();
+        fields.sort();
+        (properties.clone(), fields)
+    };
+    let body = &spec["webhooks"]["ticket.state_changed"]["post"]["requestBody"]["content"]["application/json"]
+        ["schema"]["$ref"];
+    let (envelope, fields) = schema(body);
+    assert_eq!(fields, ["created_at", "data", "id", "kind"]);
+    let (_, fields) = schema(&envelope["data"]["$ref"]);
+    assert_eq!(
+        fields,
+        ["changed_by", "new_state", "old_state", "ticket_number"]
     );
 }
 

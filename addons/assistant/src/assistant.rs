@@ -176,6 +176,10 @@ impl Assistant {
                 Some(number) => self.on_ticket(number).await?,
             },
             Event::TicketOpened(opened) => self.on_ticket(opened.ticket_number).await?,
+            Event::TicketStateChanged(_) => {
+                tracing::debug!(kind = %envelope.kind, "ignoring an event kind the Assistant does not handle");
+                Vec::new()
+            }
             Event::Other { kind, .. } => {
                 tracing::debug!(%kind, "ignoring an event kind the Assistant does not handle");
                 Vec::new()

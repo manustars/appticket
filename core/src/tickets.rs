@@ -139,17 +139,120 @@ pub(crate) async fn insert_note(
     Ok(id)
 }
 
-pub async fn set_state(db: &PgPool, number: i64, state: TicketState) -> Result<()> {
+/// The agent `agent` moves the ticket to `state`.
+pub async fn set_state(db: &PgPool, number: i64, state: TicketState, agent: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
     let (ticket_id, current) = lock(&mut tx, number).await?;
     not_closed(current)?;
-    sqlx::query("UPDATE tickets SET state = $2, updated_at = now() WHERE id = $1")
-        .bind(ticket_id)
-        .bind(state)
-        .execute(&mut *tx)
-        .await?;
+    change_state(&mut tx, ticket_id, state, StateChanger::Agent(agent)).await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// What changed a ticket's state.
+#[derive(Debug, Clone, Copy)]
+pub enum StateChanger {
+    /// An agent.
+    Agent(Uuid),
+    /// A received message that joined the ticket.
+    Message(Uuid),
+}
+
+/// The data of `ticket.state_changed`.
+#[derive(Serialize, ToSchema)]
+pub struct TicketStateChanged {
+    pub ticket_number: i64,
+    /// The state the ticket left.
+    pub old_state: TicketState,
+    /// The state the ticket is in now; never the old one.
+    pub new_state: TicketState,
+    pub changed_by: StateChangedBy,
+}
+
+/// Who or what changed a ticket's state. More kinds may come (an add-on, once add-ons resolve
+/// the tickets they opened): read `kind` and skip the ones you do not know.
+#[derive(Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StateChangedBy {
+    /// An agent: by hand, with a reply, by attaching an inbox message to the ticket, or by
+    /// resolving the children of a parent ticket.
+    Agent { agent: Party },
+    /// A received message that joined the ticket and reopened it; `message.received` carries the
+    /// same `message_id`. Its sender is not always the ticket's requester.
+    Message { message_id: Uuid },
+}
+
+/// Moves the ticket to `to`, which counts as an update; when its state changes, records
+/// `ticket.state_changed` in the same transaction, for the add-ons that follow it. Every change
+/// of a ticket's state goes through here or [`reopen`]. The caller checks that the move is
+/// allowed.
+pub(crate) async fn change_state(
+    tx: &mut Transaction<'_, Postgres>,
+    ticket: Uuid,
+    to: TicketState,
+    by: StateChanger,
+) -> Result<()> {
+    move_state(tx, ticket, by, |_| to).await
+}
+
+/// Reopens a waiting or resolved ticket, as a message joining it does; an open one stays open.
+/// Counts as an update either way. The caller checks that the ticket is not closed.
+pub(crate) async fn reopen(
+    tx: &mut Transaction<'_, Postgres>,
+    ticket: Uuid,
+    by: StateChanger,
+) -> Result<()> {
+    move_state(tx, ticket, by, |from| match from {
+        TicketState::Waiting | TicketState::Resolved => TicketState::Open,
+        other => other,
+    })
+    .await
+}
+
+async fn move_state(
+    tx: &mut Transaction<'_, Postgres>,
+    ticket: Uuid,
+    by: StateChanger,
+    to: impl FnOnce(TicketState) -> TicketState,
+) -> Result<()> {
+    let (number, from): (i64, TicketState) =
+        sqlx::query_as("SELECT number, state FROM tickets WHERE id = $1 FOR UPDATE")
+            .bind(ticket)
+            .fetch_one(&mut **tx)
+            .await?;
+    let to = to(from);
+    sqlx::query("UPDATE tickets SET state = $2, updated_at = now() WHERE id = $1")
+        .bind(ticket)
+        .bind(to)
+        .execute(&mut **tx)
+        .await?;
+    if from == to {
+        return Ok(());
+    }
+    let changed_by = match by {
+        StateChanger::Agent(id) => {
+            let name: String = sqlx::query_scalar("SELECT name FROM agents WHERE id = $1")
+                .bind(id)
+                .fetch_one(&mut **tx)
+                .await?;
+            StateChangedBy::Agent {
+                agent: Party { id, name },
+            }
+        }
+        StateChanger::Message(message_id) => StateChangedBy::Message { message_id },
+    };
+    let data = TicketStateChanged {
+        ticket_number: number,
+        old_state: from,
+        new_state: to,
+        changed_by,
+    };
+    crate::addons::emit(
+        tx,
+        crate::addons::TICKET_STATE_CHANGED,
+        serde_json::to_value(data)?,
+    )
+    .await
 }
 
 /// Makes `agent` the ticket's assignee, or leaves it unassigned when `None`.
@@ -263,11 +366,7 @@ pub(crate) async fn send(
     for to in recipients {
         queued.push(outgoing.queue(tx, sender, to).await?);
     }
-    sqlx::query("UPDATE tickets SET state = $2, updated_at = now() WHERE id = $1")
-        .bind(ticket)
-        .bind(then)
-        .execute(&mut **tx)
-        .await?;
+    change_state(tx, ticket, then, StateChanger::Agent(author)).await?;
     crate::drafts::clear(tx, ticket, author).await?;
     Ok(queued)
 }
@@ -909,6 +1008,102 @@ mod tests {
         assert_eq!(state(&db, n).await, "waiting");
     }
 
+    /// An agent moving a ticket, by hand or with a reply, records `ticket.state_changed` with the
+    /// ticket, the state it left, the state it reached and the agent; a move to the state the
+    /// ticket is in records nothing.
+    #[sqlx::test]
+    async fn an_agent_s_change_of_state_is_recorded_for_the_addons(db: PgPool) {
+        let c = testing::customer(&db, "Brightfield").await;
+        let r = testing::requester(&db, c, "ada@brightfield.test").await;
+        let marco = testing::agent(&db, "marco@northgate.test").await;
+        let lena = testing::agent(&db, "lena@northgate.test").await;
+        let n = testing::ticket(&db, c, Some(r), "first@brightfield.test").await;
+        let by = |agent: Uuid, name: &str| serde_json::json!({"kind": "agent", "agent": {"id": agent, "name": name}});
+
+        set_state(&db, n, TicketState::Waiting, marco)
+            .await
+            .unwrap();
+        set_state(&db, n, TicketState::Waiting, lena).await.unwrap();
+        reply(
+            &db,
+            &sender(),
+            n,
+            lena,
+            "Fixed.",
+            None,
+            TicketState::Resolved,
+        )
+        .await
+        .unwrap();
+        reply(
+            &db,
+            &sender(),
+            n,
+            lena,
+            "Anything else?",
+            None,
+            TicketState::Resolved,
+        )
+        .await
+        .unwrap();
+        set_state(&db, n, TicketState::Closed, marco).await.unwrap();
+
+        assert_eq!(
+            testing::state_changes(&db).await,
+            [
+                serde_json::json!({"ticket_number": n, "old_state": "open",
+                    "new_state": "waiting", "changed_by": by(marco, "marco")}),
+                serde_json::json!({"ticket_number": n, "old_state": "waiting",
+                    "new_state": "resolved", "changed_by": by(lena, "lena")}),
+                serde_json::json!({"ticket_number": n, "old_state": "resolved",
+                    "new_state": "closed", "changed_by": by(marco, "marco")}),
+            ]
+        );
+    }
+
+    /// The database keeps `ticket.state_changed` to real changes, also when the code is bypassed:
+    /// two different states, never from closed, and who changed it.
+    #[sqlx::test]
+    async fn the_database_records_only_real_changes_of_state(db: PgPool) {
+        let insert = |data: serde_json::Value| {
+            let db = db.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO events (id, kind, data) VALUES ($1, 'ticket.state_changed', $2)",
+                )
+                .bind(Uuid::new_v4())
+                .bind(data)
+                .execute(&db)
+                .await
+            }
+        };
+        let agent = serde_json::json!({"kind": "agent",
+            "agent": {"id": Uuid::new_v4(), "name": "marco"}});
+        let change = |old: &str, new: &str, by: &serde_json::Value| {
+            serde_json::json!({"ticket_number": 7, "old_state": old, "new_state": new,
+                "changed_by": by})
+        };
+        let refused = [
+            change("waiting", "waiting", &agent),
+            change("closed", "open", &agent),
+            change("open", "pending", &agent),
+            change("open", "waiting", &serde_json::json!({"kind": "requester"})),
+            serde_json::json!({"ticket_number": 7, "old_state": "open", "new_state": "waiting"}),
+            serde_json::json!({"old_state": "open", "new_state": "waiting", "changed_by": agent}),
+        ];
+        for data in refused {
+            assert!(insert(data.clone()).await.is_err(), "{data}");
+        }
+        insert(change("open", "closed", &agent)).await.unwrap();
+        insert(change(
+            "resolved",
+            "open",
+            &serde_json::json!({"kind": "message", "message_id": Uuid::new_v4()}),
+        ))
+        .await
+        .unwrap();
+    }
+
     /// The outbound messages on the ticket: to whom, oldest first.
     async fn sent_to(db: &PgPool, number: i64) -> Vec<String> {
         detail(db, number)
@@ -1000,10 +1195,12 @@ mod tests {
         let r = testing::requester(&db, c, "ada@brightfield.test").await;
         let a = testing::agent(&db, "marco@northgate.test").await;
         let n = testing::ticket(&db, c, Some(r), "first@brightfield.test").await;
-        set_state(&db, n, TicketState::Closed).await.unwrap();
+        testing::set_state(&db, n, TicketState::Closed)
+            .await
+            .unwrap();
 
         assert!(matches!(
-            set_state(&db, n, TicketState::Open).await,
+            testing::set_state(&db, n, TicketState::Open).await,
             Err(Error::Rule(_))
         ));
         assert!(matches!(assign(&db, n, Some(a)).await, Err(Error::Rule(_))));
@@ -1061,7 +1258,9 @@ mod tests {
         let r = testing::requester(&db, brightfield, "luca.bassi@mail.test").await;
         let first = testing::ticket(&db, brightfield, Some(r), "l1@mail.test").await;
         let second = testing::ticket(&db, brightfield, Some(r), "l2@mail.test").await;
-        set_state(&db, second, TicketState::Closed).await.unwrap();
+        testing::set_state(&db, second, TicketState::Closed)
+            .await
+            .unwrap();
         let other = testing::ticket(&db, brightfield, None, "o1@brightfield.test").await;
 
         let moved = move_to_customer(&db, first, harbor, RequesterMove::Move)
@@ -1410,11 +1609,13 @@ mod tests {
         let by_requester = testing::ticket(&db, c, Some(ada), "a2@brightfield.test").await;
         let open = testing::ticket(&db, c, Some(ada), "a3@brightfield.test").await;
         let resolved = testing::ticket(&db, c, Some(ada), "a4@brightfield.test").await;
-        set_state(&db, resolved, TicketState::Resolved)
+        testing::set_state(&db, resolved, TicketState::Resolved)
             .await
             .unwrap();
         for n in [by_asset, by_requester] {
-            set_state(&db, n, TicketState::Closed).await.unwrap();
+            testing::set_state(&db, n, TicketState::Closed)
+                .await
+                .unwrap();
         }
 
         put_at(&db, ada, Some(lab)).await;
@@ -1494,7 +1695,9 @@ mod tests {
             .await
             .unwrap();
         for n in [by_requester, by_asset] {
-            set_state(&db, n, TicketState::Closed).await.unwrap();
+            testing::set_state(&db, n, TicketState::Closed)
+                .await
+                .unwrap();
         }
         let open = testing::ticket(&db, c, Some(ada), "a3@brightfield.test").await;
 
@@ -1519,7 +1722,9 @@ mod tests {
         let ada = testing::requester(&db, c, "ada@brightfield.test").await;
         put_at(&db, ada, Some(head)).await;
         let closed = testing::ticket(&db, c, Some(ada), "a1@brightfield.test").await;
-        set_state(&db, closed, TicketState::Closed).await.unwrap();
+        testing::set_state(&db, closed, TicketState::Closed)
+            .await
+            .unwrap();
         let open = testing::ticket(&db, c, Some(ada), "a2@brightfield.test").await;
         let keep = |number: i64, customer: Uuid, site: Uuid| {
             let db = db.clone();
@@ -1629,7 +1834,7 @@ mod tests {
             .unwrap();
         tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            set_state(&db, n, TicketState::Closed),
+            testing::set_state(&db, n, TicketState::Closed),
         )
         .await
         .expect("closing waited for the asset")
@@ -1669,7 +1874,9 @@ mod tests {
         let by_requester = testing::ticket(&db, c, Some(ada), "a2@brightfield.test").await;
         let open = testing::ticket(&db, c, Some(ada), "a3@brightfield.test").await;
         for n in [by_asset, by_requester] {
-            set_state(&db, n, TicketState::Closed).await.unwrap();
+            testing::set_state(&db, n, TicketState::Closed)
+                .await
+                .unwrap();
         }
 
         migrator.run(&db).await.unwrap();

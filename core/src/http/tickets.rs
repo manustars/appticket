@@ -274,7 +274,7 @@ async fn set_state(
     Json(change): Json<StateChange>,
 ) -> Result<StatusCode, ApiError> {
     agent.grant.require(Permission::WorkTickets)?;
-    tickets::set_state(&state.db, number, change.state).await?;
+    tickets::set_state(&state.db, number, change.state, agent.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

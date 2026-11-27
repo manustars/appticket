@@ -93,8 +93,8 @@ pub async fn open_ticket(db: &PgPool, message: Uuid, customer: Uuid) -> Result<i
 }
 
 /// Attaches the message to an existing, not closed ticket, which reopens if it was waiting or
-/// resolved, as a reply from the requester would.
-pub async fn attach(db: &PgPool, message: Uuid, number: i64) -> Result<()> {
+/// resolved, as a reply from the requester would: a change of state by `agent`, who attached it.
+pub async fn attach(db: &PgPool, message: Uuid, number: i64, agent: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
     lock_waiting(&mut tx, message).await?;
     let ticket: Option<(Uuid, String)> =
@@ -113,14 +113,7 @@ pub async fn attach(db: &PgPool, message: Uuid, number: i64) -> Result<()> {
         .bind(ticket)
         .execute(&mut *tx)
         .await?;
-    sqlx::query(
-        "UPDATE tickets SET updated_at = now(),
-                state = CASE WHEN state IN ('waiting', 'resolved') THEN 'open' ELSE state END
-         WHERE id = $1",
-    )
-    .bind(ticket)
-    .execute(&mut *tx)
-    .await?;
+    crate::tickets::reopen(&mut tx, ticket, crate::tickets::StateChanger::Agent(agent)).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -253,7 +246,9 @@ mod tests {
             .await
             .unwrap();
         let m = testing::inbox_message(&db, "ada@brightfield.test").await;
-        attach(&db, m, n).await.unwrap();
+        attach(&db, m, n, testing::agent(&db, "marco@northgate.test").await)
+            .await
+            .unwrap();
         assert_eq!(state(&db, n).await, "open");
 
         sqlx::query("UPDATE tickets SET state = 'closed' WHERE number = $1")
@@ -262,11 +257,45 @@ mod tests {
             .await
             .unwrap();
         let m2 = testing::inbox_message(&db, "ada@brightfield.test").await;
-        assert!(matches!(attach(&db, m2, n).await, Err(Error::Rule(_))));
         assert!(matches!(
-            attach(&db, m2, 9999).await,
+            attach(&db, m2, n, Uuid::new_v4()).await,
+            Err(Error::Rule(_))
+        ));
+        assert!(matches!(
+            attach(&db, m2, 9999, Uuid::new_v4()).await,
             Err(Error::NotFound(_))
         ));
+    }
+
+    /// Attaching a message reopens a resolved ticket as a change of state by the agent who
+    /// attached it; attaching one to an open ticket changes no state and records nothing.
+    #[sqlx::test]
+    async fn the_agent_attaching_a_message_reopens_the_ticket(db: PgPool) {
+        let c = testing::customer(&db, "Brightfield").await;
+        let marco = testing::agent(&db, "marco@northgate.test").await;
+        let n = testing::ticket(&db, c, None, "first@brightfield.test").await;
+        let first = testing::inbox_message(&db, "ada@brightfield.test").await;
+        attach(&db, first, n, marco).await.unwrap();
+        assert_eq!(
+            testing::state_changes(&db).await,
+            Vec::<serde_json::Value>::new()
+        );
+
+        sqlx::query("UPDATE tickets SET state = 'resolved' WHERE number = $1")
+            .bind(n)
+            .execute(&db)
+            .await
+            .unwrap();
+        let second = testing::inbox_message(&db, "ada@brightfield.test").await;
+        attach(&db, second, n, marco).await.unwrap();
+        assert_eq!(
+            testing::state_changes(&db).await,
+            [
+                serde_json::json!({"ticket_number": n, "old_state": "resolved",
+                "new_state": "open",
+                "changed_by": {"kind": "agent", "agent": {"id": marco, "name": "marco"}}})
+            ]
+        );
     }
 
     #[sqlx::test]

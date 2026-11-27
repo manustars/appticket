@@ -69,6 +69,33 @@ An agent opened a ticket, by hand or from an inbox message, or an add-on opened 
 |---|---|
 | `ticket_number` | The new ticket. |
 
+### `ticket.state_changed`
+
+A ticket moved from one state to another (`open`, `waiting`, `resolved`, `closed`), recorded in
+the same transaction as the change. A move that leaves the state as it was sends nothing, and a
+closed ticket never moves again.
+
+```json
+{ "ticket_number": 42, "old_state": "waiting", "new_state": "open",
+  "changed_by": { "kind": "agent", "agent": { "id": "…", "name": "Marco Bellini" } } }
+```
+
+| Field | Meaning |
+|---|---|
+| `ticket_number` | The ticket. |
+| `old_state`, `new_state` | The state it left and the state it is in now; never the same. |
+| `changed_by` | Who or what changed it, by `kind`. |
+
+| `kind` | When | Other fields |
+|---|---|---|
+| `agent` | An agent moved the ticket by hand, with a reply (to the state they picked), by attaching an inbox message to it (which reopens a waiting or resolved ticket), or by resolving the children of a parent ticket (one event per child that changed). | `agent`: the agent's `id` and `name`. |
+| `message` | A received message joined the ticket and reopened it. Its sender is not always the ticket's requester: a key requester's answer, for one, joins the ticket too. | `message_id`: the message, which `message.received` announces too. |
+
+More kinds may come, such as an add-on once add-ons resolve the tickets they opened: skip a
+`kind` you do not know. Receiving the event needs no scope; reading the ticket afterwards needs
+`tickets:read`. A ticket being opened is no change of state: it is announced by `ticket.opened`
+or `message.received`.
+
 ## Calls: add-on to core
 
 The add-on calls the core's API with `Authorization: Bearer <token>`. Each operation needs a scope
@@ -111,7 +138,8 @@ looking up a name of its own system should too. Agents who manage customers set 
 read them. Offboarded customers are not listed, and neither are their references.
 
 The full request and response shapes are in the core's OpenAPI specification
-(`hd openapi`, or `/api/openapi.json` on a running core).
+(`hd openapi`, or `/api/openapi.json` on a running core), which also describes the body of
+`ticket.state_changed` among its `webhooks`.
 
 ### Supplying assets
 

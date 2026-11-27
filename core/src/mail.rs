@@ -106,16 +106,15 @@ pub async fn route(
         if let Some((ticket_id, state)) = found
             && state != "closed"
         {
-            insert_message(tx, incoming, Some(ticket_id)).await?;
+            let message = insert_message(tx, incoming, Some(ticket_id)).await?;
             // A reply reopens a waiting or resolved ticket, and always counts as an update.
-            sqlx::query(
-                "UPDATE tickets SET updated_at = now(),
-                        state = CASE WHEN state IN ('waiting', 'resolved') THEN 'open' ELSE state END
-                 WHERE id = $1",
+            crate::tickets::reopen(
+                tx,
+                ticket_id,
+                crate::tickets::StateChanger::Message(message),
             )
-            .bind(ticket_id)
-            .execute(&mut **tx)
-            .await?;
+            .await
+            .map_err(crate::error::Error::into_anyhow)?;
             return Ok(Routed::Reply { ticket_id });
         }
     }
@@ -227,7 +226,7 @@ async fn insert_message(
     tx: &mut Transaction<'_, Postgres>,
     incoming: &Incoming,
     ticket_id: Option<Uuid>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Uuid> {
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO messages (id, ticket_id, direction, rfc_message_id, in_reply_to, \"references\",
@@ -269,7 +268,7 @@ async fn insert_message(
     )
     .await
     .map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(())
+    Ok(id)
 }
 
 /// Routes one fetched message. A message that cannot be parsed or routed is parked in the inbox
@@ -450,6 +449,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(state, "open");
+    }
+
+    /// A reply reopening a waiting ticket is a change of state by that message, which add-ons
+    /// also get as `message.received`; one joining an open ticket changes no state.
+    #[sqlx::test]
+    async fn a_reply_reopening_its_ticket_is_recorded_as_changed_by_it(db: PgPool) {
+        customer(&db, "Brightfield", Some("brightfield.test")).await;
+        let Routed::NewTicket { ticket_id } = route_one(
+            &db,
+            &mail("ada@brightfield.test", "a1@brightfield.test", None),
+        )
+        .await
+        else {
+            panic!("expected a new ticket");
+        };
+        let reply =
+            |id: &'static str| mail("ada@brightfield.test", id, Some("a1@brightfield.test"));
+        route_one(&db, &reply("a2@brightfield.test")).await;
+        assert_eq!(
+            crate::testing::state_changes(&db).await,
+            Vec::<serde_json::Value>::new()
+        );
+
+        sqlx::query("UPDATE tickets SET state = 'waiting' WHERE id = $1")
+            .bind(ticket_id)
+            .execute(&db)
+            .await
+            .unwrap();
+        route_one(&db, &reply("a3@brightfield.test")).await;
+        let (number, message): (i64, Uuid) = sqlx::query_as(
+            "SELECT t.number, m.id FROM tickets t JOIN messages m ON m.ticket_id = t.id
+             WHERE m.rfc_message_id = 'a3@brightfield.test'",
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(
+            crate::testing::state_changes(&db).await,
+            [
+                serde_json::json!({"ticket_number": number, "old_state": "waiting",
+                "new_state": "open", "changed_by": {"kind": "message", "message_id": message}})
+            ]
+        );
     }
 
     #[sqlx::test]

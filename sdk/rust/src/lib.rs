@@ -17,7 +17,9 @@ pub mod signature;
 pub mod tickets;
 
 pub use client::{Client, Error, http_client};
-pub use events::{Envelope, Event, MessageReceived, TicketOpened};
+pub use events::{
+    Envelope, Event, MessageReceived, StateChangedBy, TicketOpened, TicketStateChanged,
+};
 pub use proposals::{Content, Rationale, Target, Triage};
 pub use signature::{Verifier, VerifyError};
 pub use tickets::NewTicket;

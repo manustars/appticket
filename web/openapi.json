@@ -5957,6 +5957,29 @@
       }
     }
   },
+  "webhooks": {
+    "ticket.state_changed": {
+      "post": {
+        "summary": "A ticket's state changed",
+        "description": "Sent as `POST <url>/events` to the add-ons registered for `ticket.state_changed`, signed with the add-on's event secret and retried until the add-on answers 2xx.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketStateChangedEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "2XX": {
+            "description": "Delivered: the core does not send it again."
+          }
+        }
+      }
+    }
+  },
   "components": {
     "schemas": {
       "Accepted": {
@@ -9000,6 +9023,50 @@
           }
         }
       },
+      "StateChangedBy": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "An agent: by hand, with a reply, by attaching an inbox message to the ticket, or by\nresolving the children of a parent ticket.",
+            "required": [
+              "agent",
+              "kind"
+            ],
+            "properties": {
+              "agent": {
+                "$ref": "#/components/schemas/Party"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "agent"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A received message that joined the ticket and reopened it; `message.received` carries the\nsame `message_id`. Its sender is not always the ticket's requester.",
+            "required": [
+              "message_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "message"
+                ]
+              },
+              "message_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "description": "Who or what changed a ticket's state. More kinds may come (an add-on, once add-ons resolve\nthe tickets they opened): read `kind` and skip the ones you do not know."
+      },
       "SuppliedAsset": {
         "allOf": [
           {
@@ -9237,6 +9304,61 @@
           "resolved",
           "closed"
         ]
+      },
+      "TicketStateChanged": {
+        "type": "object",
+        "description": "The data of `ticket.state_changed`.",
+        "required": [
+          "ticket_number",
+          "old_state",
+          "new_state",
+          "changed_by"
+        ],
+        "properties": {
+          "changed_by": {
+            "$ref": "#/components/schemas/StateChangedBy"
+          },
+          "new_state": {
+            "$ref": "#/components/schemas/TicketState",
+            "description": "The state the ticket is in now; never the old one."
+          },
+          "old_state": {
+            "$ref": "#/components/schemas/TicketState",
+            "description": "The state the ticket left."
+          },
+          "ticket_number": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "TicketStateChangedEvent": {
+        "type": "object",
+        "description": "The body of a `ticket.state_changed` delivery to an add-on.",
+        "required": [
+          "id",
+          "kind",
+          "created_at",
+          "data"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "data": {
+            "$ref": "#/components/schemas/TicketStateChanged"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The same on every retry: skip an id already handled."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`ticket.state_changed`."
+          }
+        }
       },
       "TicketSummary": {
         "type": "object",

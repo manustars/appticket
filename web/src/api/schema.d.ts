@@ -1672,7 +1672,49 @@ export interface paths {
         trace?: never;
     };
 }
-export type webhooks = Record<string, never>;
+export interface webhooks {
+    "ticket.state_changed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A ticket's state changed
+         * @description Sent as `POST <url>/events` to the add-ons registered for `ticket.state_changed`, signed with the add-on's event secret and retried until the add-on answers 2xx.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["TicketStateChangedEvent"];
+                };
+            };
+            responses: {
+                /** @description Delivered: the core does not send it again. */
+                "2XX": {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+}
 export interface components {
     schemas: {
         /** @description What accepting a proposal did. */
@@ -2757,6 +2799,20 @@ export interface components {
         StateChange: {
             state: components["schemas"]["TicketState"];
         };
+        /**
+         * @description Who or what changed a ticket's state. More kinds may come (an add-on, once add-ons resolve
+         *     the tickets they opened): read `kind` and skip the ones you do not know.
+         */
+        StateChangedBy: {
+            agent: components["schemas"]["Party"];
+            /** @enum {string} */
+            kind: "agent";
+        } | {
+            /** @enum {string} */
+            kind: "message";
+            /** Format: uuid */
+            message_id: string;
+        };
         /** @description An asset as its source supplies it, known by the add-on's own reference. */
         SuppliedAsset: components["schemas"]["SuppliedDetails"] & {
             /**
@@ -2839,6 +2895,29 @@ export interface components {
         };
         /** @enum {string} */
         TicketState: "open" | "waiting" | "resolved" | "closed";
+        /** @description The data of `ticket.state_changed`. */
+        TicketStateChanged: {
+            changed_by: components["schemas"]["StateChangedBy"];
+            /** @description The state the ticket is in now; never the old one. */
+            new_state: components["schemas"]["TicketState"];
+            /** @description The state the ticket left. */
+            old_state: components["schemas"]["TicketState"];
+            /** Format: int64 */
+            ticket_number: number;
+        };
+        /** @description The body of a `ticket.state_changed` delivery to an add-on. */
+        TicketStateChangedEvent: {
+            /** Format: date-time */
+            created_at: string;
+            data: components["schemas"]["TicketStateChanged"];
+            /**
+             * Format: uuid
+             * @description The same on every retry: skip an id already handled.
+             */
+            id: string;
+            /** @description `ticket.state_changed`. */
+            kind: string;
+        };
         TicketSummary: {
             assignee_name?: string | null;
             customer_name: string;
