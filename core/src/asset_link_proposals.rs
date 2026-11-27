@@ -1,8 +1,9 @@
 //! Link proposals (docs/domain-rules.md, "Add-ons"; ADR 0002): when an add-on would create an asset
 //! and its customer already has an active one with the same name, ignoring case, or the same serial
 //! number, entered by hand or supplied by another add-on, the core records a proposal that the
-//! add-on's asset is that one instead of creating a second. Agents who manage the catalog discard
-//! it, and the add-on's next attempt with that reference then creates its own asset.
+//! add-on's asset is that one instead of creating a second. Agents who manage the catalog accept it,
+//! linking the add-on to that asset with its reference (see linked_addons), or discard it, and the
+//! add-on's next attempt with that reference then creates its own asset.
 
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
