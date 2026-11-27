@@ -70,6 +70,10 @@ services:
       POSTGRES_USER: zabbix
       POSTGRES_PASSWORD: zabbix
       POSTGRES_DB: zabbix
+    # The Zabbix add-on's tests serve its webhook on the host, which the server's media type
+    # reaches at host.docker.internal.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on: [zabbix-db]
 
   zabbix-web:
