@@ -1,12 +1,34 @@
+use clap::Parser;
 use hd_addon_sdk::Client;
+use hd_zabbix::check::{self, CheckArgs};
 use hd_zabbix::config::Config;
 use hd_zabbix::sync::Syncer;
 use hd_zabbix::zabbix::Zabbix;
 use tracing_subscriber::EnvFilter;
 
+/// The Zabbix add-on: without a command, it brings the hosts of the host groups customers have
+/// into the help desk's catalog, now and at each interval.
+#[derive(Parser)]
+#[command(version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(clap::Subcommand)]
+enum Command {
+    /// Tells which alert rule a problem meets and with what outcome, or that none does.
+    Check(CheckArgs),
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
     let config = Config::from_env()?;
+    if let Some(Command::Check(args)) = cli.command {
+        print!("{}", check::run(&config, args).await?);
+        return Ok(());
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_env("HD_ZABBIX_LOG").unwrap_or_else(|_| EnvFilter::new("info")),

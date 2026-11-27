@@ -1356,6 +1356,7 @@ name = "hd-zabbix"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "dotenvy",
  "hd-addon-sdk",
  "reqwest",

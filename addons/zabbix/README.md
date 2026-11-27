@@ -6,7 +6,9 @@ add-on as their source ([ADR 0002](../../docs/adr/0002-core-owns-the-asset-catal
 Zabbix 7.0 LTS or later through `api_jsonrpc.php`, with an API token sent in
 `Authorization: Bearer`.
 
-Alerts, the tickets they open and what goes back to Zabbix
+The [rules for alerts](#alert-rules) are read and checked at startup, and the
+[`check` command](#checking-a-problem-against-the-rules) tells which rule a problem meets; the
+alerts themselves, the tickets they open and what goes back to Zabbix
 ([ADR 0010](../../docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md)) come in later
 versions.
 
@@ -85,9 +87,10 @@ A TOML file, named by `HD_ZABBIX_CONFIG` (`zabbix.toml` in the working directory
 | `sync.interval_minutes` | 5 | Minutes between two reads of the hosts. |
 | `assets.default_kind` | required | The asset kind of a host no mapping matches, from the help desk's list. |
 | `assets.kinds` | none | Mappings, in order: each a `template` (its visible name) or a `tag` (with an optional `value`), and the `kind` it gives; names and values compared ignoring case. |
+| `alerts.rules` | the default list | The [rules for alerts](#alert-rules), in order. |
 
-A file that does not fit, such as an unknown setting or a mapping with both a template and a tag,
-stops the add-on with a sentence naming it. A kind the help desk does not have is refused by the
+A file that does not fit, such as an unknown setting, a mapping with both a template and a tag or
+an invalid rule, stops the add-on with a sentence naming it. A kind the help desk does not have is refused by the
 core for each host it would be given to, and logged.
 
 The secrets come from the environment, also read from a `.env` file in the working directory or a
@@ -106,6 +109,90 @@ A secret's file is used with the surrounding whitespace (such as a final newline
 Setting a variable and its `_FILE` together, or naming a missing or empty file, stops the add-on
 with a message saying which.
 
+## Alert rules
+
+What an alert does is decided by the rules of `[[alerts.rules]]`
+([ADR 0010](../../docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md)): an ordered
+list where the **first rule that matches decides**. A rule matches when all its conditions hold; a
+condition left out matches anything, so a rule without conditions matches every alert.
+
+| Condition | Holds when |
+|---|---|
+| `min_severity` | The problem's severity is this one or higher: `not classified`, `information`, `warning`, `average`, `high` or `disaster`. |
+| `customer` | The host is an asset of this customer, by name. A host no customer covers, or two do, has no customer. |
+| `host_group` | One of the host's groups is this one or nested in it by name: `Brightfield` holds for `Brightfield/Offices/Floor 2`, not for `Brightfield East`. |
+| `tags` | Each of these event tags is among the problem's: `{ tag = "service", value = "mail" }`, or `{ tag = "scope" }` for any value. |
+| `trigger_contains` | The trigger's name, with its macros resolved as the problem shows it, contains this text. |
+
+A rule names a customer or a host group, not both. Names, values and texts are compared ignoring
+case. The outcome of a rule is `outcome = "ignore"`, or `outcome = "open"` with:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `priority` | required | The ticket's priority: `low`, `normal`, `high` or `urgent`. |
+| `service` | none | A service, by name, which the ticket links when the customer uses it. |
+| `on_recovery` | `resolve_if_not_worked_on` | When the problem recovers: a note, and resolving the ticket only when no agent has worked on it; `resolve`, a note and resolving it in any case; or `note`, a note and never resolving it. |
+| `close_in_zabbix` | `false` | Whether the add-on closes the problem in Zabbix when an agent resolves the ticket, if the trigger allows closing it by hand. |
+
+A rule may have a `name`, which logs, errors and `check` show beside its position.
+
+```toml
+[[alerts.rules]]
+name = "Backups"
+trigger_contains = "backup"
+outcome = "ignore"
+
+[[alerts.rules]]
+name = "Mail at Brightfield"
+customer = "Brightfield"
+min_severity = "average"
+tags = [{ tag = "service", value = "mail" }]
+outcome = "open"
+priority = "high"
+service = "Hosted mail"
+```
+
+An alert no rule matches is ignored. Without rules (or with `rules = []`), the **default list**
+decides: rule 1, `Disaster`, opens a ticket with priority urgent for a disaster; rule 2, `High`,
+one with priority high for a high; the rest is ignored. To ignore every alert, write a single rule
+with `outcome = "ignore"` and no conditions.
+
+A rule that does not fit stops the add-on at startup with a sentence naming it by its position and
+name, such as `alerts.rules: rule 2 ("Mail at Brightfield"): priority is "soon": give low, normal,
+high or urgent`. Among them: an unknown setting or severity, `open` without a priority, `ignore`
+with a setting of `open`, a customer with a host group, a blank text and two rules of one name.
+Customers, host groups and services are not looked up at startup: a name nobody has never
+matches, which `check` shows.
+
+## Checking a problem against the rules
+
+`check` tells which rule a problem meets and with what outcome, or that none does, with the
+configuration file and the secrets the add-on runs with. It writes nothing, neither to Zabbix nor
+to the core.
+
+```sh
+hd-zabbix check --event 4213
+hd-zabbix check --host srv-01 --severity high --tag service=mail --tag scope \
+  --trigger "Mail queue is too long"
+```
+
+- `--event` gives a problem event by its id in Zabbix: its current severity, its tags (the
+  trigger's, the items' and the host's) and its name come from Zabbix, and so do the hosts of its
+  trigger, each checked in turn when there are several; a recovery event is refused.
+- Otherwise `--host` (its technical or its visible name) and `--severity` are required, and
+  `--tag` (`NAME` or `NAME=VALUE`, once for each tag) and `--trigger` are optional.
+
+The host's groups come from Zabbix, and its customer from the customers' external references, read
+from the core with the add-on's token as a round does. `check` prints the host with its groups and
+whether it is an asset of a customer (a host that is not opens no ticket, whatever the rules say),
+the problem as the rules see it, and the rule that decides with its outcome:
+
+```text
+Host "SRV-01", in the host group "Brightfield/Offices": an asset of Brightfield.
+Problem: event 4213, severity high, trigger "Mail queue of SRV-01 is too long", the tags "service=mail" and "site=north".
+Rule 2 ("Mail at Brightfield") matches: a ticket opened with priority high, linking the service "Hosted mail" when the customer uses it; on recovery, a note, and the ticket resolved only when no agent has worked on it; once an agent resolves the ticket, the problem left open in Zabbix.
+```
+
 ## Development
 
 ```sh
@@ -121,4 +208,5 @@ database of their own on the server of `DATABASE_URL`, which they drop afterward
 to Zabbix as the default `Admin` of a fresh container, make an API token of their own, create
 host groups and hosts under a prefix of their own and remove them at the end. A Zabbix elsewhere
 is named by `HD_TEST_ZABBIX_URL` (default `http://127.0.0.1:55180`). CI runs them in the job
-`zabbix`.
+`zabbix`. The test of `check` raises a real problem: it pushes a value to a trapper item with
+`history.push` until the server, once it has read the new item, opens the problem of its trigger.
