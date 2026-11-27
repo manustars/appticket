@@ -284,7 +284,9 @@ linked add-on changes nothing of the asset: it only supplies live details and li
   serial number and site, names and serial numbers compared ignoring case as when they matched,
   so that sending again what produced the proposal is safe. Any other change is refused (409), and
   so is one sent with `PUT /api/addon/assets/{id}`. It never brings back a retired asset: only its
-  source does. An add-on whose own name for the asset differs (when the serial number matched)
+  source does. Once the asset is retired, `POST` answers it as it is, retired (`retired_at` set),
+  whatever the add-on sends, so that the add-on, which no longer finds it in the customer's asset
+  list, learns it is retired and unlinks itself. An add-on whose own name for the asset differs (when the serial number matched)
   should leave the assets it is linked to out of its inventory, recognising them in a customer's
   asset list by its `reference` when it is not their `source_addon`.
 - `POST /api/addon/assets/{id}/retire` is refused (409) to a linked add-on. When the asset leaves

@@ -1,30 +1,79 @@
 //! The asset kind of a host: the first mapping of the configuration that matches one of the
-//! host's templates or tags, else the default kind.
+//! templates linked to the host itself, or one of its tags, else the default kind.
 
 use serde::Deserialize;
 
-/// A mapping of the configuration: a host linked to the template, or with the tag (and the
-/// value, when one is given), gets the kind.
+/// What of a host a mapping looks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Match {
+    /// A template linked to the host itself (not one a template links), by its visible name,
+    /// compared ignoring case.
+    Template(String),
+    /// A tag of the host, by name, and with the value when one is given; compared ignoring case.
+    Tag { name: String, value: Option<String> },
+}
+
+/// A mapping of the configuration: a host that matches gets the kind.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RawMapping")]
 pub struct KindMapping {
-    /// A template the host is linked to, by its visible name, compared ignoring case.
-    #[serde(default)]
-    pub template: Option<String>,
-    /// A tag of the host, by name, compared ignoring case.
-    #[serde(default)]
-    pub tag: Option<String>,
-    /// With `tag`, the tag's value, compared ignoring case; without it any value matches.
-    #[serde(default)]
-    pub value: Option<String>,
+    pub matches: Match,
     /// The asset kind, by its name in the help desk's list.
     pub kind: String,
+}
+
+/// A mapping as the configuration file writes it: `template`, or `tag` with an optional `value`,
+/// and `kind`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawMapping {
+    #[serde(default)]
+    template: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
+    #[serde(default)]
+    value: Option<String>,
+    kind: String,
+}
+
+impl TryFrom<RawMapping> for KindMapping {
+    type Error = String;
+
+    fn try_from(raw: RawMapping) -> Result<Self, String> {
+        let filled = |s: Option<String>, what: &str| match s {
+            Some(s) if s.trim().is_empty() => Err(format!("a mapping's {what} is blank")),
+            other => Ok(other.map(|s| s.trim().to_owned())),
+        };
+        let kind = filled(Some(raw.kind), "kind")?.unwrap_or_default();
+        let matches = match (
+            filled(raw.template, "template")?,
+            filled(raw.tag, "tag")?,
+            filled(raw.value, "value")?,
+        ) {
+            (Some(template), None, None) => Match::Template(template),
+            (None, Some(name), value) => Match::Tag { name, value },
+            (Some(_), Some(_), _) => {
+                return Err(format!(
+                    "the mapping to {kind} names both a template and a tag: give one"
+                ));
+            }
+            (Some(_), None, Some(_)) => {
+                return Err(format!("the mapping to {kind} gives a value without a tag"));
+            }
+            (None, None, _) => {
+                return Err(format!(
+                    "the mapping to {kind} names neither a template nor a tag"
+                ));
+            }
+        };
+        Ok(KindMapping { matches, kind })
+    }
 }
 
 /// What of a host decides its kind.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HostTraits {
-    /// The visible names of the templates the host is linked to.
+    /// The visible names of the templates linked to the host itself.
     pub templates: Vec<String>,
     /// The host's tags, as name and value.
     pub tags: Vec<(String, String)>,
@@ -38,31 +87,13 @@ pub struct Kinds {
 }
 
 impl KindMapping {
-    /// Why the mapping cannot be used, if it cannot.
-    pub fn problem(&self) -> Option<&'static str> {
-        let blank = |s: &Option<String>| s.as_deref().is_some_and(|s| s.trim().is_empty());
-        if self.kind.trim().is_empty() {
-            return Some("its kind is blank");
-        }
-        if blank(&self.template) || blank(&self.tag) || blank(&self.value) {
-            return Some("it has a blank template, tag or value");
-        }
-        match (&self.template, &self.tag, &self.value) {
-            (Some(_), Some(_), _) => Some("it names both a template and a tag: give one"),
-            (None, None, _) => Some("it names neither a template nor a tag"),
-            (Some(_), None, Some(_)) => Some("it gives a value without a tag"),
-            _ => None,
-        }
-    }
-
     fn matches(&self, host: &HostTraits) -> bool {
         let same = |a: &str, b: &str| a.trim().to_lowercase() == b.trim().to_lowercase();
-        match (&self.template, &self.tag) {
-            (Some(template), _) => host.templates.iter().any(|t| same(t, template)),
-            (None, Some(tag)) => host.tags.iter().any(|(name, value)| {
-                same(name, tag) && self.value.as_deref().is_none_or(|v| same(value, v))
+        match &self.matches {
+            Match::Template(template) => host.templates.iter().any(|t| same(t, template)),
+            Match::Tag { name, value } => host.tags.iter().any(|(tag, tag_value)| {
+                same(tag, name) && value.as_deref().is_none_or(|v| same(tag_value, v))
             }),
-            (None, None) => false,
         }
     }
 }
@@ -74,7 +105,6 @@ impl Kinds {
             .iter()
             .find(|m| m.matches(host))
             .map_or(&self.default, |m| &m.kind)
-            .trim()
     }
 }
 
@@ -84,18 +114,17 @@ mod tests {
 
     fn template(name: &str, kind: &str) -> KindMapping {
         KindMapping {
-            template: Some(name.into()),
-            tag: None,
-            value: None,
+            matches: Match::Template(name.into()),
             kind: kind.into(),
         }
     }
 
     fn tag(name: &str, value: Option<&str>, kind: &str) -> KindMapping {
         KindMapping {
-            template: None,
-            tag: Some(name.into()),
-            value: value.map(Into::into),
+            matches: Match::Tag {
+                name: name.into(),
+                value: value.map(Into::into),
+            },
             kind: kind.into(),
         }
     }
@@ -123,7 +152,7 @@ mod tests {
         let cases = [
             (host(&["Linux by Zabbix agent"], &[]), "Server"),
             (host(&["linux BY zabbix agent"], &[]), "Server"),
-            // Both match: the first one decides.
+            // Both match: the tag's mapping comes first.
             (
                 host(&["Linux by Zabbix agent"], &[("Device", "PRINTER")]),
                 "Printer",
@@ -137,33 +166,65 @@ mod tests {
         for (traits, kind) in cases {
             assert_eq!(kinds.kind_of(&traits), kind, "{traits:?}");
         }
+
+        // The other way round, the template's mapping comes first and decides.
+        let kinds = Kinds {
+            mappings: vec![
+                template("Linux by Zabbix agent", "Server"),
+                tag("device", Some("printer"), "Printer"),
+            ],
+            default: "Network device".into(),
+        };
+        let both = host(&["Linux by Zabbix agent"], &[("device", "printer")]);
+        assert_eq!(kinds.kind_of(&both), "Server");
+        assert_eq!(
+            kinds.kind_of(&host(&[], &[("device", "printer")])),
+            "Printer"
+        );
     }
 
     #[test]
     fn a_mapping_names_a_template_or_a_tag_and_a_kind() {
-        let mut both = template("Linux by Zabbix agent", "Server");
-        both.tag = Some("role".into());
-        let mut value_alone = template("Linux by Zabbix agent", "Server");
-        value_alone.value = Some("web".into());
-        let neither = KindMapping {
-            template: None,
-            tag: None,
-            value: None,
-            kind: "Server".into(),
+        let read = |toml: &str| -> Result<KindMapping, String> {
+            toml::from_str(toml).map_err(|e| e.message().to_owned())
         };
-        for (mapping, problem) in [
-            (template("Linux by Zabbix agent", "Server"), None),
-            (tag("role", Some("web"), "Server"), None),
-            (both, Some("it names both a template and a tag: give one")),
-            (neither, Some("it names neither a template nor a tag")),
-            (value_alone, Some("it gives a value without a tag")),
-            (template("Linux", " "), Some("its kind is blank")),
+        assert_eq!(
+            read("template = \" Linux by Zabbix agent \"\nkind = \"Server\""),
+            Ok(template("Linux by Zabbix agent", "Server"))
+        );
+        assert_eq!(
+            read("tag = \"role\"\nvalue = \"web\"\nkind = \"Server\""),
+            Ok(tag("role", Some("web"), "Server"))
+        );
+        assert_eq!(
+            read("tag = \"role\"\nkind = \"Server\""),
+            Ok(tag("role", None, "Server"))
+        );
+        for (toml, problem) in [
             (
-                tag(" ", None, "Server"),
-                Some("it has a blank template, tag or value"),
+                "template = \"Linux\"\ntag = \"role\"\nkind = \"Server\"",
+                "the mapping to Server names both a template and a tag: give one",
             ),
+            (
+                "kind = \"Server\"",
+                "the mapping to Server names neither a template nor a tag",
+            ),
+            (
+                "template = \"Linux\"\nvalue = \"web\"\nkind = \"Server\"",
+                "the mapping to Server gives a value without a tag",
+            ),
+            (
+                "template = \"Linux\"\nkind = \" \"",
+                "a mapping's kind is blank",
+            ),
+            ("tag = \" \"\nkind = \"Server\"", "a mapping's tag is blank"),
         ] {
-            assert_eq!(mapping.problem(), problem, "{mapping:?}");
+            assert_eq!(read(toml), Err(problem.to_owned()), "{toml}");
         }
+        assert!(
+            read("template = \"Linux\"\nkind = \"Server\"\nclass = \"x\"")
+                .unwrap_err()
+                .contains("class")
+        );
     }
 }

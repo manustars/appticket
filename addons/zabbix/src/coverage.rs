@@ -5,7 +5,7 @@
 //! in it, and nothing of them is imported. Zabbix nests host groups by name (`Parent/Child`), and
 //! a group may exist without its parent: it is nested in the nearest one that exists.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 
 use hd_addon_sdk::api::{Customer, ExternalReference};
 use hd_addon_sdk::names::{SystemName, SystemNames};
@@ -27,6 +27,22 @@ pub enum Cover {
     Offboarded,
 }
 
+/// A host group that an external reference covers, by name, with who covers it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CoveredGroup {
+    pub name: String,
+    pub cover: Cover,
+}
+
+impl CoveredGroup {
+    pub fn new(name: impl Into<String>, cover: Cover) -> Self {
+        CoveredGroup {
+            name: name.into(),
+            cover,
+        }
+    }
+}
+
 /// Where a host goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Placement {
@@ -37,22 +53,22 @@ pub enum Placement {
     Uncovered,
     /// Only an offboarded customer covers it: nothing of it is imported, and it is no conflict.
     Offboarded,
-    /// Its groups are covered by two or more: it is not imported, and it is reported. Each
-    /// group of the host that is covered, by name, with who covers it.
-    Conflict(Vec<(String, Cover)>),
+    /// Its groups are covered by two or more: it is not imported, and it is reported, with each
+    /// of its groups that is covered, by name.
+    Conflict(Vec<CoveredGroup>),
 }
 
 /// The host groups of Zabbix with the customer covering each.
 #[derive(Debug)]
 pub struct Coverage {
+    /// The system's name as external references name it.
+    system: String,
     /// The names of the list, each once ignoring case, with the one each is nested in.
     names: Vec<SystemName>,
     /// Who covers each name, by the name in lowercase.
     cover: HashMap<String, Option<Cover>>,
-    /// Each group's name in lowercase, by the group's id.
-    group_names: HashMap<String, String>,
-    /// The groups by id, in name order.
-    groups: BTreeMap<String, String>,
+    /// Each group's name, by the group's id.
+    groups: HashMap<String, String>,
 }
 
 impl Coverage {
@@ -64,8 +80,8 @@ impl Coverage {
         customers: &[Customer],
         offboarded: &[ExternalReference],
     ) -> Coverage {
-        let system = system.to_lowercase();
-        let in_system = |r: &&ExternalReference| r.system.to_lowercase() == system;
+        let lower_system = system.to_lowercase();
+        let in_system = |r: &&ExternalReference| r.system.to_lowercase() == lower_system;
         let mut held: HashMap<String, Cover> = HashMap::new();
         for customer in customers {
             for reference in customer.external_references.iter().filter(in_system) {
@@ -123,12 +139,9 @@ impl Coverage {
             cover.insert(lower, covered);
         }
         Coverage {
+            system: system.to_owned(),
             names,
             cover,
-            group_names: groups
-                .iter()
-                .map(|g| (g.id.clone(), g.name.to_lowercase()))
-                .collect(),
             groups: groups
                 .iter()
                 .map(|g| (g.id.clone(), g.name.clone()))
@@ -138,9 +151,9 @@ impl Coverage {
 
     /// The name list of the add-on's system: every host group once ignoring case, nested in the
     /// nearest group its name is nested in by `/`, or at the top.
-    pub fn name_list(&self, system: &str) -> SystemNames {
+    pub fn name_list(&self) -> SystemNames {
         SystemNames {
-            system: system.to_owned(),
+            system: self.system.clone(),
             names: self.names.clone(),
         }
     }
@@ -148,27 +161,29 @@ impl Coverage {
     /// Who covers the group with this id; none when no external reference covers it or the group
     /// is unknown.
     pub fn of_group(&self, id: &str) -> Option<Cover> {
-        self.group_names
-            .get(id)
-            .and_then(|name| self.cover.get(name).cloned().flatten())
+        let name = self.groups.get(id)?.to_lowercase();
+        self.cover.get(&name).cloned().flatten()
     }
 
-    /// The ids of the groups an active customer covers, whose hosts the add-on reads.
+    /// The ids of the groups an active customer covers, whose hosts the add-on reads, in order.
     pub fn imported_groups(&self) -> Vec<String> {
-        self.groups
+        let mut ids: Vec<String> = self
+            .groups
             .keys()
             .filter(|id| matches!(self.of_group(id), Some(Cover::Customer(_))))
             .cloned()
-            .collect()
+            .collect();
+        ids.sort();
+        ids
     }
 
     /// Where a host in the groups with these ids goes.
     pub fn place<'a>(&self, group_ids: impl IntoIterator<Item = &'a str>) -> Placement {
-        let covered: BTreeSet<(String, Cover)> = group_ids
+        let covered: BTreeSet<CoveredGroup> = group_ids
             .into_iter()
-            .filter_map(|id| Some((self.groups.get(id)?.clone(), self.of_group(id)?)))
+            .filter_map(|id| Some(CoveredGroup::new(self.groups.get(id)?, self.of_group(id)?)))
             .collect();
-        let covers: BTreeSet<&Cover> = covered.iter().map(|(_, cover)| cover).collect();
+        let covers: BTreeSet<&Cover> = covered.iter().map(|g| &g.cover).collect();
         match covers.into_iter().collect::<Vec<_>>().as_slice() {
             [] => Placement::Uncovered,
             [Cover::Customer(customer)] => Placement::Customer(*customer),
@@ -237,7 +252,7 @@ mod tests {
         ]);
         let coverage = Coverage::new("Zabbix", &groups, &[], &[]);
         assert_eq!(
-            coverage.name_list("Zabbix"),
+            coverage.name_list(),
             SystemNames {
                 system: "Zabbix".into(),
                 names: vec![
@@ -366,15 +381,15 @@ mod tests {
         assert_eq!(
             place(&["Linux servers", "Harbor Lane", "Brightfield/Offices"]),
             Placement::Conflict(vec![
-                ("Brightfield/Offices".into(), Cover::Customer(BRIGHTFIELD)),
-                ("Harbor Lane".into(), Cover::Customer(HARBOR)),
+                CoveredGroup::new("Brightfield/Offices", Cover::Customer(BRIGHTFIELD)),
+                CoveredGroup::new("Harbor Lane", Cover::Customer(HARBOR)),
             ])
         );
         assert_eq!(
             place(&["Brightfield/Archive", "Brightfield"]),
             Placement::Conflict(vec![
-                ("Brightfield".into(), Cover::Customer(BRIGHTFIELD)),
-                ("Brightfield/Archive".into(), Cover::Offboarded),
+                CoveredGroup::new("Brightfield", Cover::Customer(BRIGHTFIELD)),
+                CoveredGroup::new("Brightfield/Archive", Cover::Offboarded),
             ])
         );
         // A group the add-on did not read, such as one created meanwhile.
@@ -402,7 +417,7 @@ mod tests {
             );
         }
         assert_eq!(
-            coverage.name_list("Zabbix").names,
+            coverage.name_list().names,
             [
                 SystemName::top("Brightfield"),
                 SystemName::nested_in("BRIGHTFIELD/Offices", "Brightfield"),

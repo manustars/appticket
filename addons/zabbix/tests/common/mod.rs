@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use hd_addon_sdk::Client;
 use hd_zabbix::kinds::Kinds;
-use hd_zabbix::sync::Sync;
+use hd_zabbix::sync::Syncer;
 use hd_zabbix::zabbix::Zabbix;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
@@ -475,19 +475,29 @@ impl TestZabbix {
             .unwrap();
     }
 
+    /// Changes the fields given of the host, such as `name`, `templates`, `tags` or `inventory`.
+    pub async fn update_host(&self, host: &str, fields: Value) {
+        let mut params = json!({"hostid": host});
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let _: Value = self.admin.call("host.update", params).await.unwrap();
+    }
+
     pub async fn delete_host(&mut self, host: &str) {
         let _: Value = self.admin.call("host.delete", json!([host])).await.unwrap();
         self.hosts.retain(|h| h != host);
     }
 
     /// The add-on, between this Zabbix with the test's API token and `core`.
-    pub fn addon(&self, core: &Core, kinds: Kinds) -> Sync {
-        Sync {
-            core: core.addon(),
-            zabbix: Zabbix::new(&zabbix_url(), &self.api_token, Duration::from_secs(30)).unwrap(),
-            system: "Zabbix".into(),
+    pub fn addon(&self, core: &Core, kinds: Kinds) -> Syncer {
+        Syncer::new(
+            core.addon(),
+            Zabbix::new(&zabbix_url(), &self.api_token, Duration::from_secs(30)).unwrap(),
+            "Zabbix",
             kinds,
-        }
+        )
     }
 
     /// Removes what the test created in Zabbix.

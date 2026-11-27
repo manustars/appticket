@@ -67,6 +67,10 @@ pub struct Asset {
     /// only supply live details and links. Empty from a core that predates linked add-ons.
     #[serde(default)]
     pub linked_addons: Vec<String>,
+    /// When it was retired. A customer's asset list holds only active assets; supplying an asset
+    /// can answer a retired one, such as one the add-on is linked to that its source retired.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub retired_at: Option<OffsetDateTime>,
 }
 
 /// What an add-on supplies of an asset it is the source of (scope `catalog:write`): everything but
@@ -366,6 +370,9 @@ mod tests {
 
         let bare = asset(serde_json::json!({"serial_number": null, "site": null})).unwrap();
         assert_eq!((bare.serial_number, bare.site), (None, None));
+        let retired = asset(serde_json::json!({"retired_at": "2026-11-27T09:00:00Z"})).unwrap();
+        assert!(retired.retired_at.is_some());
+        assert!(bare.retired_at.is_none());
         let older = asset(serde_json::json!({})).unwrap();
         assert_eq!(
             (older.serial_number, older.site),

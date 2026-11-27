@@ -102,7 +102,7 @@ impl Zabbix {
         Ok(Zabbix {
             http: hd_addon_sdk::http_client(timeout)?,
             endpoint: format!("{}/api_jsonrpc.php", url.trim_end_matches('/')),
-            token: token.trim().to_owned(),
+            token: token.to_owned(),
             id: AtomicU64::new(1),
         })
     }

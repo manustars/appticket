@@ -48,7 +48,8 @@ pub enum Supplied {
 /// supplied one with that reference, updates it with `details`; so the add-on can send its whole
 /// inventory again safely. An asset it retired comes back. The asset's holder is left as it is.
 /// When the add-on is linked to an asset by that reference, it reaches that asset, which `details`
-/// do not change: what differs from what it has is refused.
+/// do not change: what differs from what it has is refused, unless the asset is retired, which is
+/// then answered as it is.
 pub async fn supply(
     db: &PgPool,
     addon: &str,
@@ -81,7 +82,11 @@ pub async fn supply(
     let checked = checked(&mut tx, customer, details).await?;
     if let Some((id, _)) = linked {
         let asset = crate::catalog::lock_stored(&mut tx, id).await?;
-        unchanged_by_linked(&asset, addon, &checked)?;
+        // A retired asset changes no more: it is answered as it is, whatever the add-on sends,
+        // so that the add-on learns it is retired and unlinks itself.
+        if !asset.retired {
+            unchanged_by_linked(&asset, addon, &checked)?;
+        }
         tx.commit().await?;
         return Ok(Supplied::Asset {
             asset: crate::catalog::asset(db, id).await?,

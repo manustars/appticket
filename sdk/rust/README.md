@@ -31,7 +31,7 @@ Apache-2.0, like the rest of `sdk/`.
   `Supplied::LinkProposed` with the `LinkProposal` the core recorded instead, when the customer
   already has an asset with the same serial number or name. Once agents accept it, the add-on is
   linked to that asset: its reference reaches it, unchanged, and an `Asset` lists its
-  `linked_addons` by name.
+  `linked_addons` by name, and `retired_at` when supplying it answers one retired meanwhile.
 - `proposals`: `Content` and `Triage`, the same JSON as the core, and `Rationale`, one sentence
   per language (`{"en": …, "it": …}`) that `propose` sends; `in_english` makes one with only an
   English sentence, which agents in other languages then read.
