@@ -92,6 +92,7 @@ impl Given {
                     name,
                     tags,
                     host_ids,
+                    ..
                 } = zabbix.problem_event(id.trim()).await?;
                 let hosts = zabbix.hosts_by_id(&host_ids).await?;
                 if hosts.is_empty() {
@@ -294,6 +295,7 @@ mod tests {
 
     fn host(groups: &[&str]) -> HostWithGroups {
         HostWithGroups {
+            id: "10683".into(),
             name: "SRV-01".into(),
             groups: groups
                 .iter()
