@@ -247,3 +247,92 @@ pub async fn state_changes(db: &PgPool) -> Vec<serde_json::Value> {
     .await
     .unwrap()
 }
+
+/// What a fake add-on does when asked for an asset's live details.
+#[derive(Clone)]
+pub enum Answer {
+    /// 200 with this body.
+    Json(serde_json::Value),
+    /// After this long, 200 with this body.
+    Late(std::time::Duration, serde_json::Value),
+    Status(axum::http::StatusCode),
+    /// 200 with a body that is not JSON.
+    Garbage,
+}
+
+/// The references a fake add-on was asked for, with the headers of each request.
+pub type Asked = std::sync::Arc<std::sync::Mutex<Vec<(String, axum::http::HeaderMap)>>>;
+
+/// A fake add-on on a local port that answers every `GET /assets/{reference}` as `answer` says
+/// for that reference. Returns its URL and what it was asked.
+pub async fn fake_addon(
+    answer: impl Fn(&str) -> Answer + Clone + Send + Sync + 'static,
+) -> (String, Asked) {
+    use axum::response::IntoResponse;
+    let asked = Asked::default();
+    let app = axum::Router::new().route(
+        "/assets/{reference}",
+        axum::routing::get({
+            let asked = asked.clone();
+            move |axum::extract::Path(reference): axum::extract::Path<String>,
+                  headers: axum::http::HeaderMap| async move {
+                asked.lock().unwrap().push((reference.clone(), headers));
+                match answer(&reference) {
+                    Answer::Json(body) => axum::Json(body).into_response(),
+                    Answer::Late(wait, body) => {
+                        tokio::time::sleep(wait).await;
+                        axum::Json(body).into_response()
+                    }
+                    Answer::Status(status) => status.into_response(),
+                    Answer::Garbage => "<html>not live details</html>".into_response(),
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    (url, asked)
+}
+
+/// An add-on called `name` at `url`, whose token may write the assets it supplies.
+pub async fn addon_at(db: &PgPool, name: &str, url: &str) -> crate::addons::Registered {
+    crate::addons::register(db, name, url, &[], &[crate::addons::CATALOG_WRITE.into()])
+        .await
+        .unwrap()
+}
+
+/// An asset of `customer` called `name` that `addon` supplied with `reference`.
+pub async fn supplied_asset(
+    db: &PgPool,
+    customer: Uuid,
+    name: &str,
+    addon: &str,
+    reference: &str,
+) -> Uuid {
+    let asset = asset(db, customer, "Server", name).await;
+    sqlx::query("UPDATE assets SET source_addon = $2, source_ref = $3 WHERE id = $1")
+        .bind(asset)
+        .bind(addon)
+        .bind(reference)
+        .execute(db)
+        .await
+        .unwrap();
+    asset
+}
+
+/// Live details as a fake add-on answers them: a warning, two fields (one label only in
+/// English, as a single string) and a link.
+pub fn live_details_answer() -> serde_json::Value {
+    serde_json::json!({
+        "state": "warning",
+        "fields": [
+            {"label": {"en": "Disk /var", "it": "Disco /var"}, "value": "91% full"},
+            {"label": "Uptime", "value": "12 days"}
+        ],
+        "links": [
+            {"label": {"en": "Open in Watchtower"},
+             "url": "https://watchtower.example.com/hosts/1042"}
+        ]
+    })
+}

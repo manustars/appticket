@@ -15,6 +15,7 @@ use crate::asset_kinds::{self, AssetKind};
 use crate::asset_link_proposals::{self, AssetLinkProposal};
 use crate::auth::SignedIn;
 use crate::catalog::{self, Asset, AssetFields, Service, ServiceDetail};
+use crate::live_details::{self, AssetLiveDetails};
 use crate::roles::Permission;
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -22,6 +23,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_asset_kinds, create_asset_kind))
         .routes(routes!(update_asset_kind))
         .routes(routes!(customer_assets, create_asset))
+        .routes(routes!(customer_asset_live_details))
+        .routes(routes!(ticket_asset_live_details))
         .routes(routes!(customer_asset_link_proposals))
         .routes(routes!(accept_asset_link_proposal))
         .routes(routes!(discard_asset_link_proposal))
@@ -115,6 +118,39 @@ async fn create_asset(
     agent.grant.require(Permission::ManageCatalog)?;
     let id = catalog::create_asset(&state.db, id, &fields).await?;
     Ok((StatusCode::CREATED, Json(Created { id })))
+}
+
+/// The live details of the customer's active assets, from the add-on each comes from, asked
+/// when this is read. Each add-on is asked within 2 seconds, all at once; one that does not
+/// answer in time, answers with an error or is switched off has `details` null, and one that has
+/// no live details of an asset (it answered 404) is left out.
+#[utoipa::path(get, path = "/api/customers/{id}/assets/live-details", tag = "catalog",
+    params(("id" = Uuid, Path, description = "The customer")),
+    responses((status = OK, body = Vec<AssetLiveDetails>),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn customer_asset_live_details(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<AssetLiveDetails>>, ApiError> {
+    Ok(Json(
+        live_details::of_customer(&state.db, &state.addons, id).await?,
+    ))
+}
+
+/// The live details of the active assets the ticket links, as for a customer's assets.
+#[utoipa::path(get, path = "/api/tickets/{number}/assets/live-details", tag = "tickets",
+    params(("number" = i64, Path, description = "The ticket's number")),
+    responses((status = OK, body = Vec<AssetLiveDetails>), (status = NOT_FOUND, body = Problem),
+        (status = UNAUTHORIZED, body = Problem)))]
+async fn ticket_asset_live_details(
+    State(state): State<AppState>,
+    _agent: SignedIn,
+    Path(number): Path<i64>,
+) -> Result<Json<Vec<AssetLiveDetails>>, ApiError> {
+    Ok(Json(
+        live_details::of_ticket(&state.db, &state.addons, number).await?,
+    ))
 }
 
 /// The open link proposals on the customer's assets, oldest first: an add-on would supply an asset
