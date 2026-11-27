@@ -11,8 +11,9 @@ Zabbix sends its alerts to the add-on's [webhook](#alerts), through the media ty
 and the [rules for alerts](#alert-rules) decide which open a ticket
 ([ADR 0010](../../docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md)); the
 [`check` command](#checking-an-alert-against-the-rules) tells which rule an alert meets. What
-agents do to the tickets of problems goes [back to Zabbix](#back-to-zabbix). The safety limit on
-the tickets opened comes in a later version.
+agents do to the tickets of problems goes [back to Zabbix](#back-to-zabbix). The
+[reconciliation](#reconciliation) catches up with what the webhook missed, and the
+[safety limit](#safety-limit) stops a flood of tickets.
 
 ## What it does
 
@@ -164,9 +165,12 @@ A TOML file, named by `HD_ZABBIX_CONFIG` (`zabbix.toml` in the working directory
 | `assets.default_kind` | required | The asset kind of a host no mapping matches, from the help desk's list. |
 | `assets.kinds` | none | Mappings, in order: each a `template` (its visible name) or a `tag` (with an optional `value`), and the `kind` it gives; names and values compared ignoring case. |
 | `alerts.rules` | the default list | The [rules for alerts](#alert-rules), in order. |
+| `alerts.safety_limit_tickets` | 20 | The most tickets the alerts open in `alerts.safety_limit_minutes`, before the [safety limit](#safety-limit) stops them. |
+| `alerts.safety_limit_minutes` | 5 | The minutes of the safety limit's window. |
 | `zabbix.frontend_url` | `zabbix.url` | The base URL of Zabbix's frontend as agents' browsers reach it, for the links of the live details, when the add-on reaches Zabbix at another one. |
 | `addon.listen` | `127.0.0.1:8091` | Where the add-on answers the core's reads of live details, receives its events (`/events`) and receives Zabbix's alerts on its [webhook](#alerts) (`/webhook`). |
 | `webhook.secret_file` | none | The file holding the webhook's secret, of 16 characters or more, which Zabbix's media type sends; without a `[webhook]` section, the add-on receives no alerts and says so at startup. |
+| `webhook.media_type` | `Help desk` | The name of the media type that sends Zabbix's events to the webhook, whose alerts the [reconciliation](#reconciliation) reads. |
 
 A file that does not fit, such as an unknown setting, a mapping with both a template and a tag or
 an invalid rule, stops the add-on with a sentence naming it. A kind the help desk does not have is refused by the
@@ -276,7 +280,11 @@ A problem without a ticket, because none was opened for it, gets no note on reco
    The parameter `secret` sends it; a secret written in the parameter itself would work too, but
    it would show to those who can read media types.
 4. Give a user the media type as a media (*Users → Users → Media*), with any *Send to*, such as
-   `helpdesk`. That user must be able to read the hosts whose problems it receives.
+   `helpdesk`. That user must be able to read the hosts whose problems it receives. Make it the
+   add-on's own user (the one of `HD_ZABBIX_API_TOKEN`), unless that user is a Super admin: since
+   Zabbix 7.0.9 any other user reads only the alerts sent to itself, and the
+   [reconciliation](#reconciliation) reads the media type's alerts to tell which recoveries the
+   webhook received.
 5. Create a trigger action (*Alerts → Actions → Trigger actions*) with the conditions that select
    the problems for the help desk, such as their host groups, and:
    - an operation that sends a message to that user through **Help desk**;
@@ -285,6 +293,71 @@ A problem without a ticket, because none was opened for it, gets no note on reco
 
    The rules still decide which problems open a ticket; the action only decides which reach the
    add-on.
+
+### Reconciliation
+
+At startup and after each round of `sync.interval_minutes`, when it receives alerts (a `[webhook]`
+section), the add-on catches up with what the webhook did not bring it, such as while it was down
+or after Zabbix stopped trying:
+
+- It reads the problems of triggers open now on the hosts it imports (`problem.get` on the host
+  groups customers cover), leaving out suppressed problems (in a maintenance, or suppressed by
+  hand) and symptoms of another problem, for which a trigger action pauses its operations by
+  default. Each one that has no ticket and that the rules open gets its ticket, as from the
+  webhook, with the problem's event id as its ticket reference, so doing it again opens no second
+  one; a problem whose ticket was closed gets none. Zabbix gets no `hd_ticket` tag for those
+  tickets: it takes tags only from the webhook's answer.
+- It reads from Zabbix the problems of the open or waiting tickets it opened whose problem is not
+  open now, and, for those that recovered, the media type's alerts of the recovery
+  (`alert.get`): a recovery whose alert Zabbix sent reached the webhook, which handled it, and
+  one Zabbix is still sending waits for the next reconciliation. Any other, whose alert failed or
+  that has none, is handled now: a note with the time, then resolving as the rule says, as
+  Zabbix's recovery message would, whatever changed on the ticket since. Within one run the
+  add-on remembers the recoveries it handled, and a recovery the webhook and the reconciliation
+  meet at once is handled by one of them, the webhook answering 502 to the other so that Zabbix
+  tries again. A resolved ticket is left as it is, and so is one whose problem Zabbix no longer
+  has, such as after its host was deleted.
+
+  The add-on does not tell a recovery it handled itself, after a restart, from one nobody
+  handled: Zabbix has no sent alert for either. After a restart, a ticket still open or waiting
+  whose recovery the webhook never received gets the recovery's note again, and is resolved again
+  if its rule says `resolve`. That happens only when Zabbix could not deliver the recovery, such
+  as while the add-on was down, or when no action sends recoveries to the webhook. When the
+  add-on's Zabbix user cannot read the media type (`webhook.media_type`) or its alerts (see step
+  4 above), it logs so and handles every recovery it finds in this way.
+
+A reconciliation in which Zabbix or the core does not answer its first reads does nothing; a
+problem or ticket it cannot act on is logged and tried again at the next one.
+
+### Safety limit
+
+When the add-on would open more than `alerts.safety_limit_tickets` tickets (20 by default) in
+`alerts.safety_limit_minutes` minutes (5), counting those of the webhook and of the reconciliation
+together, it opens no more
+([ADR 0010](../../docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md)):
+
+- It opens one urgent ticket for the help desk's own organization (the customer made with
+  `hd customer add --help-desk`), the safety ticket, saying how many problems it held back and
+  since when. Its ticket reference is the time it stopped, such as
+  `safety-limit:2026-11-27T09:00:00Z`, so that it is opened once; a note tells it how many were
+  held back whenever a reconciliation finds more.
+- Until an agent resolves or closes the safety ticket, the problems the rules open get no ticket:
+  the webhook answers them without one, and the reconciliation counts them. A problem that
+  already has a ticket still gets its number, and recoveries and updates still add their notes
+  and resolve as the rules say.
+- The add-on reads the safety ticket by its reference once per reconciliation and once per
+  problem of the webhook it would open, and at startup finds the latest one among the tickets it
+  opened: restarting it does not end the wait.
+- Once the safety ticket is resolved or closed, the add-on counts afresh, and the reconciliation
+  opens the tickets of the problems still open that the rules open, under the same limit, at once
+  when a problem of the webhook found the wait over. Reaching the limit again opens another
+  safety ticket.
+
+At startup the window counts the add-on's tickets of problems, not closed, that changed within
+it, as their last change is never before they opened: a restarting add-on opens no more than the
+limit, though a ticket opened earlier that an agent changed meanwhile counts too. When the core
+has no help desk's own organization, the safety ticket cannot open: the add-on logs it, holds
+back the problems all the same, and tries again at each problem and reconciliation.
 
 ## Back to Zabbix
 
@@ -452,3 +525,11 @@ administrator and read the acknowledgements and the problems in Zabbix; one impo
 type, as the tests of alerts do, to read the event menu's entry and to let Zabbix send the
 add-on's acknowledgement and close back to it. With `HD_TEST_ZABBIX_WEBHOOK_LISTEN` on a fixed
 port, run them one at a time (`-- --ignored --test-threads=1`).
+
+The tests of the reconciliation and the safety limit raise problems the same way and run the
+reconciliation themselves, with a limit of 2 tickets in 5 minutes so that nothing waits for the
+window. The one of the safety limit adds the help desk's own organization with
+`hd customer add --help-desk` and resolves and closes the safety tickets as an agent does. One
+imports the media type as the test of alerts does, and stops serving the webhook so that Zabbix
+gives up sending a recovery. With `HD_TEST_ZABBIX_WEBHOOK_LISTEN` on a fixed port, run them one
+at a time as well.

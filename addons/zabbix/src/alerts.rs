@@ -10,6 +10,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::details::severity_name;
+use crate::references::TicketReference;
 use crate::rules::{Matched, Recovery};
 use crate::zabbix::{Event, HostWithGroups};
 
@@ -277,7 +278,7 @@ pub fn new_ticket(opening: &Opening<'_>) -> NewTicket {
             Service::Used(id) => vec![*id],
             _ => vec![],
         },
-        reference: Some(event.id.clone()),
+        reference: Some(TicketReference::Problem(event.id.clone()).to_string()),
     }
 }
 

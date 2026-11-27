@@ -86,7 +86,8 @@ async fn an_event_the_add_on_cannot_act_on_is_answered_with_a_failure_so_that_za
     let url = webhook().await;
     let (status, why) = post(&url, Some(&format!("Bearer {SECRET}")), problem()).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
-    assert!(why.contains("event.get"), "{why}");
+    // The add-on asks the core first for a ticket the problem may already have.
+    assert!(why.contains("reading the problem's ticket"), "{why}");
 }
 
 #[tokio::test]

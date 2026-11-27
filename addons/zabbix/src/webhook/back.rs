@@ -16,6 +16,8 @@ use hd_addon_sdk::{Envelope, Verifier};
 use uuid::Uuid;
 
 use super::Alerts;
+use crate::coverage::Covered;
+use crate::references::TicketReference;
 use crate::zabbix::{Acknowledgement, Refused};
 
 /// How long the add-on takes at most to act on an event of the core: less than the 10 seconds
@@ -67,10 +69,8 @@ impl AgentChange {
             TicketState::Closed => Done::Closed,
             TicketState::Open | TicketState::Waiting => return None,
         };
-        let event = changed.reference.as_deref()?;
-        if event.is_empty() || !event.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
-        }
+        let reference = TicketReference::read(changed.reference.as_deref()?)?;
+        let event = reference.problem()?;
         Some(AgentChange {
             id,
             ticket: changed.ticket_number,
@@ -197,8 +197,9 @@ impl Alerts {
         let (close_in_zabbix, manual_close) = if recovered {
             (None, false)
         } else {
+            let covered = Covered::read(&self.zabbix, &self.core, &self.system).await?;
             let close_in_zabbix = self
-                .opener(&event)
+                .opener(&event, &covered)
                 .await?
                 .map(|opener| opener.open.close_in_zabbix);
             let manual_close = close_in_zabbix == Some(true)

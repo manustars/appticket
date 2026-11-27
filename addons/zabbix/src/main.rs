@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(listen = %config.listen, "answering the core's reads of live details");
     let verifier = Verifier::new(event_secret);
     let mut app = details::router(Arc::new(details), verifier.clone());
-    match &config.webhook_secret {
+    let alerts = match &config.webhook_secret {
         Some(secret) => {
             let alerts = Arc::new(
                 Alerts::new(
@@ -87,14 +87,20 @@ async fn main() -> anyhow::Result<()> {
                     config.system.clone(),
                     config.rules.clone(),
                 )
-                .with_ui_url(&config.ui_url),
+                .with_ui_url(&config.ui_url)
+                .with_limit(config.safety_limit)
+                .with_media_type(&config.webhook_media_type),
             );
             app = app
                 .merge(webhook::router(alerts.clone(), secret.clone()))
                 // What agents do to the tickets of problems goes back to Zabbix.
-                .merge(webhook::back::router(alerts, verifier));
+                .merge(webhook::back::router(alerts.clone(), verifier));
             tracing::info!(listen = %config.listen, path = webhook::PATH,
-                "receiving Zabbix's alerts through its webhook");
+                tickets = config.safety_limit.tickets,
+                minutes = config.safety_limit.minutes(),
+                "receiving Zabbix's alerts through its webhook, and reconciling them after each \
+                 round, under the safety limit");
+            Some(alerts)
         }
         None => {
             app = app.merge(webhook::back::ignoring(verifier));
@@ -102,8 +108,9 @@ async fn main() -> anyhow::Result<()> {
                 "no [webhook] in the configuration: Zabbix's alerts are not received, and open \
                  no tickets"
             );
+            None
         }
-    }
+    };
     // It stops when told to, after the rounds: ending before then is a failure.
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let mut server = tokio::spawn(
@@ -126,10 +133,16 @@ async fn main() -> anyhow::Result<()> {
                     .context("answering the core's reads of live details")?;
                 anyhow::bail!("stopped answering the core's reads of live details");
             }
-            _ = ticks.tick() => match sync.run().await {
-                Ok(round) => tracing::info!(?round, "round done"),
-                Err(e) => tracing::error!(error = format!("{e:#}"), "round stopped; nothing was retired"),
-            },
+            _ = ticks.tick() => {
+                match sync.run().await {
+                    Ok(round) => tracing::info!(?round, "round done"),
+                    Err(e) => tracing::error!(error = format!("{e:#}"), "round stopped; nothing was retired"),
+                }
+                reconcile(alerts.as_deref()).await;
+            }
+            // A problem found the wait for the safety ticket ended: the problems held back get
+            // their tickets now.
+            _ = wait_ended(alerts.as_deref()) => reconcile(alerts.as_deref()).await,
         }
     }
     let _ = stop.send(());
@@ -138,6 +151,28 @@ async fn main() -> anyhow::Result<()> {
         .context("the server of live details failed")?
         .context("answering the core's reads of live details")?;
     Ok(())
+}
+
+/// The reconciliation of Zabbix's alerts, when the add-on receives them.
+async fn reconcile(alerts: Option<&Alerts>) {
+    let Some(alerts) = alerts else {
+        return;
+    };
+    match alerts.reconcile().await {
+        Ok(reconciled) => tracing::info!(?reconciled, "alerts reconciled"),
+        Err(e) => tracing::error!(
+            error = format!("{e:#}"),
+            "reconciliation stopped; nothing was opened or resolved since"
+        ),
+    }
+}
+
+/// Until the wait for a safety ticket ends through a problem of the webhook; never without one.
+async fn wait_ended(alerts: Option<&Alerts>) {
+    match alerts {
+        Some(alerts) => alerts.hold.ended.notified().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Ctrl-C, or SIGTERM where there is one: a container's stop signal.

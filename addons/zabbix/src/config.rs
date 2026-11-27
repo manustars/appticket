@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 use crate::kinds::{KindMapping, Kinds};
 use crate::rules::Rules;
+use crate::safety::Limit;
 
 /// The add-on's settings.
 #[derive(Clone)]
@@ -38,6 +39,8 @@ pub struct Config {
     pub kinds: Kinds,
     /// What each alert does.
     pub rules: Rules,
+    /// How many tickets the alerts open at most in how long.
+    pub safety_limit: Limit,
     /// The base URL of Zabbix's frontend as agents' browsers reach it, for the links of the live
     /// details; `zabbix_url` unless the configuration gives another.
     pub frontend_url: String,
@@ -50,6 +53,9 @@ pub struct Config {
     /// `webhook.secret_file` names; none without a `[webhook]` section, when the add-on receives
     /// no alerts.
     pub webhook_secret: Option<String>,
+    /// The name of the media type that sends Zabbix's events to the webhook, whose alerts tell
+    /// the reconciliation which recoveries the webhook received.
+    pub webhook_media_type: String,
 }
 
 /// Everything but the two tokens and the event secret.
@@ -64,6 +70,7 @@ impl std::fmt::Debug for Config {
             .field("interval", &self.interval)
             .field("kinds", &self.kinds)
             .field("rules", &self.rules)
+            .field("safety_limit", &self.safety_limit)
             .field("frontend_url", &self.frontend_url)
             .field("listen", &self.listen)
             .finish_non_exhaustive()
@@ -91,6 +98,12 @@ struct File {
 #[serde(deny_unknown_fields)]
 struct WebhookSection {
     secret_file: String,
+    #[serde(default = "default_media_type")]
+    media_type: String,
+}
+
+fn default_media_type() -> String {
+    crate::webhook::MEDIA_TYPE.to_owned()
 }
 
 /// The fewest characters of the webhook's secret.
@@ -143,12 +156,34 @@ struct AssetsSection {
     kinds: Vec<KindMapping>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AlertsSection {
     /// The rules as written, each read with its position, so that a sentence names it.
     #[serde(default)]
     rules: Vec<toml::Value>,
+    #[serde(default = "default_safety_limit_tickets")]
+    safety_limit_tickets: u64,
+    #[serde(default = "default_safety_limit_minutes")]
+    safety_limit_minutes: u64,
+}
+
+impl Default for AlertsSection {
+    fn default() -> Self {
+        AlertsSection {
+            rules: Vec::new(),
+            safety_limit_tickets: default_safety_limit_tickets(),
+            safety_limit_minutes: default_safety_limit_minutes(),
+        }
+    }
+}
+
+fn default_safety_limit_tickets() -> u64 {
+    Limit::default().tickets as u64
+}
+
+fn default_safety_limit_minutes() -> u64 {
+    Limit::default().window.as_secs() / 60
 }
 
 #[derive(Deserialize)]
@@ -222,6 +257,16 @@ impl Config {
         if file.sync.interval_minutes == 0 {
             bail!("sync.interval_minutes is 0: give 1 or more");
         }
+        if file.alerts.safety_limit_tickets == 0 {
+            bail!("alerts.safety_limit_tickets is 0: give 1 or more");
+        }
+        if file.alerts.safety_limit_minutes == 0 {
+            bail!("alerts.safety_limit_minutes is 0: give 1 or more");
+        }
+        let safety_limit = Limit {
+            tickets: usize::try_from(file.alerts.safety_limit_tickets).unwrap_or(usize::MAX),
+            window: Duration::from_secs(file.alerts.safety_limit_minutes.saturating_mul(60)),
+        };
         let rules = Rules::read(file.alerts.rules)
             .map_err(anyhow::Error::msg)
             .with_context(|| format!("the configuration file {} is not valid", path.display()))?;
@@ -254,6 +299,13 @@ impl Config {
                  or fewer, so that a ticket's address fits in a tag of Zabbix"
             );
         }
+        let webhook_media_type = match &file.webhook {
+            Some(webhook) => match webhook.media_type.trim() {
+                "" => bail!("webhook.media_type is blank: name the webhook's media type in Zabbix"),
+                name => name.to_owned(),
+            },
+            None => default_media_type(),
+        };
         Ok(Config {
             core_url,
             ui_url,
@@ -268,6 +320,7 @@ impl Config {
                 default,
             },
             rules,
+            safety_limit,
             frontend_url,
             listen,
             event_secret: read_secret(
@@ -278,6 +331,7 @@ impl Config {
                     .as_deref(),
             )?,
             webhook_secret,
+            webhook_media_type,
         })
     }
 
@@ -456,6 +510,7 @@ default_kind = "Server"
         let config = parse(include_str!("../zabbix.example.toml")).unwrap();
         assert_eq!(config.kinds.mappings.len(), 2);
         assert_eq!(config.rules.rules().len(), 4);
+        assert_eq!(config.safety_limit, Limit::default());
     }
 
     #[test]
@@ -479,6 +534,43 @@ default_kind = "Server"
         assert!(config.kinds.mappings.is_empty());
         assert_eq!(config.frontend_url, "http://127.0.0.1:8180");
         assert_eq!(config.listen.to_string(), "127.0.0.1:8091");
+        assert_eq!(config.safety_limit, Limit::default());
+    }
+
+    #[test]
+    fn the_safety_limit_is_a_number_of_tickets_in_a_number_of_minutes() {
+        let limit =
+            format!("{SMALLEST}\n[alerts]\nsafety_limit_tickets = 3\nsafety_limit_minutes = 10\n");
+        assert_eq!(
+            parse(&limit).unwrap().safety_limit,
+            Limit {
+                tickets: 3,
+                window: Duration::from_secs(600)
+            }
+        );
+        let only = format!("{SMALLEST}\n[alerts]\nsafety_limit_tickets = 50\n");
+        assert_eq!(
+            parse(&only).unwrap().safety_limit,
+            Limit {
+                tickets: 50,
+                window: Duration::from_secs(300)
+            }
+        );
+        for (setting, sentence) in [
+            (
+                "safety_limit_tickets = 0",
+                "alerts.safety_limit_tickets is 0: give 1 or more",
+            ),
+            (
+                "safety_limit_minutes = 0",
+                "alerts.safety_limit_minutes is 0: give 1 or more",
+            ),
+        ] {
+            assert_eq!(
+                error(&format!("{SMALLEST}\n[alerts]\n{setting}\n")),
+                sentence
+            );
+        }
     }
 
     #[test]
@@ -604,6 +696,7 @@ default_kind = "Server"
     #[test]
     fn the_webhook_s_secret_is_read_from_the_file_the_configuration_names() {
         assert_eq!(parse(SMALLEST).unwrap().webhook_secret, None, "no webhook");
+        assert_eq!(parse(SMALLEST).unwrap().webhook_media_type, "Help desk");
         let dir = std::env::temp_dir().join(format!("hd-zabbix-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("webhook-secret");
@@ -619,6 +712,17 @@ default_kind = "Server"
         assert!(
             !format!("{:?}", parse(&with_webhook).unwrap()).contains("0123456789abcdef"),
             "the secret is not logged"
+        );
+        assert_eq!(
+            parse(&with_webhook).unwrap().webhook_media_type,
+            "Help desk"
+        );
+        let named = format!("{with_webhook}media_type = \" Monitoring desk \"\n");
+        assert_eq!(parse(&named).unwrap().webhook_media_type, "Monitoring desk");
+        let blank = format!("{with_webhook}media_type = \" \"\n");
+        assert_eq!(
+            error(&blank),
+            "webhook.media_type is blank: name the webhook's media type in Zabbix"
         );
 
         std::fs::write(&file, "\n").unwrap();

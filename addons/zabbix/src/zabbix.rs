@@ -1,6 +1,7 @@
 //! Zabbix's JSON-RPC API (`<frontend>/api_jsonrpc.php`), called with an API token in
 //! `Authorization: Bearer`, as Zabbix 7.0 and later take it.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -384,6 +385,184 @@ impl RawEvent {
     }
 }
 
+/// How Zabbix's sending of a message alert stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertStatus {
+    Sent,
+    /// Failed, after its retries.
+    Failed,
+    /// Not sent yet, or not yet processed: Zabbix is still trying.
+    Underway,
+}
+
+impl AlertStatus {
+    /// From `alert.get`'s `status` of a message alert: 0 not sent, 1 sent, 2 failed, 3 new.
+    fn from_number(status: &str) -> Option<AlertStatus> {
+        match status {
+            "1" => Some(AlertStatus::Sent),
+            "2" => Some(AlertStatus::Failed),
+            "0" | "3" => Some(AlertStatus::Underway),
+            _ => None,
+        }
+    }
+}
+
+/// A message alert as `alert.get` answers it with the fields the add-on asks for.
+#[derive(Deserialize)]
+struct RawAlert {
+    /// The event that set the action's operation off: a recovery's alert has the recovery event.
+    eventid: String,
+    status: String,
+    /// `0` for a message, `1` for a remote command.
+    #[serde(default)]
+    alerttype: String,
+}
+
+/// The statuses of the message alerts, by the event that set them off.
+fn statuses(alerts: Vec<RawAlert>) -> HashMap<String, Vec<AlertStatus>> {
+    let mut by_event: HashMap<String, Vec<AlertStatus>> = HashMap::new();
+    for alert in alerts {
+        if !matches!(alert.alerttype.as_str(), "" | "0") {
+            continue;
+        }
+        if let Some(status) = AlertStatus::from_number(&alert.status) {
+            by_event.entry(alert.eventid).or_default().push(status);
+        }
+    }
+    by_event
+}
+
+/// What the add-on's Zabbix user reads of the alerts Zabbix sent through the webhook's media
+/// type: since Zabbix 7.0.9, a user that is not a Super admin reads only the message alerts sent
+/// to itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlertAccess {
+    pub super_admin: bool,
+    /// The user has a media of the webhook's media type, so that the alerts sent to it are its
+    /// own.
+    pub has_the_media: bool,
+}
+
+impl AlertAccess {
+    pub fn reads_the_webhook_s_alerts(self) -> bool {
+        self.super_admin || self.has_the_media
+    }
+}
+
+/// The user type of `user.checkAuthentication`: a number, 3 for a Super admin.
+fn super_admin(user_type: &Value) -> bool {
+    match user_type {
+        Value::Number(n) => n.as_u64() == Some(3),
+        Value::String(s) => s == "3",
+        _ => false,
+    }
+}
+
+/// A problem as `problem.get` answers it with the fields the add-on asks for.
+#[derive(Deserialize)]
+struct RawProblem {
+    eventid: String,
+    /// `1` while suppressed.
+    #[serde(default)]
+    suppressed: String,
+    /// The problem it is a symptom of; `0` for a cause.
+    #[serde(default)]
+    cause_eventid: String,
+}
+
+/// The event ids of the problems that are neither suppressed nor symptoms.
+fn active(problems: Vec<RawProblem>) -> Vec<String> {
+    problems
+        .into_iter()
+        .filter(|p| p.suppressed != "1" && matches!(p.cause_eventid.as_str(), "" | "0"))
+        .map(|p| p.eventid)
+        .collect()
+}
+
+impl Zabbix {
+    /// The id of the media type with this name, when the add-on's user reads it.
+    pub async fn media_type_id(&self, name: &str) -> anyhow::Result<Option<String>> {
+        #[derive(Deserialize)]
+        struct MediaType {
+            mediatypeid: String,
+        }
+        let found: Vec<MediaType> = self
+            .call(
+                "mediatype.get",
+                json!({"output": ["mediatypeid"], "filter": {"name": [name]}}),
+            )
+            .await?;
+        Ok(found.into_iter().next().map(|m| m.mediatypeid))
+    }
+
+    /// What the add-on's user reads of the alerts of the media type `media_type`.
+    pub async fn alert_access(&self, media_type: &str) -> anyhow::Result<AlertAccess> {
+        #[derive(Deserialize)]
+        struct Me {
+            userid: String,
+            #[serde(rename = "type", default)]
+            user_type: Value,
+        }
+        #[derive(Deserialize)]
+        struct Media {
+            mediatypeid: String,
+        }
+        #[derive(Deserialize)]
+        struct User {
+            #[serde(default)]
+            medias: Vec<Media>,
+        }
+        // Zabbix answers it only to a call without a token in the header.
+        let me: Me = self
+            .send(
+                "user.checkAuthentication",
+                json!({"token": self.token}),
+                false,
+            )
+            .await?;
+        if super_admin(&me.user_type) {
+            return Ok(AlertAccess {
+                super_admin: true,
+                has_the_media: false,
+            });
+        }
+        let users: Vec<User> = self
+            .call(
+                "user.get",
+                json!({"userids": [me.userid], "output": ["userid"],
+                       "selectMedias": ["mediatypeid"]}),
+            )
+            .await?;
+        Ok(AlertAccess {
+            super_admin: false,
+            has_the_media: users
+                .iter()
+                .flat_map(|u| &u.medias)
+                .any(|m| m.mediatypeid == media_type),
+        })
+    }
+
+    /// The statuses of the message alerts of the media type `media_type` that these events set
+    /// off, such as recovery events, by event id; an event without any is left out.
+    pub async fn alert_statuses(
+        &self,
+        events: &[String],
+        media_type: &str,
+    ) -> anyhow::Result<HashMap<String, Vec<AlertStatus>>> {
+        if events.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let alerts: Vec<RawAlert> = self
+            .call(
+                "alert.get",
+                json!({"eventids": events, "mediatypeids": [media_type],
+                       "output": ["eventid", "status", "alerttype"]}),
+            )
+            .await?;
+        Ok(statuses(alerts))
+    }
+}
+
 impl From<RawHost> for HostWithGroups {
     fn from(raw: RawHost) -> HostWithGroups {
         HostWithGroups {
@@ -415,12 +594,30 @@ impl Zabbix {
     /// The problem event of a trigger with this id; none when Zabbix has none that the add-on's
     /// user can read, such as one its housekeeper removed.
     pub async fn find_problem_event(&self, id: &str) -> anyhow::Result<Option<Event>> {
+        self.readable_problem_events(&[id.to_owned()])
+            .await?
+            .into_iter()
+            .next()
+            .transpose()
+    }
+
+    /// The problem events of triggers with these ids that the add-on's user can read, each read
+    /// on its own, so that one the add-on cannot read as a problem leaves the others; none for no
+    /// id.
+    pub async fn readable_problem_events(
+        &self,
+        ids: &[String],
+    ) -> anyhow::Result<Vec<anyhow::Result<Event>>> {
+        // Without eventids, event.get answers every event.
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
         // event.get answers the events of triggers only, unless asked for another source.
         let events: Vec<RawEvent> = self
             .call(
                 "event.get",
                 json!({
-                    "eventids": [id],
+                    "eventids": ids,
                     "output": ["eventid", "value", "severity", "name", "clock", "opdata",
                                "r_eventid"],
                     "selectTags": ["tag", "value"],
@@ -428,7 +625,32 @@ impl Zabbix {
                 }),
             )
             .await?;
-        events.into_iter().next().map(RawEvent::read).transpose()
+        Ok(events.into_iter().map(RawEvent::read).collect())
+    }
+
+    /// The event ids of the problems of triggers open now on the hosts of the groups with these
+    /// ids, in id order; none for no group. Left out are those a trigger action pauses its
+    /// operations for by default, so that the webhook never had them: suppressed problems (in a
+    /// maintenance, or suppressed by hand) and symptoms of another problem.
+    pub async fn active_problems(&self, group_ids: &[String]) -> anyhow::Result<Vec<String>> {
+        // Without groupids, problem.get answers the problems of every host.
+        if group_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let problems: Vec<RawProblem> = self
+            .call(
+                "problem.get",
+                json!({
+                    "groupids": group_ids,
+                    "source": 0,
+                    "object": 0,
+                    "recent": false,
+                    "output": ["eventid", "suppressed", "cause_eventid"],
+                    "sortfield": ["eventid"],
+                }),
+            )
+            .await?;
+        Ok(active(problems))
     }
 
     /// The recovery event of a problem with this id: when it happened and, for a problem closed
@@ -626,6 +848,60 @@ mod tests {
             recovered.read().unwrap().recovery_id.as_deref(),
             Some("4220")
         );
+    }
+
+    /// Alerts as Zabbix 7.0 answers `alert.get` with the fields the add-on asks for.
+    #[test]
+    fn the_alerts_statuses_are_read_by_their_event() {
+        let raw: Vec<RawAlert> = serde_json::from_value(json!([
+            {"eventid": "4220", "status": "2", "alerttype": "0"},
+            {"eventid": "4220", "status": "1", "alerttype": "0"},
+            {"eventid": "4221", "status": "3", "alerttype": "0"},
+            {"eventid": "4222", "status": "0", "alerttype": "0"},
+            {"eventid": "4223", "status": "1", "alerttype": "1"},
+            {"eventid": "4224", "status": "9", "alerttype": "0"}
+        ]))
+        .unwrap();
+        assert_eq!(
+            statuses(raw),
+            HashMap::from([
+                (
+                    "4220".to_owned(),
+                    vec![AlertStatus::Failed, AlertStatus::Sent]
+                ),
+                ("4221".to_owned(), vec![AlertStatus::Underway]),
+                ("4222".to_owned(), vec![AlertStatus::Underway]),
+            ]),
+            "a remote command's and an unknown status are left out"
+        );
+    }
+
+    #[test]
+    fn a_super_admin_reads_every_alert_and_another_user_those_of_its_own_media() {
+        assert!(super_admin(&json!(3)) && super_admin(&json!("3")));
+        for other in [json!(1), json!(2), json!("2"), Value::Null] {
+            assert!(!super_admin(&other), "{other}");
+        }
+        let access = |super_admin, has_the_media| AlertAccess {
+            super_admin,
+            has_the_media,
+        };
+        assert!(access(true, false).reads_the_webhook_s_alerts());
+        assert!(access(false, true).reads_the_webhook_s_alerts());
+        assert!(!access(false, false).reads_the_webhook_s_alerts());
+    }
+
+    /// Problems as Zabbix 7.0 answers `problem.get` with the fields the add-on asks for.
+    #[test]
+    fn the_active_problems_leave_out_the_suppressed_ones_and_the_symptoms() {
+        let raw: Vec<RawProblem> = serde_json::from_value(json!([
+            {"eventid": "4213", "suppressed": "0", "cause_eventid": "0"},
+            {"eventid": "4214", "suppressed": "1", "cause_eventid": "0"},
+            {"eventid": "4215", "suppressed": "0", "cause_eventid": "4213"},
+            {"eventid": "4216", "suppressed": "0", "cause_eventid": "0"}
+        ]))
+        .unwrap();
+        assert_eq!(active(raw), ["4213", "4216"]);
     }
 
     #[test]

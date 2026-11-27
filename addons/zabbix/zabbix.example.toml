@@ -47,6 +47,13 @@ kind = "Desktop"
 # a ticket with priority urgent for a disaster and one with priority high for a high, and ignores
 # the rest. `hd-zabbix check` tells which rule an alert meets.
 
+# The safety limit: when the alerts would open more than this many tickets in this many minutes,
+# through the webhook and the reconciliation together, the add-on opens no more, opens one urgent
+# ticket for the help desk's own organization and waits until an agent resolves or closes it
+# (default 20 in 5).
+safety_limit_tickets = 20
+safety_limit_minutes = 5
+
 [[alerts.rules]]
 name = "Backups"
 # The trigger's name contains this text, ignoring case.
@@ -97,3 +104,6 @@ listen = "127.0.0.1:8091"
 # The file holding the webhook's secret, of 16 characters or more, which Zabbix sends from the
 # global macro {$HD_WEBHOOK_SECRET}; a relative path is from the working directory.
 # secret_file = "/run/secrets/hd-zabbix-webhook"
+# The name of the media type that sends the events, whose alerts tell the reconciliation which
+# recoveries the webhook received (default Help desk).
+# media_type = "Help desk"
