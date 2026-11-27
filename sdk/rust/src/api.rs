@@ -172,6 +172,9 @@ pub struct Ticket {
     pub customer: TicketCustomer,
     #[serde(default)]
     pub requester: Option<Requester>,
+    /// The add-on that opened the ticket, by name, when an add-on did.
+    #[serde(default)]
+    pub opened_by_addon: Option<String>,
     /// Assets already linked to the ticket.
     #[serde(default)]
     pub assets: Vec<LinkedAsset>,

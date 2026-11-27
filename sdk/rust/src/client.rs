@@ -13,6 +13,7 @@ use crate::api::{
     TicketSummary,
 };
 use crate::proposals::{Content, Rationale, Target};
+use crate::tickets::NewTicket;
 
 /// Why a call to the core failed.
 #[derive(Debug)]
@@ -124,6 +125,16 @@ struct NewProposal<'a> {
 #[derive(Deserialize)]
 struct Created {
     id: Uuid,
+}
+
+#[derive(Deserialize)]
+struct Opened {
+    number: i64,
+}
+
+#[derive(Serialize)]
+struct NewNote<'a> {
+    body: &'a str,
 }
 
 impl Client {
@@ -318,5 +329,33 @@ impl Client {
             .send()
             .await?;
         Ok(Self::read::<Created>(response).await?.id)
+    }
+
+    /// Opens a ticket without a requester for an active customer, with a priority and the
+    /// customer's active assets and services; replies on it go to the customer's key requesters.
+    /// Returns its number. The core answers 409, with a sentence naming it, when an asset or
+    /// service does not fit the customer or is retired. Scope `tickets:write`.
+    pub async fn open_ticket(&self, ticket: &NewTicket) -> Result<i64, Error> {
+        let response = self
+            .http
+            .post(self.url("/tickets"))
+            .bearer_auth(&self.token)
+            .json(ticket)
+            .send()
+            .await?;
+        Ok(Self::read::<Opened>(response).await?.number)
+    }
+
+    /// Adds an internal note to any ticket, closed ones too: agents see it with the add-on as its
+    /// author, and it is never sent outside the help desk. Scope `tickets:write`.
+    pub async fn add_note(&self, number: i64, body: &str) -> Result<(), Error> {
+        let response = self
+            .http
+            .post(self.url(&format!("/tickets/{number}/notes")))
+            .bearer_auth(&self.token)
+            .json(&NewNote { body })
+            .send()
+            .await?;
+        Self::read_nothing(response).await
     }
 }

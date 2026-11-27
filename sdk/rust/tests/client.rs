@@ -10,7 +10,7 @@ use axum::{
 };
 use hd_addon_sdk::api::{Direction, Priority, TicketState, TimelineEntry};
 use hd_addon_sdk::proposals::in_english;
-use hd_addon_sdk::{Client, Content, Error, Rationale, Target, Triage};
+use hd_addon_sdk::{Client, Content, Error, NewTicket, Rationale, Target, Triage};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -135,6 +135,35 @@ async fn fake_core() -> (String, Posted) {
                     )
                 }
             }),
+        )
+        .route(
+            "/api/addon/tickets",
+            post({
+                let posted = posted.clone();
+                move |Json(body): Json<Value>| async move {
+                    if body["title"] == json!("") {
+                        return problem(StatusCode::CONFLICT, "A ticket needs a title.");
+                    }
+                    posted.lock().unwrap().push(body);
+                    (StatusCode::CREATED, Json(json!({"number": 31})))
+                }
+            }),
+        )
+        .route(
+            "/api/addon/tickets/{number}/notes",
+            post({
+                let posted = posted.clone();
+                move |Path(number): Path<i64>, Json(body): Json<Value>| async move {
+                    if number != 31 {
+                        return Err(problem(StatusCode::NOT_FOUND, "Ticket not found."));
+                    }
+                    posted
+                        .lock()
+                        .unwrap()
+                        .push(json!({"ticket": number, "note": body}));
+                    Ok(StatusCode::CREATED)
+                }
+            }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -184,6 +213,7 @@ async fn reads_what_an_addon_needs_and_ignores_the_rest() {
 
     let ticket = client.ticket(12).await.unwrap();
     assert_eq!(ticket.priority, Priority::High);
+    assert_eq!(ticket.opened_by_addon, None, "from a core that predates it");
     assert_eq!(ticket.services[0].name, "Posta ospitata");
     let requester = ticket.requester.unwrap();
     assert_eq!(requester.email, "ada@brightfield.test");
@@ -282,5 +312,58 @@ async fn proposals_are_posted_in_the_core_shape() {
         posted[1],
         json!({"ticket_number": 12, "content": {"kind": "priority", "priority": "urgent"},
             "rationale": {"en": "Nobody can print."}})
+    );
+}
+
+#[tokio::test]
+async fn tickets_are_opened_and_noted_in_the_core_shape() {
+    let (url, posted) = fake_core().await;
+    let client = Client::new(&url, TOKEN).unwrap();
+    let customer = Uuid::parse_str(CUSTOMER).unwrap();
+    let server = Uuid::parse_str("5a1d0c3e-7b2f-4e6a-9c8d-1f0e2d3c4b5a").unwrap();
+
+    let number = client
+        .open_ticket(&NewTicket {
+            description: Some("Disk /var is 97% full.".into()),
+            priority: Some(Priority::High),
+            asset_ids: vec![server],
+            ..NewTicket::new(customer, "SRV-01: disk almost full")
+        })
+        .await
+        .unwrap();
+    assert_eq!(number, 31);
+    client
+        .open_ticket(&NewTicket::new(customer, "Backup failed"))
+        .await
+        .unwrap();
+    client.add_note(31, "Back to 60%.").await.unwrap();
+    let refused = client
+        .open_ticket(&NewTicket::new(customer, ""))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "the core answered 409: A ticket needs a title."
+    );
+    assert_eq!(
+        client.add_note(13, "Hello.").await.unwrap_err().status(),
+        Some(404)
+    );
+
+    let posted = posted.lock().unwrap();
+    assert_eq!(
+        posted[0],
+        json!({"customer_id": customer, "title": "SRV-01: disk almost full",
+            "description": "Disk /var is 97% full.", "priority": "high",
+            "asset_ids": [server], "service_ids": []})
+    );
+    assert_eq!(
+        posted[1],
+        json!({"customer_id": customer, "title": "Backup failed", "asset_ids": [],
+            "service_ids": []})
+    );
+    assert_eq!(
+        posted[2],
+        json!({"ticket": 31, "note": {"body": "Back to 60%."}})
     );
 }

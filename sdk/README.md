@@ -61,8 +61,9 @@ A message arrived and the core routed it to a ticket or to the inbox.
 
 ### `ticket.opened`
 
-An agent opened a ticket, by hand or from an inbox message. (A ticket opened by an incoming message
-is announced by that message's `message.received`, with its `ticket_number`.)
+An agent opened a ticket, by hand or from an inbox message, or an add-on opened one with
+`POST /api/addon/tickets`. (A ticket opened by an incoming message is announced by that message's
+`message.received`, with its `ticket_number`.)
 
 | Field | Meaning |
 |---|---|
@@ -86,6 +87,8 @@ sentence saying which scope is missing.
 | `POST /api/addon/assets` | `catalog:write` | Creates an asset of a customer known by the add-on's reference, or updates the one the add-on supplied with that reference. |
 | `PUT /api/addon/assets/{id}` | `catalog:write` | Updates an asset the add-on is the source of. |
 | `POST /api/addon/assets/{id}/retire` | `catalog:write` | Retires an asset the add-on is the source of. |
+| `POST /api/addon/tickets` | `tickets:write` | Opens a ticket without a requester for a customer. |
+| `POST /api/addon/tickets/{number}/notes` | `tickets:write` | Adds an internal note to a ticket. |
 
 A requester has one or more e-mail addresses, each belonging to exactly one requester. A ticket's
 `requester` carries them all in `addresses`, the first registered first; `reply_to` is the address
@@ -173,3 +176,31 @@ not in the agents'.
 A new proposal replaces the open one of the same kind on the same message or ticket. The core
 refuses (409) a proposal that does not apply any more: a message already out of the inbox, a closed
 ticket, an asset of another customer. Nothing takes effect until an agent accepts it.
+
+### Tickets
+
+An add-on with `tickets:write`, such as a monitoring integration, opens tickets by itself
+([ADR 0010](../docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md)). A ticket is for
+an active customer and has no requester, so the agents' replies on it go to the customer's key
+requesters:
+
+```json
+{ "customer_id": "…", "title": "SRV-01: disk almost full",
+  "description": "Disk /var is 97% full since 03:10.", "priority": "high",
+  "asset_ids": ["…"], "service_ids": ["…"] }
+```
+
+`description` is optional and becomes the ticket's first internal note, by the add-on: agents read
+it, the customer never does. `priority` is `low`, `normal` (when omitted), `high` or `urgent`.
+`asset_ids` are active assets of the customer, `service_ids` active services it uses, both
+optional. The core answers 201 with the ticket's `number`, or refuses the whole ticket (409) with a
+sentence naming what does not fit: an offboarded customer, an asset of another customer, a retired
+asset or service, a service the customer does not use.
+
+`POST /api/addon/tickets/{number}/notes` with `{"body": "…"}` adds an internal note to any ticket,
+closed ones too. Agents see the add-on as the author of the ticket and of its notes; a ticket read
+with `tickets:read` names the add-on that opened it in `opened_by_addon`. Notes are still never
+given to add-ons, theirs included.
+
+An add-on never replies, assigns, or changes anything else on a ticket: its token opens none of
+the agents' calls.

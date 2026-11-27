@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 /// A message arrived and the core routed it to a ticket or to the inbox.
 pub const MESSAGE_RECEIVED: &str = "message.received";
-/// An agent opened a ticket, by hand or from an inbox message.
+/// An agent opened a ticket, by hand or from an inbox message, or an add-on opened one.
 pub const TICKET_OPENED: &str = "ticket.opened";
 
 /// Header carrying the event's id; the same on every retry. It is not signed: once the body is
