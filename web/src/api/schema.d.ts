@@ -768,8 +768,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The live details of the customer's active assets, from the add-on each comes from, asked
-         *     when this is read. The add-ons are asked all at once, a few assets at a time each, within one
+         * The live details of the customer's active assets, from the source of each and each add-on
+         *     linked to it, asked when this is read. The add-ons are asked all at once, a few assets at a time each, within one
          *     2-second deadline; an add-on that does not answer by then, answers anything but its live
          *     details or is switched off has `details` null.
          */
@@ -1816,7 +1816,7 @@ export interface webhooks {
         };
         /**
          * The live details of an asset
-         * @description Asked as `GET <url>/assets/{reference}` of the add-on an asset comes from, with the add-on's reference for it, whenever agents look at the asset; at most 8 reads of one add-on at once. The core waits 2 seconds at most; an add-on that does not answer in time, answers another status (404 too) or something that is not live details has its details shown as unavailable. A label may also be a single string, taken as English.
+         * @description Asked as `GET <url>/assets/{reference}` of the source of an asset and of each add-on linked to it, each with its own reference for the asset, whenever agents look at the asset; at most 8 reads of one add-on at once. The core waits 2 seconds at most; an add-on that does not answer in time, answers another status (404 too) or something that is not live details has its details shown as unavailable. A label may also be a single string, taken as English.
          */
         get: {
             parameters: {

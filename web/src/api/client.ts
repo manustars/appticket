@@ -532,7 +532,8 @@ export async function retireAsset(id: string): Promise<void> {
 }
 
 /**
- * The live details of the customer's active assets, asked of the add-on each comes from now: the
+ * The live details of the customer's active assets, asked now of the source of each and the
+ * add-ons linked to it: the
  * core waits up to 2 seconds for them, so they may come after the assets themselves.
  */
 export function listCustomerAssetLiveDetails(customerId: string): Promise<AssetLiveDetails[]> {

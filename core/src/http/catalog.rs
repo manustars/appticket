@@ -120,8 +120,8 @@ async fn create_asset(
     Ok((StatusCode::CREATED, Json(Created { id })))
 }
 
-/// The live details of the customer's active assets, from the add-on each comes from, asked
-/// when this is read. The add-ons are asked all at once, a few assets at a time each, within one
+/// The live details of the customer's active assets, from the source of each and each add-on
+/// linked to it, asked when this is read. The add-ons are asked all at once, a few assets at a time each, within one
 /// 2-second deadline; an add-on that does not answer by then, answers anything but its live
 /// details or is switched off has `details` null.
 #[utoipa::path(get, path = "/api/customers/{id}/assets/live-details", tag = "catalog",

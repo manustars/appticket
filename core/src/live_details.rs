@@ -1,6 +1,7 @@
 //! The live details of an asset (docs/domain-rules.md, "Add-ons"; ADR 0005): when agents look at
-//! assets, the core asks each add-on an asset comes from `GET <url>/assets/{reference}`, with
-//! the reference that add-on knows it by, all at once and within [`TIMEOUT`]. An add-on that
+//! assets, the core asks the source of each and each add-on linked to it
+//! `GET <url>/assets/{reference}`, with the reference that add-on knows the asset by, all at once
+//! and within [`TIMEOUT`]. An add-on that
 //! does not answer in time, answers anything but a 200 with live details, or is switched off,
 //! has its details unavailable; nothing else waits for it.
 
@@ -101,19 +102,27 @@ pub struct ToAsk {
 }
 
 /// The one place that says which add-ons are asked for the live details of `assets`, and with
-/// which reference: the source of each active asset of a customer that is not offboarded, with
-/// the reference it supplied the asset with. A retired asset left its source's system, and an
+/// which reference: for each active asset of a customer that is not offboarded, its source with
+/// the reference it supplied the asset with, then each add-on linked to it, by name, with the
+/// reference that add-on knows it by. A retired asset left its source's system, and an
 /// offboarded customer's assets are no longer the add-ons' to report on.
 pub async fn addons_to_ask(db: &PgPool, assets: &[Uuid]) -> Result<Vec<ToAsk>> {
     Ok(sqlx::query_as(
-        "SELECT a.id AS asset_id, d.name AS addon, d.url, d.event_secret, d.enabled,
-                a.source_ref AS reference
-         FROM assets a
+        "WITH asked (asset_id, addon, reference, is_source) AS (
+             SELECT id, source_addon, source_ref, true FROM assets
+             WHERE id = ANY($1) AND source_addon IS NOT NULL AND source_ref IS NOT NULL
+             UNION ALL
+             SELECT asset_id, addon, reference, false FROM asset_linked_addons
+             WHERE asset_id = ANY($1)
+         )
+         SELECT a.id AS asset_id, d.name AS addon, d.url, d.event_secret, d.enabled,
+                k.reference
+         FROM asked k
+         JOIN assets a ON a.id = k.asset_id
          JOIN customers c ON c.id = a.customer_id
-         JOIN addons d ON d.name = a.source_addon
-         WHERE a.id = ANY($1) AND a.retired_at IS NULL AND c.offboarded_at IS NULL
-           AND a.source_ref IS NOT NULL
-         ORDER BY array_position($1, a.id), d.name",
+         JOIN addons d ON d.name = k.addon
+         WHERE a.retired_at IS NULL AND c.offboarded_at IS NULL
+         ORDER BY array_position($1, a.id), k.is_source DESC, d.name",
     )
     .bind(assets)
     .fetch_all(db)
@@ -699,8 +708,65 @@ mod tests {
         );
     }
 
+    /// The source of an asset and each add-on linked to it are asked, each with its own
+    /// reference, the source first and the linked ones by name; an add-on that is neither is not
+    /// asked, and a switched-off linked add-on is unavailable without being asked.
+    #[sqlx::test]
+    async fn the_source_and_each_linked_addon_are_asked_with_their_own_reference(db: PgPool) {
+        let (source_url, source_asked) = fake_addon(|_| Answer::Json(healthy())).await;
+        addon_at(&db, "watchtower", &source_url).await;
+        let (linked_url, linked_asked) =
+            fake_addon(|_| Answer::Json(json!({"state": "problem"}))).await;
+        addon_at(&db, "inventory", &linked_url).await;
+        let (off_url, off_asked) = fake_addon(|_| Answer::Json(healthy())).await;
+        addon_at(&db, "alarms", &off_url).await;
+        let (other_url, other_asked) = fake_addon(|_| Answer::Json(healthy())).await;
+        addon_at(&db, "printers", &other_url).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let srv = supplied(&db, brightfield, "SRV-01", "watchtower", "host-1042").await;
+        testing::link_addon(&db, srv, "inventory", "inv-77").await;
+        testing::link_addon(&db, srv, "alarms", "alarm-5").await;
+        crate::addons::set_enabled(&db, "alarms", false)
+            .await
+            .unwrap();
+        // The printers add-on supplies an asset of its own, but is neither the source of SRV-01
+        // nor linked to it.
+        supplied(&db, brightfield, "PRN-01", "printers", "prn-1").await;
+
+        let details = of_assets(&db, &http_client().unwrap(), &[srv])
+            .await
+            .unwrap();
+        let got: Vec<(&str, Option<DetailState>)> = details
+            .iter()
+            .map(|d| (d.addon.as_str(), d.details.as_ref().map(|l| l.state)))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("watchtower", Some(DetailState::Warning)),
+                ("alarms", None),
+                ("inventory", Some(DetailState::Problem)),
+            ]
+        );
+        let references = |asked: &testing::Asked| -> Vec<String> {
+            asked
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(r, _)| r.clone())
+                .collect()
+        };
+        assert_eq!(references(&source_asked), ["host-1042"]);
+        assert_eq!(references(&linked_asked), ["inv-77"]);
+        assert!(references(&off_asked).is_empty(), "switched off");
+        assert!(
+            references(&other_asked).is_empty(),
+            "neither source nor linked"
+        );
+    }
+
     /// Only active assets of customers that are not offboarded are asked about, and only of
-    /// their source: a hand-made asset has no add-on to ask.
+    /// their add-ons: a hand-made asset no add-on is linked to has none to ask.
     #[sqlx::test]
     async fn only_the_source_of_an_active_asset_is_asked(db: PgPool) {
         let (url, asked) = fake_addon(|_| Answer::Json(healthy())).await;

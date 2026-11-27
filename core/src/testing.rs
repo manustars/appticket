@@ -326,6 +326,39 @@ pub async fn supplied_asset(
     asset
 }
 
+/// Links `addon` to the asset with `reference`, as agents do: the add-on supplies an asset with
+/// the same name, and an agent accepts the link proposal the core records.
+pub async fn link_addon(db: &PgPool, asset: Uuid, addon: &str, reference: &str) {
+    let shown = crate::catalog::asset(db, asset).await.unwrap();
+    let details = crate::supplied_assets::SuppliedDetails {
+        kind: shown.kind,
+        name: shown.name,
+        serial_number: shown.serial_number,
+        site: None,
+    };
+    let crate::supplied_assets::Supplied::LinkProposed(proposal) =
+        crate::supplied_assets::supply(db, addon, shown.customer_id, reference, &details)
+            .await
+            .unwrap()
+    else {
+        panic!("{addon} supplied an asset of its own instead of proposing a link");
+    };
+    let agent: Uuid = sqlx::query_scalar(
+        "INSERT INTO agents (id, email, name, password_hash, role_id)
+         VALUES ($1, 'catalog@northgate.test', 'catalog', 'x',
+                 (SELECT id FROM roles WHERE is_administrator))
+         ON CONFLICT (email) DO UPDATE SET email = agents.email
+         RETURNING id",
+    )
+    .bind(Uuid::new_v4())
+    .fetch_one(db)
+    .await
+    .unwrap();
+    crate::asset_link_proposals::accept(db, proposal.id, agent)
+        .await
+        .unwrap();
+}
+
 /// Live details as a fake add-on answers them: a warning, two fields (one label only in
 /// English, as a single string) and a link.
 pub fn live_details_answer() -> serde_json::Value {

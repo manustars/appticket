@@ -29,7 +29,7 @@ Apache-2.0, like the rest of `sdk/`.
   English sentence, which agents in other languages then read.
 - `tickets`: `NewTicket`, the ticket without a requester that `open_ticket` sends.
 - `live_details`: `LiveDetails`, what the add-on answers when the core asks for the live details
-  of an asset it is the source of: a `DetailState` (`Ok`, `Warning`, `Problem`), `Field`s and
+  of an asset it is the source of or is linked to: a `DetailState` (`Ok`, `Warning`, `Problem`), `Field`s and
   `Link`s, each with a `Label` per language (`in_english` makes one with only English).
 - `server` (feature `axum`): `events_router` turns a handler into a `POST /events` endpoint that
   only passes verified envelopes on, and `live_details_router` turns one into a

@@ -1,5 +1,6 @@
-//! The live details of an asset, which the core asks the add-on an asset comes from for as
-//! `GET <url>/assets/{reference}` whenever agents look at the asset, and waits 2 seconds for.
+//! The live details of an asset, which the core asks the add-on an asset comes from and each
+//! add-on linked to it for as `GET <url>/assets/{reference}` whenever agents look at the asset,
+//! and waits 2 seconds for.
 
 use std::collections::BTreeMap;
 

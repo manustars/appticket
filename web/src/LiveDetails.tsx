@@ -1,21 +1,26 @@
-// The live details of an asset: what the add-on it comes from says of it now, asked by the core
-// when the page asks, beside the asset. They come after the assets themselves, and an add-on that
-// did not answer in time shows them as unavailable; nothing else on the page waits for them.
+// The live details of an asset: what its source and the add-ons linked to it say of it now, asked
+// by the core when the page asks, beside the asset. They come after the assets themselves, and an
+// add-on that did not answer in time shows them as unavailable; nothing else on the page waits.
 import type { AssetLiveDetails } from './api/client'
 import { addonName, inLanguage } from './addon'
 import { useI18n } from './i18n/context'
 
 /**
- * The live details of one asset, from each add-on asked. `asking` names the add-on being asked
- * while the answer has not come yet.
+ * The live details of one asset, from each add-on asked. `asking` names the add-ons being asked
+ * (its source, then those linked to it) while the answer has not come yet.
  */
-export function LiveDetails({ details, asking }: {
+export function LiveDetails({ details, asking = [] }: {
   details: AssetLiveDetails[] | undefined
-  asking?: string | null
+  asking?: readonly string[]
 }) {
   const { t, locale } = useI18n()
   if (!details) {
-    return asking ? <div className="live-details muted">{t('liveDetails.asking', { addon: addonName(asking) })}</div> : null
+    if (asking.length === 0) return null
+    return (
+      <div className="live-details muted">
+        {asking.map((addon) => <div key={addon}>{t('liveDetails.asking', { addon: addonName(addon) })}</div>)}
+      </div>
+    )
   }
   if (details.length === 0) return null
   return (
