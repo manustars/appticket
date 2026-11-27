@@ -82,9 +82,9 @@ The state is **problem** when the host is not available or has an open High or D
 Zabbix 7.0 keeps availability per interface, and for the agent's active checks; its host list
 shows a colour per interface type, counting the interfaces that an enabled item uses (all of them
 when no item uses any), with the active checks counted with the agent's when the host has an
-enabled one. The add-on applies the same rule to all of them together: available when all are,
-not available when none is, partly available when some are not and the others are or are unknown,
-and unknown otherwise or when there are none.
+enabled one. The add-on applies the same rule to all of them together: available when all are
+available, not available when all are not available, partly available when some are not available
+and the others are available or unknown, and unknown otherwise or when there are none.
 
 The links open the host's page in Zabbix (*Inventory → Hosts*, `hostinventories.php`, with links
 to its latest data, graphs and configuration) and its open problems (*Monitoring → Problems* for
@@ -98,6 +98,13 @@ agents see the details as unavailable in time. Each read is answered on its own,
 of the catalog: one waiting for Zabbix holds up nothing else. A host Zabbix does not have, or that
 the add-on's user cannot read, has no live details.
 
+The contract advises answering from what an add-on already knows; this add-on asks Zabbix on each
+read instead, so that agents see a host as it is now rather than as it was at the last round, as
+issue #117 asks, with a deadline short enough for the core. Each asset an agent's page shows costs
+three calls to Zabbix, and the core reads 8 assets of an add-on at a time within its 2 seconds: on
+a page with many assets, or with a slow Zabbix, the last ones may show their details as
+unavailable.
+
 ## Registering it on the core
 
 ```sh
@@ -110,6 +117,16 @@ no events yet. The core prints a token and an event secret once: put the token i
 `HD_ZABBIX_TOKEN`, or in a file named by `HD_ZABBIX_TOKEN_FILE`, and the event secret, with which
 the core signs its reads, in `HD_ZABBIX_EVENT_SECRET` or a file named by
 `HD_ZABBIX_EVENT_SECRET_FILE`.
+
+Upgrading from a version without live details, the add-on stops at startup until
+`HD_ZABBIX_EVENT_SECRET` is set: use the event secret `hd addon add` printed with the token. The
+core has no command that shows it again or issues a new one (`hd addon` has only `add`, `list`,
+`enable` and `disable`), and a second `hd addon add zabbix` is refused while the add-on exists.
+When it was not kept, the only way out today is to register the add-on under another name, which
+gets a new token and event secret but none of the old add-on's assets: the old one keeps them as
+their source, and each host the new one sends matches its old asset by name or serial number, so
+agents get a link proposal per host to accept. Disable the old add-on afterwards
+(`hd addon disable zabbix`).
 
 In Zabbix, give the add-on a user that can read the host groups of the customers, with an API
 token (*Users → API tokens*), and put that token in `HD_ZABBIX_API_TOKEN` or in a file named by
