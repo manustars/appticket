@@ -218,10 +218,12 @@ pub struct Ticket {
     #[serde(default)]
     pub opened_by_addon: Option<String>,
     /// Whether an agent has worked on the ticket: once they have been its assignee, written a
-    /// reply, a note or an announcement on it, or changed it by hand (its state, priority, links,
-    /// customer or parent), and so for good; notes of add-ons and messages received do not
-    /// count. The notes themselves are never given to add-ons. True from a core that does not say, so that an add-on resolving
-    /// only tickets nobody worked on leaves them alone.
+    /// reply, a note or an announcement on it, or changed it by hand (its state, even to the one
+    /// it had, as when attaching an inbox message to it; its priority, links or customer; a child
+    /// attached to or detached from it, or it to or from a parent), and so for good; notes of
+    /// add-ons and messages received do not count. The notes themselves are never given to
+    /// add-ons. True from a core that does not say, so that an add-on resolving only tickets
+    /// nobody worked on leaves them alone.
     #[serde(default = "worked_on_unless_said")]
     pub worked_on_by_agent: bool,
     /// Assets already linked to the ticket.

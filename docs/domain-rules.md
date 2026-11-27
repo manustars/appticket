@@ -251,9 +251,10 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   priority, assets and services; it adds notes to any ticket and resolves the tickets it opened,
   when they are open or waiting. It never replies and changes nothing else on tickets. It reads
   whether an agent has worked on a ticket, never the notes themselves: an agent has once they
-  have been its assignee, written a reply, a note or an announcement on it, or changed it by hand
-  (its state, priority, links, customer or parent), and it stays so, also once they are
-  unassigned. Notes of add-ons and messages received are no work of an agent.
+  have been its assignee, written a reply, a note or an announcement on it, or changed it by hand:
+  its state (even to the one it had, as when attaching an inbox message to it), priority, links or
+  customer, or a child attached to or detached from it, or it to or from a parent. It stays so,
+  also once they are unassigned. Notes of add-ons and messages received are no work of an agent.
 - Add-ons registered for `ticket.state_changed` are told of every change of a ticket's state,
   once, with the state it left, the state it reached and who changed it: an agent, a received
   message that reopened it, or the add-on that resolved a ticket it opened. A move to the state

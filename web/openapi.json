@@ -9945,7 +9945,7 @@
           },
           "worked_on_by_agent": {
             "type": "boolean",
-            "description": "Whether an agent has worked on the ticket: once they have been its assignee, written a\nreply, a note or an announcement on it, or changed it by hand (its state, priority, links,\ncustomer or parent). It stays so, also once the agent is unassigned. Notes of add-ons and\nmessages received do not count."
+            "description": "Whether an agent has worked on the ticket: once they have been its assignee, written a\nreply, a note or an announcement on it, or changed it by hand (its state, even to the one it\nhad, as when attaching an inbox message to it; its priority, links or customer; a child\nattached to or detached from it, or it to or from a parent). It stays so, also once the\nagent is unassigned. Notes of add-ons and messages received do not count."
           }
         }
       },

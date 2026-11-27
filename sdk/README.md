@@ -350,9 +350,10 @@ The core does not refuse a ticket an agent has worked on: whether to resolve it 
 add-on's rule ([ADR 0010](../docs/adr/0010-monitoring-add-ons-open-tickets-by-explicit-rules.md):
 by default, only when no agent has). So that it can tell, a ticket read with `tickets:read` says
 `worked_on_by_agent`: `true` once an agent has been its assignee, written a reply (sent or still
-in the outbox), a note or an announcement on it, or changed it by hand: its state, priority,
-assets or services, customer or parent. It stays `true`, also once the agent is unassigned or the
-ticket resolved again. Notes of add-ons, the opener's description included, and messages received
+in the outbox), a note or an announcement on it, or changed it by hand: its state (even to the
+one it had, as when attaching an inbox message to it), priority, assets or services or customer,
+or a child attached to or detached from it, or it to or from a parent. It stays `true`, also once
+the agent is unassigned or the ticket resolved again. Notes of add-ons, the opener's description included, and messages received
 do not count, and the notes themselves are still not given. Read the ticket just before resolving
 it: an agent may pick it up in between, so an add-on that needs both calls holds both scopes,
 `tickets:read` and `tickets:write`.
