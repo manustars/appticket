@@ -291,7 +291,16 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   add-on's rules say so, and at most one ticket per problem of the monitoring system: the add-on
   gives the ticket the problem's id as its ticket reference. When the problem recovers, the add-on
   adds a note and resolves the ticket only if no agent has worked on it (as above), unless its
-  rule says otherwise.
+  rule says otherwise. What the add-on missed, such as while it was down, it catches up on: the
+  problems still active that its rules open get their tickets, and the recoveries of open or
+  waiting tickets that the monitoring system says it did not deliver are handled as above.
+- A monitoring add-on opens at most a safety limit of tickets in a few minutes (by default 20 in
+  5), counting every alert ticket it opens. Reaching it, it opens no more and opens one urgent
+  ticket for the help desk's own organization, saying how many problems it held back and since
+  when, once per time it stops. It resumes only when an agent resolves or closes that ticket, a
+  restart included: meanwhile the problems the rules open get no ticket, while recoveries and
+  updates still add notes to the tickets already opened and resolve them as the rules say. It then
+  opens the tickets of the problems still active that the rules open, under the limit again.
 
 ## Assistant
 

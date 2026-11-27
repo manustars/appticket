@@ -63,6 +63,36 @@ fn free_port() -> u16 {
         .port()
 }
 
+/// The `hd` command with `args`, run in `dir` with the core's database and port and nothing else
+/// of the test's environment.
+fn hd_command(dir: &std::path::Path, database_url: &str, port: u16, args: &[&str]) -> Command {
+    let mut command = Command::new(hd_binary());
+    command.args(args).current_dir(dir).env_clear();
+    for name in ["PATH", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP"] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    command
+        .env("HD_DATABASE_URL", database_url)
+        .env("HD_LISTEN", format!("127.0.0.1:{port}"))
+        .env("HD_AGENT_PASSWORD", PASSWORD)
+        .env("HD_LOG", "warn");
+    command
+}
+
+/// Runs an `hd` command, which must succeed; answers what it printed.
+fn run_hd(mut command: Command) -> String {
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "hd {:?}: {}",
+        command.get_args().collect::<Vec<_>>(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
 const AGENT: &str = "ada.admin@example.com";
 const PASSWORD: &str = "zabbix-test-password";
 /// The add-on's name on the core.
@@ -80,6 +110,8 @@ pub struct Core {
     cookie: String,
     process: Child,
     database: String,
+    /// The URL of its database, for the `hd` commands the tests run.
+    database_url: String,
     dir: PathBuf,
 }
 
@@ -102,30 +134,8 @@ impl Core {
         let dir = std::env::temp_dir().join(format!("hd-zabbix-core-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let port = free_port();
-        let hd = |args: &[&str]| {
-            let mut command = Command::new(hd_binary());
-            command.args(args).current_dir(&dir).env_clear();
-            for name in ["PATH", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP"] {
-                if let Some(value) = std::env::var_os(name) {
-                    command.env(name, value);
-                }
-            }
-            command
-                .env("HD_DATABASE_URL", &database_url)
-                .env("HD_LISTEN", format!("127.0.0.1:{port}"))
-                .env("HD_AGENT_PASSWORD", PASSWORD)
-                .env("HD_LOG", "warn");
-            command
-        };
-        let run = |args: &[&str]| {
-            let output = hd(args).output().unwrap();
-            assert!(
-                output.status.success(),
-                "hd {args:?}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            String::from_utf8(output.stdout).unwrap()
-        };
+        let hd = |args: &[&str]| hd_command(&dir, &database_url, port, args);
+        let run = |args: &[&str]| run_hd(hd(args));
         run(&["migrate"]);
         run(&["agent", "add", AGENT, "--name", "Ada Admin"]);
         let added = run(&[
@@ -177,6 +187,7 @@ impl Core {
             cookie: String::new(),
             process,
             database,
+            database_url,
             dir,
         };
         let started = Instant::now();
@@ -220,6 +231,18 @@ impl Core {
             .expect("a session cookie")
             .to_owned();
         core
+    }
+
+    /// Adds the help desk's own organization, named `name`, as an install does with
+    /// `hd customer add --help-desk`.
+    pub fn help_desk(&self, name: &str) {
+        let port: u16 = self.url.rsplit(':').next().unwrap().parse().unwrap();
+        run_hd(hd_command(
+            &self.dir,
+            &self.database_url,
+            port,
+            &["customer", "add", name, "--help-desk"],
+        ));
     }
 
     /// The add-on's client of the core's API.
@@ -1278,11 +1301,11 @@ pub async fn webhook_listener() -> (tokio::net::TcpListener, String, String) {
 /// Serves the add-on's webhook on `listener`, as the add-on does, with `secret`.
 pub fn serve_webhook(
     listener: tokio::net::TcpListener,
-    alerts: hd_zabbix::webhook::Alerts,
+    alerts: impl Into<std::sync::Arc<hd_zabbix::webhook::Alerts>>,
     secret: &str,
-) {
-    let app = hd_zabbix::webhook::router(std::sync::Arc::new(alerts), secret.to_owned());
-    tokio::spawn(async move { axum::serve(listener, app).await });
+) -> tokio::task::JoinHandle<std::io::Result<()>> {
+    let app = hd_zabbix::webhook::router(alerts.into(), secret.to_owned());
+    tokio::spawn(async move { axum::serve(listener, app).await })
 }
 
 /// Serves the add-on's webhook, with `secret`, and the core's events to it, signed with
