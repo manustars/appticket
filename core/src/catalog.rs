@@ -1602,7 +1602,7 @@ mod tests {
             ticket.services.iter().map(|s| s.id).collect::<Vec<_>>(),
             [mail]
         );
-        tickets::set_state(&db, n, TicketState::Closed)
+        crate::testing::set_state(&db, n, TicketState::Closed)
             .await
             .unwrap();
         assert!(matches!(

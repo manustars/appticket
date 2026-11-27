@@ -43,11 +43,65 @@ pub use identity_provider::connect as connect_identity_provider;
 pub use web::with_web;
 
 #[derive(OpenApi)]
-#[openapi(info(
-    title = "Help desk core API",
-    description = "API of the help desk core."
-))]
+#[openapi(
+    info(
+        title = "Help desk core API",
+        description = "API of the help desk core."
+    ),
+    components(schemas(TicketStateChangedEvent))
+)]
 struct ApiDoc;
+
+/// The body of a `ticket.state_changed` delivery to an add-on.
+#[derive(ToSchema)]
+#[allow(dead_code)] // Only describes the body in the specification.
+struct TicketStateChangedEvent {
+    /// The same on every retry: skip an id already handled.
+    id: Uuid,
+    /// `ticket.state_changed`.
+    kind: String,
+    created_at: time::OffsetDateTime,
+    data: crate::tickets::TicketStateChanged,
+}
+
+/// The specification with the events the core sends to add-ons as webhooks (sdk/README.md).
+fn with_events(mut spec: utoipa::openapi::OpenApi) -> utoipa::openapi::OpenApi {
+    use utoipa::openapi::{
+        ContentBuilder, HttpMethod, PathItem, PathsBuilder, Ref, Required, Response,
+        path::OperationBuilder, request_body::RequestBodyBuilder,
+    };
+    let operation = OperationBuilder::new()
+        .summary(Some("A ticket's state changed"))
+        .description(Some(
+            "Sent as `POST <url>/events` to the add-ons registered for `ticket.state_changed`, \
+             signed with the add-on's event secret and retried until the add-on answers 2xx.",
+        ))
+        .request_body(Some(
+            RequestBodyBuilder::new()
+                .content(
+                    "application/json",
+                    ContentBuilder::new()
+                        .schema(Some(Ref::from_schema_name("TicketStateChangedEvent")))
+                        .build(),
+                )
+                .required(Some(Required::True))
+                .build(),
+        ))
+        .response(
+            "2XX",
+            Response::new("Delivered: the core does not send it again."),
+        )
+        .build();
+    spec.webhooks = Some(
+        PathsBuilder::new()
+            .path(
+                crate::addons::TICKET_STATE_CHANGED,
+                PathItem::new(HttpMethod::Post, operation),
+            )
+            .build(),
+    );
+    spec
+}
 
 /// What every handler can reach.
 #[derive(Clone)]
@@ -137,7 +191,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 }
 
 fn api_router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::with_openapi(ApiDoc::openapi())
+    OpenApiRouter::with_openapi(with_events(ApiDoc::openapi()))
         .routes(routes!(health))
         .routes(routes!(current_session, sign_in, sign_out))
         .routes(routes!(change_password))

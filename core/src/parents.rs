@@ -273,14 +273,18 @@ pub async fn resolve_children(
         )
         .await?;
     }
-    let ids: Vec<Uuid> = children.iter().map(|c| c.id).collect();
-    sqlx::query(
-        "UPDATE tickets SET state = $2, updated_at = now() WHERE id = ANY($1) AND state <> $2",
-    )
-    .bind(&ids)
-    .bind(TicketState::Resolved)
-    .execute(&mut *tx)
-    .await?;
+    // The children written on are resolved already; the others now.
+    for child in &children {
+        if !on_child.iter().any(|(ticket, _)| *ticket == child.id) {
+            tickets::change_state(
+                &mut tx,
+                child.id,
+                TicketState::Resolved,
+                tickets::StateChanger::Agent(author),
+            )
+            .await?;
+        }
+    }
     tx.commit().await?;
     Ok(ResolvedChildren {
         resolved: children.len() as i64,
@@ -371,6 +375,43 @@ mod tests {
             resolve_children(&db, &testing::sender(), outage, agent, "Again").await,
             Err(Error::Rule(_))
         ));
+    }
+
+    /// Resolving the children records the change of each child's state once, by the agent, also
+    /// for a child nobody is written to; the parent's state does not change.
+    #[sqlx::test]
+    async fn resolving_children_records_each_child_s_change_of_state(db: PgPool) {
+        let own = testing::help_desk(&db).await;
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let ada = testing::requester(&db, brightfield, "ada@brightfield.test").await;
+        let marco = testing::agent(&db, "marco@northgate.test").await;
+        let outage = testing::ticket(&db, own, None, "outage@northgate.test").await;
+        let written = testing::ticket(&db, brightfield, Some(ada), "a@brightfield.test").await;
+        let silent = testing::ticket(&db, brightfield, None, "b@brightfield.test").await;
+        for child in [written, silent] {
+            attach(&db, child, outage).await.unwrap();
+        }
+        testing::set_state(&db, silent, TicketState::Waiting)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM events")
+            .execute(&db)
+            .await
+            .unwrap();
+
+        resolve_children(&db, &testing::sender(), outage, marco, "Mail works again.")
+            .await
+            .unwrap();
+        let by = serde_json::json!({"kind": "agent", "agent": {"id": marco, "name": "marco"}});
+        assert_eq!(
+            testing::state_changes(&db).await,
+            [
+                serde_json::json!({"ticket_number": written, "old_state": "open",
+                    "new_state": "resolved", "changed_by": by}),
+                serde_json::json!({"ticket_number": silent, "old_state": "waiting",
+                    "new_state": "resolved", "changed_by": by}),
+            ]
+        );
     }
 
     /// The messages queued on the parent's children: on which child, to whom, in that order.

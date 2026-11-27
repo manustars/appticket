@@ -3,8 +3,11 @@
 The Rust SDK for add-ons of the help desk core, following the contract in [`../README.md`](../README.md).
 Apache-2.0, like the rest of `sdk/`.
 
-- `events`: the envelope the core posts to `<url>/events`, with typed data for `message.received`
-  and `ticket.opened`; unknown kinds come through as `Event::Other`.
+- `events`: the envelope the core posts to `<url>/events`, with typed data for `message.received`,
+  `ticket.opened` and `ticket.state_changed`; unknown kinds come through as `Event::Other`.
+  `TicketStateChanged` carries the old and new `TicketState` and `changed_by`, a
+  `StateChangedBy`: an `Agent` with their `id` and `name`, a `Message` that reopened the ticket,
+  or `Other` for a kind of changer this version does not know.
 - `signature`: `Verifier` checks `hd-signature` (HMAC-SHA-256 over `<hd-timestamp>.<raw body>`) in
   constant time and refuses timestamps more than five minutes off; its clock can be replaced in
   tests. `sign` computes the header, for testing an add-on.

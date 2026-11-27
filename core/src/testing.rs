@@ -206,3 +206,35 @@ pub async fn state(db: &PgPool, number: i64) -> String {
         .await
         .unwrap()
 }
+
+/// Moves the ticket to `state` as the agent desk@northgate.test, added the first time.
+pub async fn set_state(
+    db: &PgPool,
+    number: i64,
+    state: crate::tickets::TicketState,
+) -> crate::error::Result<()> {
+    let agent: Uuid = sqlx::query_scalar(
+        "INSERT INTO agents (id, email, name, password_hash, role_id)
+         VALUES ($1, 'desk@northgate.test', 'desk', 'x',
+                 (SELECT id FROM roles WHERE is_administrator))
+         ON CONFLICT (email) DO UPDATE SET email = agents.email
+         RETURNING id",
+    )
+    .bind(Uuid::new_v4())
+    .fetch_one(db)
+    .await
+    .unwrap();
+    crate::tickets::set_state(db, number, state, agent).await
+}
+
+/// The data of every `ticket.state_changed` event recorded, oldest first and, within one
+/// transaction, by ticket number.
+pub async fn state_changes(db: &PgPool) -> Vec<serde_json::Value> {
+    sqlx::query_scalar(
+        "SELECT data FROM events WHERE kind = 'ticket.state_changed'
+         ORDER BY created_at, (data->>'ticket_number')::bigint",
+    )
+    .fetch_all(db)
+    .await
+    .unwrap()
+}

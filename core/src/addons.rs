@@ -14,11 +14,13 @@ use uuid::Uuid;
 use crate::error::{Error, Result, rule};
 
 /// Event kinds the core records.
-pub const EVENT_KINDS: &[&str] = &[MESSAGE_RECEIVED, TICKET_OPENED];
+pub const EVENT_KINDS: &[&str] = &[MESSAGE_RECEIVED, TICKET_OPENED, TICKET_STATE_CHANGED];
 /// A message arrived and was routed to a ticket or to the inbox.
 pub const MESSAGE_RECEIVED: &str = "message.received";
 /// An agent opened a ticket, by hand or from an inbox message, or an add-on opened one.
 pub const TICKET_OPENED: &str = "ticket.opened";
+/// A ticket's state changed: [`crate::tickets::TicketStateChanged`].
+pub const TICKET_STATE_CHANGED: &str = "ticket.state_changed";
 
 /// What an add-on's token may do.
 pub const SCOPES: &[&str] = &[

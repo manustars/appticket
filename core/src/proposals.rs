@@ -415,7 +415,7 @@ pub async fn accept(db: &PgPool, id: Uuid, agent: Uuid) -> Result<Accepted> {
                     Some(crate::triage::open_ticket(db, message, customer_id).await?);
             }
             Triage::Attach { ticket_number } => {
-                crate::triage::attach(db, message, ticket_number).await?;
+                crate::triage::attach(db, message, ticket_number, agent).await?;
                 accepted.ticket_number = Some(ticket_number);
             }
             Triage::Discard => crate::triage::discard(db, message).await?,

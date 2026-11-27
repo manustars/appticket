@@ -115,7 +115,7 @@ async fn attach(
     Json(request): Json<Attach>,
 ) -> Result<StatusCode, ApiError> {
     agent.grant.require(Permission::SortInbox)?;
-    triage::attach(&state.db, id, request.ticket_number).await?;
+    triage::attach(&state.db, id, request.ticket_number, agent.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
