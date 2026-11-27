@@ -29,6 +29,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(open_tickets))
         .routes(routes!(ticket))
         .routes(routes!(propose))
+        .merge(super::addon_catalog::routes())
 }
 
 /// Requires an enabled add-on's token.
@@ -151,12 +152,18 @@ pub struct AddonAsset {
     site: Option<SiteRef>,
     /// The add-on it came from, when an add-on supplies it.
     source_addon: Option<String>,
+    /// Your own reference for it, when you are its source; another add-on's is not given.
+    reference: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     retired_at: Option<OffsetDateTime>,
 }
 
-impl From<Asset> for AddonAsset {
-    fn from(a: Asset) -> AddonAsset {
+impl AddonAsset {
+    /// The asset as `caller` reads it.
+    pub(super) fn seen_by(a: Asset, caller: &Caller) -> AddonAsset {
+        let reference = a
+            .source_ref
+            .filter(|_| a.source_addon.as_deref() == Some(caller.name.as_str()));
         AddonAsset {
             id: a.id,
             customer_id: a.customer_id,
@@ -167,6 +174,7 @@ impl From<Asset> for AddonAsset {
             serial_number: a.serial_number,
             site: a.site,
             source_addon: a.source_addon,
+            reference,
             retired_at: a.retired_at,
         }
     }
@@ -188,7 +196,7 @@ async fn customer_assets(
         assets
             .into_iter()
             .filter(|a| a.retired_at.is_none())
-            .map(AddonAsset::from)
+            .map(|a| AddonAsset::seen_by(a, &caller))
             .collect(),
     ))
 }

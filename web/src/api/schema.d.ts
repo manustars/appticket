@@ -4,6 +4,71 @@
  */
 
 export interface paths {
+    "/api/addon/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Creates an asset of a customer known by the add-on's reference, or updates the one the add-on
+         *     already supplied with that reference (bringing it back if it retired it), so that the add-on
+         *     can send its whole inventory again safely: 201 when created, 200 when updated. Its kind and its
+         *     site are named; what is left out is cleared, and its holder, whom agents choose, stays. Scope
+         *     `catalog:write`.
+         */
+        post: operations["supply_asset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/addon/assets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Updates an asset the add-on is the source of, as supplying it again does; an asset entered by
+         *     hand or supplied by another add-on is refused. Scope `catalog:write`.
+         */
+        put: operations["update_supplied_asset"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/addon/assets/{id}/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retires an asset the add-on is the source of, when it leaves the add-on's system: it stays on
+         *     the tickets that refer to it, gets no new links and loses its holder. Retiring it again changes
+         *     nothing; an asset entered by hand or supplied by another add-on is refused. Scope
+         *     `catalog:write`.
+         */
+        post: operations["retire_supplied_asset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/addon/customers": {
         parameters: {
             query?: never;
@@ -1628,6 +1693,8 @@ export interface components {
             /** Format: uuid */
             kind_id: string;
             name: string;
+            /** @description Your own reference for it, when you are its source; another add-on's is not given. */
+            reference?: string | null;
             /** Format: date-time */
             retired_at?: string | null;
             serial_number?: string | null;
@@ -1794,8 +1861,13 @@ export interface components {
             retired_at?: string | null;
             serial_number?: string | null;
             site?: components["schemas"]["SiteRef"] | null;
-            /** @description The add-on it came from, when an add-on supplies it. */
+            /**
+             * @description The add-on it came from, when an add-on supplies it: only that add-on changes its kind,
+             *     name, serial number and site, and retires it.
+             */
             source_addon?: string | null;
+            /** @description That add-on's own reference for it. */
+            source_ref?: string | null;
         };
         /** @description What agents who manage the catalog set on an asset. */
         AssetFields: {
@@ -2628,6 +2700,37 @@ export interface components {
         StateChange: {
             state: components["schemas"]["TicketState"];
         };
+        /** @description An asset as its source supplies it, known by the add-on's own reference. */
+        SuppliedAsset: components["schemas"]["SuppliedDetails"] & {
+            /**
+             * Format: uuid
+             * @description The customer that owns the asset; an asset never changes customer.
+             */
+            customer_id: string;
+            /**
+             * @description The add-on's own identifier for the asset, such as a host's id in its system: the same
+             *     reference always names the same asset. Compared exactly, once trimmed.
+             */
+            reference: string;
+        };
+        /**
+         * @description What an add-on supplies of an asset: everything but its customer, which never changes, and its
+         *     holder, whom agents choose.
+         */
+        SuppliedDetails: {
+            /** @description The name of its asset kind, one of the help desk's list, compared ignoring case. */
+            kind: string;
+            name: string;
+            /** @description Empty or left out for none. */
+            serial_number?: string | null;
+            /**
+             * @description The name of one of its customer's active sites, compared ignoring case; empty or left out
+             *     for none.
+             */
+            site?: string | null;
+        };
+        /** @description What an add-on sends to update an asset it is the source of. */
+        SuppliedUpdate: components["schemas"]["SuppliedDetails"];
         Switch: {
             enabled: boolean;
         };
@@ -2735,6 +2838,155 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    supply_asset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SuppliedAsset"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddonAsset"];
+                };
+            };
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddonAsset"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    update_supplied_asset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The asset */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SuppliedUpdate"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddonAsset"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    retire_supplied_asset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The asset */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     customers: {
         parameters: {
             query?: never;

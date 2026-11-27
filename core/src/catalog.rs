@@ -190,6 +190,16 @@ pub async fn assets_of(db: &PgPool, customer: Uuid) -> Result<Vec<Asset>> {
     Ok(rows.into_iter().map(Asset::from).collect())
 }
 
+/// The asset.
+pub async fn asset(db: &PgPool, id: Uuid) -> Result<Asset> {
+    let row: AssetRow = sqlx::query_as(select_assets!("WHERE a.id = $1"))
+        .bind(id)
+        .fetch_optional(db)
+        .await?
+        .ok_or(Error::NotFound("asset"))?;
+    Ok(row.into())
+}
+
 /// The assets the requester holds, by kind.
 pub async fn held_by<'e>(db: impl sqlx::PgExecutor<'e>, requester: Uuid) -> Result<Vec<Asset>> {
     let rows: Vec<AssetRow> = sqlx::query_as(select_assets!(
