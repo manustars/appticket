@@ -422,6 +422,72 @@ mod tests {
         );
     }
 
+    /// An add-on built on the Rust SDK serves the core's read: the SDK's router verifies the
+    /// core's signature with the event secret, hands its handler the reference as the add-on
+    /// gave it, and its live details and its 404 reach the agents as the core gives them.
+    #[sqlx::test]
+    async fn an_addon_built_on_the_sdk_serves_the_core_s_read(db: PgPool) {
+        use hd_addon_sdk::live_details::{self as sdk, in_english};
+        let watchtower = crate::addons::register(
+            &db,
+            "watchtower",
+            "http://127.0.0.1:9",
+            &[],
+            &[crate::addons::CATALOG_WRITE.into()],
+        )
+        .await
+        .unwrap();
+        let app = hd_addon_sdk::server::live_details_router(
+            hd_addon_sdk::Verifier::new(watchtower.event_secret),
+            |reference: String| async move {
+                Ok((reference == "host 10/42").then(|| sdk::LiveDetails {
+                    state: sdk::DetailState::Problem,
+                    fields: vec![sdk::Field::new(in_english("Disk /var"), "100% full")],
+                    links: vec![sdk::Link::new(
+                        in_english("Open"),
+                        "https://watchtower.example.com/hosts/1042",
+                    )],
+                }))
+            },
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        // Behind a path of its own, as an add-on may be.
+        let url = format!("http://{}/watchtower", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, axum::Router::new().nest("/watchtower", app)).await
+        });
+        sqlx::query("UPDATE addons SET url = $1")
+            .bind(&url)
+            .execute(&db)
+            .await
+            .unwrap();
+        let brightfield = testing::customer(&db, "Brightfield").await;
+        let srv = supplied(&db, brightfield, "SRV-01", "watchtower", "host 10/42").await;
+        let unknown = supplied(&db, brightfield, "SRV-02", "watchtower", "host-7").await;
+
+        let client = crate::addons::http_client().unwrap();
+        let details = of_assets(&db, &client, &[srv, unknown]).await.unwrap();
+        assert_eq!(
+            details,
+            [AssetLiveDetails {
+                asset_id: srv,
+                addon: "watchtower".into(),
+                details: Some(LiveDetails {
+                    state: DetailState::Problem,
+                    fields: vec![DetailField {
+                        label: label(&[("en", "Disk /var")]),
+                        value: "100% full".into(),
+                    }],
+                    links: vec![DetailLink {
+                        label: label(&[("en", "Open")]),
+                        url: "https://watchtower.example.com/hosts/1042".into(),
+                    }],
+                }),
+            }],
+            "the add-on has no live details of host-7"
+        );
+    }
+
     /// An add-on that answers late, with an error status or with something that is not live
     /// details has its details unavailable, and a switched-off one is not even asked; they are
     /// asked all at once, so one slow add-on does not hold up the others, and the answer comes

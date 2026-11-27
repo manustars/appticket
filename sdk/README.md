@@ -96,6 +96,53 @@ More kinds may come, such as an add-on once add-ons resolve the tickets they ope
 `tickets:read`. A ticket being opened is no change of state: it is announced by `ticket.opened`
 or `message.received`.
 
+## Live details: core to add-on
+
+Whenever agents look at an asset, on a customer's assets or on a ticket, the core asks the add-on
+the asset comes from (its source) for the asset's live details, with the add-on's own reference
+for it:
+
+```
+GET <url>/assets/{reference}
+```
+
+The reference is percent-encoded as one path segment, so `host 10/42` arrives as
+`/assets/host%2010%2F42`. The request carries `hd-timestamp` and `hd-signature`, made as for
+events but over `GET /assets/<reference>`, with the reference as the add-on gave it (not
+percent-encoded), in place of a body: check them before answering. The add-on answers 200 with:
+
+```json
+{ "state": "warning",
+  "fields": [{ "label": { "en": "Disk /var", "it": "Disco /var" }, "value": "91% full" },
+             { "label": "Uptime", "value": "12 days" }],
+  "links": [{ "label": { "en": "Open in Watchtower" },
+              "url": "https://watchtower.example.com/hosts/1042" }] }
+```
+
+| Field | Meaning |
+|---|---|
+| `state` | `ok`, `warning` or `problem`: how the asset is doing in the add-on's system. |
+| `fields` | Up to 20 values (at most 500 characters each), each with its `label`. Optional. |
+| `links` | Up to 10 `http` or `https` links (at most 2000 characters each) into the add-on's system, each with its `label`. Optional. |
+
+A `label` (at most 100 characters) is written in every language of the agents' UI, as a
+rationale is (`GET /api/addon/whoami` lists them); a single string is taken as English, which is
+also what agents see when their language is missing. Agents see the fields, state and links
+beside the asset.
+
+The core waits 2 seconds at most, for the whole answer, and asks every add-on at once, so one
+slow add-on holds nothing else up. When the add-on does not answer in time, answers another
+status, or answers anything that does not keep to the above as a whole (an unknown state, too
+many fields, a link to another scheme, more than 64 KiB), agents see its details as unavailable,
+and the core's log says why. A switched-off add-on is not asked: its details are unavailable.
+Answer 404 when the add-on has no live details of that asset, as an add-on that serves no live
+details at all does: agents then see none, and nothing unavailable. Answer from what the add-on
+already knows rather than asking its own system on every read.
+
+Retired assets and the assets of offboarded customers are not asked about. Being asked needs no
+scope. Once assets can be linked to several add-ons, each linked add-on is asked the same way,
+with its own reference.
+
 ## Calls: add-on to core
 
 The add-on calls the core's API with `Authorization: Bearer <token>`. Each operation needs a scope
@@ -142,7 +189,7 @@ read them. Offboarded customers are not listed, and neither are their references
 
 The full request and response shapes are in the core's OpenAPI specification
 (`hd openapi`, or `/api/openapi.json` on a running core), which also describes the body of
-`ticket.state_changed` among its `webhooks`.
+`ticket.state_changed` and the read of live details (`live_details`) among its `webhooks`.
 
 ### Supplying assets
 

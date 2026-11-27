@@ -28,17 +28,28 @@ Apache-2.0, like the rest of `sdk/`.
   per language (`{"en": …, "it": …}`) that `propose` sends; `in_english` makes one with only an
   English sentence, which agents in other languages then read.
 - `tickets`: `NewTicket`, the ticket without a requester that `open_ticket` sends.
+- `live_details`: `LiveDetails`, what the add-on answers when the core asks for the live details
+  of an asset it is the source of: a `DetailState` (`Ok`, `Warning`, `Problem`), `Field`s and
+  `Link`s, each with a `Label` per language (`in_english` makes one with only English).
 - `server` (feature `axum`): `events_router` turns a handler into a `POST /events` endpoint that
-  only passes verified envelopes on.
+  only passes verified envelopes on, and `live_details_router` turns one into a
+  `GET /assets/{reference}` endpoint that only passes on reads the core signed for that
+  reference, answering 200 with the handler's `LiveDetails`, 404 when it gives none and 503 when
+  it fails. `signature::signed_read` is what the core signs for a read, for testing an add-on.
 
 ```rust
-use hd_addon_sdk::{Client, Content, Target, Verifier, server::events_router};
+use hd_addon_sdk::{Client, Content, Target, Verifier, server::{events_router, live_details_router}};
 
 let core = Client::new("https://helpdesk.example.com", &token)?;
-let app = events_router(Verifier::new(event_secret), move |envelope| async move {
+let verifier = Verifier::new(event_secret);
+let app = events_router(verifier.clone(), move |envelope| async move {
     // Answer within 10 seconds: start slow work in the background.
     Ok(())
-});
+})
+.merge(live_details_router(verifier, move |reference| async move {
+    // Answer within 2 seconds, from what the add-on already knows; None answers 404.
+    Ok(None)
+}));
 ```
 
 The [Assistant](../../addons/assistant) is built on it.
