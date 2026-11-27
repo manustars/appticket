@@ -75,12 +75,16 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("listening on {}", config.listen))?;
     tracing::info!(listen = %config.listen, "answering the core's reads of live details");
-    let server = tokio::spawn(
+    // It stops when told to, after the rounds: ending before then is a failure.
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let mut server = tokio::spawn(
         axum::serve(
             listener,
             details::router(Arc::new(details), Verifier::new(event_secret)),
         )
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async {
+            let _ = stopped.await;
+        })
         .into_future(),
     );
     let mut ticks = tokio::time::interval(config.interval);
@@ -90,13 +94,23 @@ async fn main() -> anyhow::Result<()> {
     loop {
         tokio::select! {
             _ = &mut shutdown => break,
+            served = &mut server => {
+                served
+                    .context("the server of live details failed")?
+                    .context("answering the core's reads of live details")?;
+                anyhow::bail!("stopped answering the core's reads of live details");
+            }
             _ = ticks.tick() => match sync.run().await {
                 Ok(round) => tracing::info!(?round, "round done"),
                 Err(e) => tracing::error!(error = format!("{e:#}"), "round stopped; nothing was retired"),
             },
         }
     }
-    server.await??;
+    let _ = stop.send(());
+    server
+        .await
+        .context("the server of live details failed")?
+        .context("answering the core's reads of live details")?;
     Ok(())
 }
 

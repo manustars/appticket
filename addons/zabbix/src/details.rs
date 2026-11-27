@@ -15,8 +15,14 @@ use crate::sync::host_of;
 use crate::zabbix::Zabbix;
 
 /// How long the add-on takes at most to answer a read: Zabbix's answers or an error, within the
-/// 2 seconds the core waits, which also count the reads the core makes of the add-on before.
-pub const DEADLINE: Duration = Duration::from_millis(1500);
+/// 2 seconds the core waits ([`TIMEOUT`](hd_addon_sdk::live_details::TIMEOUT)), less a margin
+/// for the reads the core makes of the add-on before and for the answer's way back.
+pub const DEADLINE: Duration =
+    hd_addon_sdk::live_details::TIMEOUT.saturating_sub(Duration::from_millis(500));
+const _: () = assert!(
+    !DEADLINE.is_zero(),
+    "the core's wait leaves the add-on no time"
+);
 
 /// The live details of the hosts of one Zabbix, read from it on each of the core's reads.
 pub struct Details {
@@ -27,11 +33,11 @@ pub struct Details {
 
 impl Details {
     /// The details from `zabbix`, whose calls should take at most [`DEADLINE`], with links into
-    /// the frontend at `frontend_url`.
+    /// the frontend at `frontend_url`, given without a final `/`.
     pub fn new(zabbix: Zabbix, frontend_url: &str) -> Details {
         Details {
             zabbix,
-            frontend: frontend_url.trim_end_matches('/').to_owned(),
+            frontend: frontend_url.to_owned(),
         }
     }
 
@@ -67,7 +73,10 @@ impl Details {
                     "output": ["interfaceid", "type"],
                     "hostids": [host],
                     // Only those that count for availability, however many the host has.
-                    "filter": {"status": 0, "type": ["0", "7", "12", "16", "20"]},
+                    "filter": {
+                        "status": item::ENABLED,
+                        "type": item::POLLING.iter().chain([&item::ACTIVE_CHECK]).collect::<Vec<_>>(),
+                    },
                 }),
             ),
             // As Zabbix's problem view shows them by default: neither suppressed nor symptoms.
@@ -101,15 +110,65 @@ pub fn router(details: Arc<Details>, verifier: Verifier) -> axum::Router {
     })
 }
 
+/// Zabbix's codes of item types and states (`item.type`, `item.status`), as its API writes them.
+mod item {
+    /// An enabled item.
+    pub const ENABLED: &str = "0";
+    pub const AGENT: &str = "0";
+    /// An active agent check, which uses no interface.
+    pub const ACTIVE_CHECK: &str = "7";
+    pub const IPMI: &str = "12";
+    pub const JMX: &str = "16";
+    pub const SNMP: &str = "20";
+    /// The types that poll through an interface.
+    pub const POLLING: [&str; 4] = [AGENT, IPMI, JMX, SNMP];
+}
+
+/// `host.status` of a host Zabbix monitors; `1` is disabled.
+const MONITORED: &str = "0";
+
+/// The availability of an interface or of the active checks (`0`, `1` and `2` in Zabbix's API).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+enum Reach {
+    #[serde(rename = "1")]
+    Available,
+    #[serde(rename = "2")]
+    NotAvailable,
+    /// `0`: not polled yet, or its result unknown.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+/// The type of an interface (`1` to `4` in Zabbix's API).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+enum InterfaceType {
+    #[serde(rename = "1")]
+    Agent,
+    #[serde(rename = "2")]
+    Snmp,
+    #[serde(rename = "3")]
+    Ipmi,
+    #[serde(rename = "4")]
+    Jmx,
+    #[serde(other)]
+    Other,
+}
+
+/// A yes-or-no field, which Zabbix's API writes `1` or `0`.
+fn flag<'de, D: serde::Deserializer<'de>>(value: D) -> Result<bool, D::Error> {
+    Ok(String::deserialize(value)? == "1")
+}
+
 /// A host as `host.get` answers it with the fields the live details need.
 #[derive(Debug, Deserialize)]
 struct RawHost {
     hostid: String,
-    /// 0 monitored, 1 not monitored (disabled).
+    /// [`MONITORED`], or disabled.
     status: String,
-    /// The availability of active agent checks: 0 unknown, 1 available, 2 not available.
+    /// The availability of the agent's active checks.
     #[serde(default)]
-    active_available: String,
+    active_available: Reach,
     #[serde(default)]
     interfaces: Vec<RawInterface>,
     /// An object with the fields asked for, or an empty array when the inventory is off.
@@ -120,26 +179,26 @@ struct RawHost {
 #[derive(Debug, Deserialize)]
 struct RawInterface {
     interfaceid: String,
-    /// 1 agent, 2 SNMP, 3 IPMI, 4 JMX.
     #[serde(rename = "type")]
-    kind: String,
-    /// 1 for the default interface of its type.
-    main: String,
-    /// 1 to connect through the IP, 0 through the DNS name.
-    useip: String,
+    kind: InterfaceType,
+    /// The default interface of its type.
+    #[serde(deserialize_with = "flag")]
+    main: bool,
+    /// Zabbix connects through the IP, else through the DNS name.
+    #[serde(deserialize_with = "flag")]
+    useip: bool,
     ip: String,
     dns: String,
-    /// 0 unknown, 1 available, 2 not available.
-    available: String,
+    available: Reach,
 }
 
 /// An enabled item of the host, as `item.get` answers it.
 #[derive(Debug, Deserialize)]
 struct RawItem {
-    /// 0 for items that use no interface.
+    /// `0` for items that use no interface.
     #[serde(default)]
     interfaceid: String,
-    /// 7 for an active agent check.
+    /// One of the codes in [`item`].
     #[serde(rename = "type")]
     kind: String,
 }
@@ -183,11 +242,6 @@ impl Availability {
     }
 }
 
-/// Item types that poll through an interface: agent, IPMI, JMX and SNMP.
-const POLLING_ITEM_TYPES: [&str; 4] = ["0", "12", "16", "20"];
-/// The item type of an active agent check.
-const ACTIVE_CHECK: &str = "7";
-
 /// The availability of `host`, whose enabled items are `items`. Zabbix 7.0 keeps it per
 /// interface, and the availability of active agent checks on the host; its frontend colours each
 /// interface type by the interfaces of that type an enabled item uses (all of them when none is
@@ -196,38 +250,37 @@ const ACTIVE_CHECK: &str = "7";
 /// is not available, some not available is partly available, and otherwise any unknown is
 /// unknown. A host with none of them is unknown, and a disabled host is disabled.
 fn availability(host: &RawHost, items: &[RawItem]) -> Availability {
-    if host.status != "0" {
+    if host.status != MONITORED {
         return Availability::Disabled;
     }
     let used: std::collections::HashSet<&str> = items
         .iter()
-        .filter(|i| POLLING_ITEM_TYPES.contains(&i.kind.as_str()))
+        .filter(|i| item::POLLING.contains(&i.kind.as_str()))
         .map(|i| i.interfaceid.as_str())
         .collect();
-    let mut counted: Vec<&str> = host
+    let mut counted: Vec<Reach> = host
         .interfaces
         .iter()
         .filter(|i| used.contains(i.interfaceid.as_str()))
-        .map(|i| i.available.as_str())
+        .map(|i| i.available)
         .collect();
-    if items.iter().any(|i| i.kind == ACTIVE_CHECK) {
-        counted.push(&host.active_available);
+    if items.iter().any(|i| i.kind == item::ACTIVE_CHECK) {
+        counted.push(host.active_available);
     }
     if counted.is_empty() {
-        counted = host
-            .interfaces
-            .iter()
-            .map(|i| i.available.as_str())
-            .collect();
+        counted = host.interfaces.iter().map(|i| i.available).collect();
     }
-    let not_available = counted.iter().filter(|a| **a == "2").count();
+    let not_available = counted
+        .iter()
+        .filter(|a| **a == Reach::NotAvailable)
+        .count();
     if counted.is_empty() {
         Availability::Unknown
     } else if not_available == counted.len() {
         Availability::NotAvailable
     } else if not_available > 0 {
         Availability::PartlyAvailable
-    } else if counted.iter().all(|a| *a == "1") {
+    } else if counted.iter().all(|a| *a == Reach::Available) {
         Availability::Available
     } else {
         Availability::Unknown
@@ -246,19 +299,22 @@ const SEVERITIES: [&str; 6] = [
 /// High and Disaster.
 const SERIOUS: u8 = 4;
 
-/// Interface types in the order Zabbix's frontend picks the one it shows: agent, SNMP, JMX, IPMI.
-const INTERFACE_PRIORITY: [&str; 4] = ["1", "2", "4", "3"];
+/// Interface types in the order Zabbix's frontend picks the one it shows.
+const INTERFACE_PRIORITY: [InterfaceType; 4] = [
+    InterfaceType::Agent,
+    InterfaceType::Snmp,
+    InterfaceType::Jmx,
+    InterfaceType::Ipmi,
+];
 
 /// The address of the host's main interface: the default one of the first type in
 /// [`INTERFACE_PRIORITY`] it has, as its IP or DNS name, whichever Zabbix connects through.
 fn main_interface(host: &RawHost) -> Option<&str> {
     let interface = INTERFACE_PRIORITY.iter().find_map(|kind| {
         let of_kind = || host.interfaces.iter().filter(move |i| i.kind == *kind);
-        of_kind()
-            .find(|i| i.main == "1")
-            .or_else(|| of_kind().next())
+        of_kind().find(|i| i.main).or_else(|| of_kind().next())
     })?;
-    let address = if interface.useip == "1" {
+    let address = if interface.useip {
         &interface.ip
     } else {
         &interface.dns
@@ -467,90 +523,117 @@ mod tests {
         (details.fields[0].value.clone(), details.state)
     }
 
-    /// A case: what it is, the interfaces, the active checks' availability, the enabled items
-    /// `(interface, type)`, and the availability and state expected.
-    type Case = (
-        &'static str,
-        Vec<Value>,
-        &'static str,
-        Vec<(&'static str, &'static str)>,
-        (&'static str, DetailState),
-    );
+    /// A monitored host's interfaces, the availability of its active checks and its enabled
+    /// items, with the availability and state it should have.
+    struct Case {
+        what: &'static str,
+        interfaces: Vec<Value>,
+        active: &'static str,
+        /// `(interface, item type)`.
+        enabled: Vec<(&'static str, &'static str)>,
+        availability: &'static str,
+        state: DetailState,
+    }
 
     #[test]
     fn the_availability_counts_the_interfaces_enabled_items_use_and_the_active_checks() {
         use DetailState::*;
-        let cases: [Case; 10] = [
-            ("no interface", vec![], "0", vec![], ("Unknown", Warning)),
-            (
-                "polled and answering",
-                vec![interface("1", "1", "1")],
-                "0",
-                vec![("1", "0")],
-                ("Available", Ok),
-            ),
-            (
-                "an SNMP interface no item uses is left out",
-                vec![interface("1", "1", "1"), interface("2", "2", "0")],
-                "0",
-                vec![("1", "0")],
-                ("Available", Ok),
-            ),
-            (
-                "the only polled interface does not answer",
-                vec![interface("1", "1", "2"), interface("2", "2", "0")],
-                "0",
-                vec![("1", "0")],
-                ("Not available", Problem),
-            ),
-            (
-                "one of two polled interfaces does not answer",
-                vec![interface("1", "1", "1"), interface("2", "2", "2")],
-                "0",
-                vec![("1", "0"), ("2", "20")],
-                ("Partly available", Warning),
-            ),
-            (
-                "no enabled item: every interface counts",
-                vec![interface("1", "1", "1"), interface("2", "4", "0")],
-                "0",
-                vec![],
-                ("Unknown", Warning),
-            ),
-            (
-                "not polled yet",
-                vec![interface("1", "1", "0")],
-                "0",
-                vec![("1", "0")],
-                ("Unknown", Warning),
-            ),
-            (
-                "active checks only, whose heartbeat stopped",
-                vec![],
-                "2",
-                vec![("0", "7")],
-                ("Not available", Problem),
-            ),
-            (
-                "active checks answering beside an agent interface no item uses",
-                vec![interface("1", "1", "0")],
-                "1",
-                vec![("0", "7")],
-                ("Available", Ok),
-            ),
-            (
-                "the active checks' availability without an active check is left out",
-                vec![interface("1", "1", "1")],
-                "2",
-                vec![("1", "0"), ("0", "2")],
-                ("Available", Ok),
-            ),
+        let cases = [
+            Case {
+                what: "no interface",
+                interfaces: vec![],
+                active: "0",
+                enabled: vec![],
+                availability: "Unknown",
+                state: Warning,
+            },
+            Case {
+                what: "polled and answering",
+                interfaces: vec![interface("1", "1", "1")],
+                active: "0",
+                enabled: vec![("1", "0")],
+                availability: "Available",
+                state: Ok,
+            },
+            Case {
+                what: "an SNMP interface no item uses is left out",
+                interfaces: vec![interface("1", "1", "1"), interface("2", "2", "0")],
+                active: "0",
+                enabled: vec![("1", "0")],
+                availability: "Available",
+                state: Ok,
+            },
+            Case {
+                what: "the only polled interface does not answer",
+                interfaces: vec![interface("1", "1", "2"), interface("2", "2", "0")],
+                active: "0",
+                enabled: vec![("1", "0")],
+                availability: "Not available",
+                state: Problem,
+            },
+            Case {
+                what: "one of two polled interfaces does not answer",
+                interfaces: vec![interface("1", "1", "1"), interface("2", "2", "2")],
+                active: "0",
+                enabled: vec![("1", "0"), ("2", "20")],
+                availability: "Partly available",
+                state: Warning,
+            },
+            Case {
+                what: "one polled interface does not answer, the other is unknown",
+                interfaces: vec![interface("1", "1", "2"), interface("2", "2", "0")],
+                active: "0",
+                enabled: vec![("1", "0"), ("2", "20")],
+                availability: "Partly available",
+                state: Warning,
+            },
+            Case {
+                what: "no enabled item: every interface counts",
+                interfaces: vec![interface("1", "1", "1"), interface("2", "4", "0")],
+                active: "0",
+                enabled: vec![],
+                availability: "Unknown",
+                state: Warning,
+            },
+            Case {
+                what: "not polled yet",
+                interfaces: vec![interface("1", "1", "0")],
+                active: "0",
+                enabled: vec![("1", "0")],
+                availability: "Unknown",
+                state: Warning,
+            },
+            Case {
+                what: "active checks only, whose heartbeat stopped",
+                interfaces: vec![],
+                active: "2",
+                enabled: vec![("0", "7")],
+                availability: "Not available",
+                state: Problem,
+            },
+            Case {
+                what: "active checks answering beside an agent interface no item uses",
+                interfaces: vec![interface("1", "1", "0")],
+                active: "1",
+                enabled: vec![("0", "7")],
+                availability: "Available",
+                state: Ok,
+            },
+            Case {
+                what: "the active checks' availability without an active check is left out",
+                interfaces: vec![interface("1", "1", "1")],
+                active: "2",
+                enabled: vec![("1", "0"), ("0", "2")],
+                availability: "Available",
+                state: Ok,
+            },
         ];
-        for (case, interfaces, active, enabled, (value, state)) in cases {
+        for case in cases {
             assert_eq!(
-                availability_of(&interfaces, active, &enabled),
-                (value.to_owned(), state),
-                "{case}"
+                availability_of(&case.interfaces, case.active, &case.enabled),
+                (case.availability.to_owned(), case.state),
+                "{}",
+                case.what
             );
         }
     }

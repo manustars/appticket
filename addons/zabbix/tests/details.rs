@@ -124,6 +124,87 @@ async fn an_asset_of_a_host_shows_its_availability_problems_interface_and_os() {
     zabbix.clean_up().await;
 }
 
+/// An asset the customer had, which agents linked the host to, shows the host's live details as
+/// those of an asset the add-on supplied do.
+#[tokio::test]
+#[ignore = "needs the Zabbix in containers and the test database"]
+async fn an_asset_the_add_on_is_linked_to_shows_the_host_s_details() {
+    let (listener, url) = common::listener().await;
+    let core = Core::start_at(&url).await;
+    let mut zabbix = TestZabbix::connect().await;
+    common::serve(listener, zabbix.details(), &core.event_secret);
+    let old_quay = core.customer("Old Quay").await;
+    let server = core.asset_kind("Server").await;
+    let by_hand = core
+        .create(
+            &format!("/api/customers/{old_quay}/assets"),
+            json!({"kind_id": server, "name": "Quay storage", "serial_number": "SN-7710"}),
+        )
+        .await;
+    let group = zabbix.group("Old Quay").await;
+    let host = zabbix
+        .host(
+            "nas-01",
+            &[&group],
+            json!({"interfaces": [{"type": 1, "main": 1, "useip": 0, "ip": "",
+                                   "dns": "nas-01.oldquay.example.com", "port": "10050"}],
+                   "inventory_mode": 0,
+                   "inventory": {"serialno_a": "SN-7710", "os": "FreeBSD 14"}}),
+        )
+        .await;
+    core.reference(old_quay, &zabbix.name("Old Quay")).await;
+    let addon = zabbix.addon(&core, servers());
+    let round = addon.run().await.unwrap();
+    assert_eq!((round.proposed, round.refused), (1, 0), "{round:?}");
+    let proposals = core
+        .get(&format!("/api/customers/{old_quay}/asset-link-proposals"))
+        .await;
+    let proposal = proposals[0]["id"].as_str().unwrap();
+    let (status, json) = core
+        .call(
+            "POST",
+            &format!("/api/asset-link-proposals/{proposal}/accept"),
+            None,
+        )
+        .await;
+    assert!(status.is_success(), "{json}");
+
+    let read = core
+        .get(&format!("/api/customers/{old_quay}/assets/live-details"))
+        .await;
+    assert_eq!(read[0]["asset_id"], json!(by_hand), "{read}");
+    assert_eq!(
+        live_details(&core, old_quay).await,
+        [Some((
+            "warning".to_owned(),
+            vec![
+                field("Availability", "Disponibilità", "Unknown"),
+                field("Open problems", "Problemi aperti", "0"),
+                field(
+                    "Main interface",
+                    "Interfaccia principale",
+                    "nas-01.oldquay.example.com"
+                ),
+                field("OS", "Sistema operativo", "FreeBSD 14"),
+            ],
+            vec![
+                (
+                    "Host in Zabbix".to_owned(),
+                    format!("{}/hostinventories.php?hostid={host}", zabbix_url()),
+                ),
+                (
+                    "Problems in Zabbix".to_owned(),
+                    format!(
+                        "{}/zabbix.php?action=problem.view&filter_set=1&hostids%5B%5D={host}",
+                        zabbix_url()
+                    ),
+                ),
+            ],
+        ))]
+    );
+    zabbix.clean_up().await;
+}
+
 /// Zabbix marks an interface not available once its polls have failed for a while (45 seconds by
 /// default, after it learned of the item): this test waits for it.
 #[tokio::test]
