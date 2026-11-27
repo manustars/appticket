@@ -3,6 +3,7 @@
 // its own site.
 import { useCallback, useId, useState, type FormEvent } from 'react'
 import {
+  acceptAssetLinkProposal,
   createAsset,
   discardAssetLinkProposal,
   listAssetKinds,
@@ -33,16 +34,30 @@ export function WhereItIs({ asset: a }: { asset: Asset }) {
   )
 }
 
-/** The add-on an asset comes from, when one supplies it, with its reference there. */
+/**
+ * The add-on an asset comes from, when one supplies it, and the other add-ons linked to it, each
+ * with its reference there.
+ */
 export function AssetSource({ asset: a }: { asset: Asset }) {
   const { t } = useI18n()
-  if (!a.source_addon) return null
   return (
     <>
-      {' '}
-      <span className="marker source" title={a.reference ?? undefined}>
-        {t('assets.fromAddon', { addon: a.source_addon })}
-      </span>
+      {a.source_addon && (
+        <>
+          {' '}
+          <span className="marker source" title={a.reference ?? undefined}>
+            {t('assets.fromAddon', { addon: a.source_addon })}
+          </span>
+        </>
+      )}
+      {a.linked_addons.map((l) => (
+        <span key={l.addon}>
+          {' '}
+          <span className="marker linked" title={l.reference}>
+            {t('assets.linkedAddon', { addon: l.addon })}
+          </span>
+        </span>
+      ))}
     </>
   )
 }
@@ -106,12 +121,14 @@ interface Props {
 /**
  * The open link proposals on the customer's assets: an add-on would create an asset with the same
  * serial number or name as one the customer has, and the core asked the agents instead. Every agent
- * sees them; those who manage the catalog discard them, and the add-on then creates its own asset.
+ * sees them; those who manage the catalog accept them, linking the add-on to that asset, or discard
+ * them, and the add-on then creates its own asset.
  */
-function LinkProposals({ proposals, readOnly, busy, onDiscard }: {
+function LinkProposals({ proposals, readOnly, busy, onAccept, onDiscard }: {
   proposals: AssetLinkProposal[]
   readOnly: boolean
   busy: boolean
+  onAccept: (p: AssetLinkProposal) => void
   onDiscard: (p: AssetLinkProposal) => void
 }) {
   const { t, rich } = useI18n()
@@ -141,6 +158,11 @@ function LinkProposals({ proposals, readOnly, busy, onDiscard }: {
             </span>
             {!readOnly && (
               <div className="proposal-actions">
+                <button type="button" disabled={busy}
+                  aria-label={t('assets.acceptLinkNamed', { name: p.name })}
+                  onClick={() => onAccept(p)}>
+                  {t('assets.acceptLink')}
+                </button>
                 <button type="button" className="quiet" disabled={busy}
                   aria-label={t('assets.discardLinkNamed', { name: p.name })}
                   onClick={() => onDiscard(p)}>
@@ -222,6 +244,13 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
     void action.run(() => retireAsset(a.id)).then(async (ok) => { if (ok) await assets.reload() })
   }
 
+  function acceptLink(p: AssetLinkProposal) {
+    if (!window.confirm(t('assets.confirmAcceptLink', { addon: p.addon, asset: p.asset_name, reference: p.reference }))) return
+    void action.run(() => acceptAssetLinkProposal(p.id)).then(async (ok) => {
+      if (ok) await Promise.all([proposals.reload(), assets.reload()])
+    })
+  }
+
   function discardLink(p: AssetLinkProposal) {
     if (!window.confirm(t('assets.confirmDiscardLink', { addon: p.addon, name: p.name, asset: p.asset_name }))) return
     void action.run(() => discardAssetLinkProposal(p.id)).then(async (ok) => { if (ok) await proposals.reload() })
@@ -235,7 +264,8 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
       <Problem error={kinds.error} />
       <Problem error={proposals.error} />
       {proposals.data && (
-        <LinkProposals proposals={proposals.data} readOnly={readOnly} busy={action.busy} onDiscard={discardLink} />
+        <LinkProposals proposals={proposals.data} readOnly={readOnly} busy={action.busy}
+          onAccept={acceptLink} onDiscard={discardLink} />
       )}
       {assets.data?.length === 0 && <p className="empty">{t('assets.empty')}</p>}
       {assets.data && assets.data.length > 0 && (
@@ -352,6 +382,7 @@ export function CustomerAssets({ customer: c, readOnly, onSignedOut }: Props) {
         </table>
       )}
       {assets.data?.some((a) => a.source_addon) && <p className="hint">{t('assets.suppliedHint')}</p>}
+      {assets.data?.some((a) => a.linked_addons.length > 0) && <p className="hint">{t('assets.linkedHint')}</p>}
       {editing && <form id={`${id}-edit`} onSubmit={save} />}
       {!readOnly && kinds.data?.length === 0 && (
         <p className="hint">
