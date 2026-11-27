@@ -169,7 +169,7 @@ sentence saying which scope is missing.
 | `POST /api/addon/tickets/{number}/notes` | `tickets:write` | Adds an internal note to a ticket. |
 | `POST /api/addon/tickets/{number}/resolve` | `tickets:write` | Resolves a ticket the add-on opened. |
 | `PUT /api/addon/names` | `names:write` | Replaces the name list of the add-on's system, which agents pick customers' external references from. |
-| `PUT /api/addon/conflicts` | `conflicts:write` | Replaces the list of conflicts the add-on reports, which administrators read in its state. |
+| `PUT /api/addon/conflicts` | `conflicts:write` | Replaces the list of conflicts the add-on reports, which those who manage add-ons read in its state. |
 
 A requester has one or more e-mail addresses, each belonging to exactly one requester. A ticket's
 `requester` carries them all in `addresses`, the first registered first; `reply_to` is the address
@@ -327,7 +327,7 @@ manage customers pick a customer's external references from them rather than typ
   the new system, and remove the old references once they no longer need them.
 - An external reference covers the names nested in it too, unless one of them is an external
   reference of another customer, which then covers it and the names nested in it. The add-on's
-  state, where administrators see their add-ons, lists the names of its latest list that no
+  state, where those who manage add-ons see them, lists the names of its latest list that no
   external reference covers, so that agents give them a customer. A name an offboarded customer
   has is covered.
 
@@ -335,7 +335,7 @@ manage customers pick a customer's external references from them rather than typ
 
 An add-on with `conflicts:write` reports what of its system it does not import because no
 external reference covers it or two do, such as a host in two groups that two customers have,
-each with a sentence an administrator can act on:
+each with a sentence those who manage add-ons can act on:
 
 ```json
 { "conflicts": [
@@ -348,8 +348,8 @@ each with a sentence an administrator can act on:
   it in the add-on's state, in the order sent, also while the add-on is switched off. Send it
   again whenever the conflicts change, and an empty list once there are none.
 - A `sentence` is written in every language of the agents' UI, as a rationale is
-  (`GET /api/addon/whoami` lists them); a single string is taken as English. Administrators read
-  it in their language, else in English, else in the first language given.
+  (`GET /api/addon/whoami` lists them); a single string is taken as English. Those who manage
+  add-ons read it in their language, else in English, else in the first language given.
 - Trimmed, a sentence is at most 500 characters in each of at most 4 languages, without control
   characters; empty ones are dropped, and at least one is left. A list holds at most 1000
   conflicts, in at most 8 MiB of JSON, which the largest list fits written as UTF-8 rather than

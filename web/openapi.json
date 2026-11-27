@@ -264,7 +264,7 @@
           "add-ons"
         ],
         "summary": "Replaces the list of conflicts the add-on reports",
-        "description": "Replaces the list of conflicts the add-on reports, such as a host of its system in two groups that two customers have as external references, which it therefore does not import: administrators read the latest list in the add-on's state, also while the add-on is switched off, and an empty list says there are none. Each conflict has a sentence an administrator can act on, one per language of the agents' UI or a single one taken as English, at most 500 characters once trimmed in each of at most 4 languages, without control characters. At most 1000 conflicts, in at most 8 MiB of JSON (413 above), which the largest list fits written as UTF-8. A list with a conflict that does not fit is refused whole, and the list before stays. Scope `conflicts:write`.",
+        "description": "Replaces the list of conflicts the add-on reports, such as a host of its system in two groups that two customers have as external references, which it therefore does not import: those who manage add-ons read the latest list in the add-on's state, also while the add-on is switched off, and an empty list says there are none. Each conflict has a sentence those who manage add-ons can act on, one per language of the agents' UI or a single one taken as English, at most 500 characters once trimmed in each of at most 4 languages, without control characters. At most 1000 conflicts, in at most 8 MiB of JSON (413 above), which the largest list fits written as UTF-8. A list with a conflict that does not fit is refused whole, and the list before stays. Scope `conflicts:write`.",
         "operationId": "replace_conflicts",
         "requestBody": {
           "content": {
@@ -881,7 +881,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Every add-on with its deliveries; never its token or event secret.",
+        "summary": "Every add-on with its deliveries and its state; never its token or event secret.",
         "operationId": "list_addons",
         "responses": {
           "200": {
@@ -890,7 +890,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/AddonRow"
+                    "$ref": "#/components/schemas/AddonState"
                   }
                 }
               }
@@ -6825,17 +6825,6 @@
           "failing"
         ],
         "properties": {
-          "conflicts": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ConflictList",
-                "description": "The conflicts the add-on last reported; none until it reports any."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "enabled": {
             "type": "boolean"
           },
@@ -6861,17 +6850,6 @@
           "name": {
             "type": "string"
           },
-          "names": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/NameListState",
-                "description": "The name list the add-on last sent, with the names no external reference covers; none\nuntil it sends one."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "pending": {
             "type": "integer",
             "format": "int64",
@@ -6888,6 +6866,41 @@
             "type": "string"
           }
         }
+      },
+      "AddonState": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AddonRow"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "conflicts": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ConflictList",
+                    "description": "The conflicts the add-on last reported; none until it reports any."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "names": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/NameListState",
+                    "description": "The name list the add-on last sent, with the names no external reference covers; none\nuntil it sends one."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "An add-on with its state, as those who manage add-ons see it: its deliveries, the names of its\nsystem no external reference covers and the conflicts it reports."
       },
       "AddonTicketOpened": {
         "type": "object",
@@ -7490,7 +7503,7 @@
       },
       "ConflictList": {
         "type": "object",
-        "description": "An add-on's latest list of conflicts, as administrators read it in the add-on's state.",
+        "description": "An add-on's latest list of conflicts, as those who manage add-ons read it in the add-on's state.",
         "required": [
           "updated_at",
           "conflicts"
@@ -8778,15 +8791,15 @@
       },
       "NameListState": {
         "type": "object",
-        "description": "An add-on's latest name list as administrators see it in the add-on's state: the names they\nstill have to give a customer.",
+        "description": "An add-on's latest name list as those who manage add-ons see it in the add-on's state: the names\nagents still have to give a customer.",
         "required": [
           "system",
           "updated_at",
-          "listed",
+          "name_count",
           "uncovered"
         ],
         "properties": {
-          "listed": {
+          "name_count": {
             "type": "integer",
             "description": "How many names the list holds.",
             "minimum": 0
@@ -8930,7 +8943,7 @@
             "description": "For triage: the inbox message."
           },
           "rationale": {
-            "$ref": "#/components/schemas/RationaleInput",
+            "$ref": "#/components/schemas/SentenceInput",
             "description": "Why the add-on suggests it: one sentence per UI language (`{\"en\": \"...\", \"it\": \"...\"}`,\nsee `languages` in whoami), or a single English sentence."
           },
           "ticket_number": {
@@ -9350,19 +9363,6 @@
           }
         }
       },
-      "RationaleInput": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/BTreeMap",
-            "description": "One sentence per language."
-          },
-          {
-            "type": "string",
-            "description": "A single sentence, taken as English."
-          }
-        ],
-        "description": "A rationale as an add-on sends it."
-      },
       "RelatedTicket": {
         "type": "object",
         "required": [
@@ -9396,7 +9396,7 @@
         "properties": {
           "sentence": {
             "$ref": "#/components/schemas/SentenceInput",
-            "description": "What is not imported and why, so that an administrator can act on it: written in every\nlanguage of the agents' UI, as a rationale is, or a single sentence taken as English."
+            "description": "What is not imported and why, so that those who manage add-ons can act on it: written in\nevery language of the agents' UI, as a rationale is, or a single sentence taken as English."
           }
         }
       },
@@ -9412,7 +9412,7 @@
             "items": {
               "$ref": "#/components/schemas/ReportedConflict"
             },
-            "description": "The conflicts, in the order administrators read them; none when there are none."
+            "description": "The conflicts, in the order those who manage add-ons read them; none when there are none."
           }
         }
       },
@@ -9792,7 +9792,7 @@
             "description": "A single sentence, taken as English."
           }
         ],
-        "description": "A sentence as an add-on sends it."
+        "description": "Sentences as an add-on sends them."
       },
       "Service": {
         "type": "object",
@@ -10566,11 +10566,18 @@
         "type": "object",
         "description": "A name of a name list that no external reference covers.",
         "required": [
-          "name"
+          "name",
+          "depth"
         ],
         "properties": {
+          "depth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How deep it is nested: 0 at the top, one more at each level below."
+          },
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "The name, as the add-on spells it."
           },
           "parent": {
             "type": [

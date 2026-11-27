@@ -391,10 +391,10 @@ impl Client {
 
     /// Replaces the list of conflicts the add-on reports, such as a host of its system in two
     /// groups that two customers have as external references, which it therefore does not
-    /// import: administrators read the latest list in the add-on's state, also while the add-on
-    /// is switched off, and an empty list says there are none. The core refuses the whole list
-    /// (409) when a conflict has no sentence or one that does not fit the limits of the add-on
-    /// contract, and the list before stays. Scope `conflicts:write`.
+    /// import: those who manage add-ons read the latest list in the add-on's state, also while
+    /// the add-on is switched off, and an empty list says there are none. The core refuses the
+    /// whole list (409) when a conflict has no sentence or one that does not fit the limits of the
+    /// add-on contract, and the list before stays. Scope `conflicts:write`.
     pub async fn replace_conflicts(&self, conflicts: &[Conflict]) -> Result<(), Error> {
         #[derive(Serialize)]
         struct Conflicts<'a> {

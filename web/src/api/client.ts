@@ -3,7 +3,7 @@ import type { components } from './schema'
 
 type Schemas = components['schemas']
 export type Activity = Schemas['Activity']
-export type AddonRow = Schemas['AddonRow']
+export type AddonState = Schemas['AddonState']
 export type NameListState = Schemas['NameListState']
 export type ConflictList = Schemas['ConflictList']
 export type Agent = Schemas['Agent']
@@ -693,7 +693,7 @@ export async function makeDefaultRole(id: string): Promise<void> {
   await call('POST', `${rolePath(id)}/default`)
 }
 
-export function listAddons(): Promise<AddonRow[]> {
+export function listAddons(): Promise<AddonState[]> {
   return json('GET', '/api/admin/addons')
 }
 

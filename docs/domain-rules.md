@@ -253,10 +253,12 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   system. An external reference covers the names nested in it too, unless one of them is an
   external reference of another customer, which then covers it and the names nested in it.
   Anything of the external system that no external reference covers, or that two cover, is not
-  imported: the add-on reports it as a conflict, with a sentence an administrator can act on,
-  replacing its whole list of conflicts. The add-on's state, which only those who manage add-ons
-  read, shows the latest list, also while the add-on is switched off, and the names of its latest
-  name list that no external reference covers; a name an offboarded customer has is covered.
+  imported: the add-on reports it as a conflict, with a sentence that those who manage add-ons can
+  act on, replacing its whole list of conflicts. The add-on's state, which only those who manage
+  add-ons read, shows the latest list, also while the add-on is switched off, and the names of its
+  latest name list that no external reference covers. A name an offboarded customer has is
+  covered, and so are the names nested in it, even inside the name of an active customer: they
+  are not listed, and nothing of them is imported for either customer.
 - The live details of an asset come from its source and each add-on it is linked to, asked with
   that add-on's reference when the asset is shown, and only for an active asset of a customer
   that is not offboarded; when an add-on does not answer within 2 seconds, answers with an error

@@ -6,7 +6,8 @@
 //! - [`proposals`]: what an add-on can propose to the agents;
 //! - [`tickets`]: the tickets an add-on opens;
 //! - [`names`]: the names of the add-on's system that agents pick external references from;
-//! - [`conflicts`]: the conflicts the add-on reports, which administrators read in its state;
+//! - [`conflicts`]: the conflicts the add-on reports, which those who manage add-ons read in its
+//!   state;
 //! - [`live_details`]: what the add-on answers when the core asks for an asset's live details;
 //! - `server` (feature `axum`): a ready `/events` endpoint that verifies events for a handler,
 //!   and a ready `/assets/{reference}` endpoint that verifies the core's reads of live details.

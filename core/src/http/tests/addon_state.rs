@@ -1,4 +1,4 @@
-//! An add-on's state, where administrators see their add-ons: the names of its system no external
+//! An add-on's state, where those who manage add-ons see them: the names of its system no external
 //! reference covers, and the conflicts the add-on reports with its token.
 
 use axum::http::StatusCode;
@@ -10,7 +10,7 @@ use crate::addons::{CONFLICTS_WRITE, NAMES_WRITE};
 use crate::roles::Permission;
 use crate::testing;
 
-/// The add-on called `name` as administrators read it.
+/// The add-on called `name` as those who manage add-ons read it.
 async fn state(api: &Client, name: &str) -> Value {
     let addons = api.get("/api/admin/addons").await;
     addons
@@ -23,7 +23,7 @@ async fn state(api: &Client, name: &str) -> Value {
 }
 
 #[sqlx::test]
-async fn administrators_read_the_names_no_external_reference_covers(db: PgPool) {
+async fn those_who_manage_addons_read_the_names_no_external_reference_covers(db: PgPool) {
     let api = Client::new(&db).await;
     let brightfield = testing::customer(&db, "Brightfield").await;
     let harbor = testing::customer(&db, "Harbor Lane").await;
@@ -48,16 +48,16 @@ async fn administrators_read_the_names_no_external_reference_covers(db: PgPool) 
     let names = &state(&api, "watchtower").await["names"];
     assert_eq!(names["system"], "Watchtower");
     assert!(names["updated_at"].is_string(), "{names}");
-    assert_eq!(names["listed"], 6);
+    assert_eq!(names["name_count"], 6);
     assert_eq!(
         names["uncovered"],
         json!([
-            {"name": "Brightfield", "parent": null},
-            {"name": "Brightfield/Docks", "parent": "Brightfield"},
-            {"name": "Brightfield/Docks/Crane", "parent": "Brightfield/Docks"},
-            {"name": "Brightfield/Offices", "parent": "Brightfield"},
-            {"name": "Unclaimed", "parent": null},
-            {"name": "Unclaimed/Lab", "parent": "Unclaimed"}
+            {"name": "Brightfield", "parent": null, "depth": 0},
+            {"name": "Brightfield/Docks", "parent": "Brightfield", "depth": 1},
+            {"name": "Brightfield/Docks/Crane", "parent": "Brightfield/Docks", "depth": 2},
+            {"name": "Brightfield/Offices", "parent": "Brightfield", "depth": 1},
+            {"name": "Unclaimed", "parent": null, "depth": 0},
+            {"name": "Unclaimed/Lab", "parent": "Unclaimed", "depth": 1}
         ])
     );
 
@@ -75,14 +75,14 @@ async fn administrators_read_the_names_no_external_reference_covers(db: PgPool) 
     assert_eq!(
         state(&api, "watchtower").await["names"]["uncovered"],
         json!([
-            {"name": "Unclaimed", "parent": null},
-            {"name": "Unclaimed/Lab", "parent": "Unclaimed"}
+            {"name": "Unclaimed", "parent": null, "depth": 0},
+            {"name": "Unclaimed/Lab", "parent": "Unclaimed", "depth": 1}
         ])
     );
 }
 
 #[sqlx::test]
-async fn an_addon_reports_its_conflicts_and_administrators_read_the_latest(db: PgPool) {
+async fn an_addon_reports_its_conflicts_and_those_who_manage_addons_read_the_latest(db: PgPool) {
     let api = Client::new(&db).await;
     let watchtower = addon(&db, &api, "watchtower", &[CONFLICTS_WRITE]).await;
     assert_eq!(state(&api, "watchtower").await["conflicts"], Value::Null);

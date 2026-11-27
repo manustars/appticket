@@ -1,18 +1,18 @@
 //! The conflicts an add-on reports, such as a host of a monitoring tool in two groups that two
 //! customers have as external references, which the add-on therefore does not import: an add-on
 //! with the scope `conflicts:write` sends the whole list with [`crate::Client::replace_conflicts`],
-//! and administrators read the latest one in the add-on's state.
+//! and those who manage add-ons read the latest one in the add-on's state.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-/// A conflict, with a sentence an administrator can act on: what is not imported and why.
+/// A conflict, with a sentence those who manage add-ons can act on: what is not imported and why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Conflict {
-    /// One sentence per language of the agents' UI, keyed by language tag (`{"en": …, "it": …}`),
-    /// within the limits of the add-on contract (`sdk/README.md`); administrators whose language
-    /// is missing read the English one.
+    /// One sentence per language of the agents' UI, keyed by language tag
+    /// (`{"en": …, "it": …}`), within the limits of the add-on contract (`sdk/README.md`);
+    /// readers whose language is missing read the English one.
     pub sentence: BTreeMap<String, String>,
 }
 
