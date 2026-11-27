@@ -93,6 +93,18 @@ async fn an_addon_supplies_updates_and_retires_its_assets_through_the_api(db: Pg
             .await;
         assert_eq!(status, StatusCode::NO_CONTENT, "{json}");
     }
+    let (status, json) = watchtower
+        .call(
+            "PUT",
+            &format!("/api/addon/assets/{id}"),
+            Some(json!({"kind": "Laptop", "name": "PC-0044"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert_eq!(
+        json["error"],
+        "PC-0043 is retired: supplying it again with its reference brings it back."
+    );
     let listed = watchtower
         .get(&format!("/api/addon/customers/{brightfield}/assets"))
         .await;
@@ -101,7 +113,7 @@ async fn an_addon_supplies_updates_and_retires_its_assets_through_the_api(db: Pg
         .get(&format!("/api/customers/{brightfield}/assets"))
         .await;
     assert_eq!(
-        (&shown[0]["source_addon"], &shown[0]["source_ref"]),
+        (&shown[0]["source_addon"], &shown[0]["reference"]),
         (&json!("watchtower"), &json!("host-1042")),
         "agents see where it comes from"
     );
@@ -258,11 +270,22 @@ async fn an_addon_is_refused_a_holder_and_the_assets_it_is_not_the_source_of(db:
         assert_eq!(status, StatusCode::CONFLICT, "{method} {uri}: {json}");
         assert_eq!(json["error"], sentence, "{method} {uri}");
     }
-    for asset in [by_hand.to_string(), theirs] {
+    for (asset, sentence) in [
+        (
+            by_hand.to_string(),
+            "PC-0001 was entered by hand: an add-on changes only the assets it is the source of.",
+        ),
+        (
+            theirs,
+            "PC-0007 comes from the add-on netscope: an add-on changes only the assets it is the \
+             source of.",
+        ),
+    ] {
         let (status, json) = watchtower
             .call("POST", &format!("/api/addon/assets/{asset}/retire"), None)
             .await;
         assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["error"], sentence);
     }
     let (status, _) = watchtower
         .call(

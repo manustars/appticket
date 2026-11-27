@@ -81,7 +81,7 @@
         "tags": [
           "add-ons"
         ],
-        "summary": "Updates an asset the add-on is the source of, as supplying it again does; an asset entered by\nhand or supplied by another add-on is refused. Scope `catalog:write`.",
+        "summary": "Updates an asset the add-on is the source of, as supplying it again does, but refuses a retired\none, which only supplying it again with its reference brings back; an asset entered by\nhand or supplied by another add-on is refused. Scope `catalog:write`.",
         "operationId": "update_supplied_asset",
         "parameters": [
           {
@@ -6430,6 +6430,13 @@
           "name": {
             "type": "string"
           },
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reference that add-on knows it by, which is not an external reference."
+          },
           "retired_at": {
             "type": [
               "string",
@@ -6460,13 +6467,6 @@
               "null"
             ],
             "description": "The add-on it came from, when an add-on supplies it: only that add-on changes its kind,\nname, serial number and site, and retires it."
-          },
-          "source_ref": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "That add-on's own reference for it."
           }
         }
       },

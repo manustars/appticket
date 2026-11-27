@@ -32,8 +32,8 @@ pub struct Asset {
     /// The add-on it came from, when an add-on supplies it: only that add-on changes its kind,
     /// name, serial number and site, and retires it.
     pub source_addon: Option<String>,
-    /// That add-on's own reference for it.
-    pub source_ref: Option<String>,
+    /// The reference that add-on knows it by, which is not an external reference.
+    pub reference: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub retired_at: Option<OffsetDateTime>,
 }
@@ -92,7 +92,7 @@ impl From<AssetRow> for Asset {
             }),
             at_site: site(row.at_site_id, row.at_site_name),
             source_addon: row.source_addon,
-            source_ref: row.source_ref,
+            reference: row.source_ref,
             retired_at: row.retired_at,
         }
     }
@@ -190,7 +190,8 @@ pub async fn assets_of(db: &PgPool, customer: Uuid) -> Result<Vec<Asset>> {
     Ok(rows.into_iter().map(Asset::from).collect())
 }
 
-/// The asset.
+/// One asset, retired or not, with its site, holder and source, as [`assets_of`] lists it; such
+/// as an asset an add-on has just supplied, to answer it with.
 pub async fn asset(db: &PgPool, id: Uuid) -> Result<Asset> {
     let row: AssetRow = sqlx::query_as(select_assets!("WHERE a.id = $1"))
         .bind(id)
@@ -397,11 +398,11 @@ pub(crate) async fn update_asset_in(
             stored.site_id,
         )
     {
-        return rule(format!(
-            "{} comes from the add-on {addon}: only its source changes its kind, name, serial \
-             number and site, while agents give it a holder",
-            stored.name
-        ));
+        return only_its_source(
+            &stored.name,
+            addon,
+            "changes its kind, name, serial number and site, while agents give it a holder",
+        );
     }
     sqlx::query(
         "UPDATE assets SET kind_id = $2, name = $3, serial_number = $4, site_id = $5,
@@ -494,31 +495,41 @@ async fn kind_exists<'e>(db: impl sqlx::PgExecutor<'e>, kind: Uuid) -> Result<()
 /// its holder. An asset an add-on supplied is retired by that add-on only, when it leaves the
 /// add-on's system.
 pub async fn retire_asset(db: &PgPool, id: Uuid) -> Result<()> {
-    let retired = sqlx::query(
-        "UPDATE assets SET retired_at = now(), holder_id = NULL
-         WHERE id = $1 AND retired_at IS NULL AND source_addon IS NULL",
-    )
-    .bind(id)
-    .execute(db)
-    .await?;
-    if retired.rows_affected() == 1 {
-        return Ok(());
-    }
-    let asset: Option<(String, Option<String>, bool)> = sqlx::query_as(
-        "SELECT name, source_addon, retired_at IS NOT NULL FROM assets WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(db)
-    .await?;
+    let mut tx = db.begin().await?;
+    let asset: Option<StoredAsset> =
+        sqlx::query_as(stored_assets!("WHERE id = $1 FOR NO KEY UPDATE"))
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
     match asset {
-        None => Err(Error::NotFound("asset")),
-        Some((_, _, true)) => rule("the asset is already retired"),
-        Some((name, addon, false)) => rule(format!(
-            "{name} comes from the add-on {}: only its source retires it, when it leaves the \
-             add-on's system",
-            addon.unwrap_or_default()
-        )),
+        None => return Err(Error::NotFound("asset")),
+        Some(asset) if asset.retired => return rule("the asset is already retired"),
+        Some(StoredAsset {
+            name,
+            source_addon: Some(addon),
+            ..
+        }) => {
+            return only_its_source(
+                &name,
+                &addon,
+                "retires it, when it leaves the add-on's system",
+            );
+        }
+        Some(_) => {}
     }
+    sqlx::query("UPDATE assets SET retired_at = now(), holder_id = NULL WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Refuses an agent's change to an asset `addon` supplied: only its source does `what`.
+fn only_its_source<T>(name: &str, addon: &str, what: &str) -> Result<T> {
+    rule(format!(
+        "{name} comes from the add-on {addon}: only its source {what}"
+    ))
 }
 
 const SERVICES: &str = "SELECT s.id, s.name, s.description, s.retired_at,
@@ -1260,6 +1271,7 @@ mod tests {
             crate::supplied_assets::supply(&db, "watchtower", brightfield, "host-1", &supplied)
                 .await
                 .unwrap()
+                .asset
                 .id;
         let as_supplied =
             |holder: Option<Uuid>| fields(laptop, "PC-0042", Some("SN-0042"), Some(head), holder);

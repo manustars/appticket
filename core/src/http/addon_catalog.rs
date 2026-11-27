@@ -110,10 +110,11 @@ async fn supply_asset(
     } else {
         StatusCode::OK
     };
-    Ok((status, written(&state, &caller, supplied.id).await?))
+    Ok((status, Json(AddonAsset::seen_by(supplied.asset, &caller))))
 }
 
-/// Updates an asset the add-on is the source of, as supplying it again does; an asset entered by
+/// Updates an asset the add-on is the source of, as supplying it again does, but refuses a retired
+/// one, which only supplying it again with its reference brings back; an asset entered by
 /// hand or supplied by another add-on is refused. Scope `catalog:write`.
 #[utoipa::path(put, path = "/api/addon/assets/{id}", tag = "add-ons",
     params(("id" = Uuid, Path, description = "The asset")), request_body = SuppliedUpdate,

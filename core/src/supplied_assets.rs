@@ -8,7 +8,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::catalog::StoredAsset;
+use crate::catalog::{Asset, StoredAsset};
 use crate::error::{Error, Result, rule};
 
 /// What an add-on supplies of an asset: everything but its customer, which never changes, and its
@@ -28,9 +28,12 @@ pub struct SuppliedDetails {
 }
 
 /// The asset an add-on supplied, and whether supplying it created it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Supplied {
-    pub id: Uuid,
+    /// The asset as stored.
+    pub asset: Asset,
+    /// Whether supplying it created it; otherwise it updated the asset the add-on supplied before
+    /// with that reference.
     pub created: bool,
 }
 
@@ -62,10 +65,10 @@ pub async fn supply(
         return rule(another_customer(&reference));
     }
     let checked = checked(&mut tx, customer, details).await?;
-    let supplied = match existing {
+    let (id, created) = match existing {
         Some((id, _)) => {
             write(&mut tx, id, &checked).await?;
-            Supplied { id, created: false }
+            (id, false)
         }
         None => {
             let id = Uuid::new_v4();
@@ -93,25 +96,28 @@ pub async fn supply(
                 }
                 other => other.into(),
             })?;
-            Supplied { id, created: true }
+            (id, true)
         }
     };
     tx.commit().await?;
-    Ok(supplied)
+    Ok(Supplied {
+        asset: crate::catalog::asset(db, id).await?,
+        created,
+    })
 }
 
-/// Updates an asset the add-on is the source of with `details`, as [`supply`] does.
+/// Updates an asset the add-on is the source of with `details`, as [`supply`] does, except that a
+/// retired asset is refused: what the add-on sends about it may be older than the retirement, and
+/// only supplying it again with its reference brings it back.
 pub async fn update(db: &PgPool, addon: &str, id: Uuid, details: &SuppliedDetails) -> Result<()> {
     let mut tx = db.begin().await?;
-    // An asset never changes customer, so its customer can be read before it is locked.
-    let customer: Uuid = sqlx::query_scalar("SELECT customer_id FROM assets WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(Error::NotFound("asset"))?;
-    crate::customers::lock_active(&mut tx, customer).await?;
-    let asset = crate::catalog::lock_stored(&mut tx, id).await?;
-    its_own(&asset, addon)?;
+    let (customer, asset) = lock_own(&mut tx, addon, id).await?;
+    if asset.retired {
+        return rule(format!(
+            "{} is retired: supplying it again with its reference brings it back",
+            asset.name
+        ));
+    }
     let checked = checked(&mut tx, customer, details).await?;
     write(&mut tx, id, &checked).await?;
     tx.commit().await?;
@@ -122,15 +128,7 @@ pub async fn update(db: &PgPool, addon: &str, id: Uuid, details: &SuppliedDetail
 /// holder. Retiring it again changes nothing.
 pub async fn retire(db: &PgPool, addon: &str, id: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM assets WHERE id = $1)")
-        .bind(id)
-        .fetch_one(&mut *tx)
-        .await?;
-    if !exists {
-        return Err(Error::NotFound("asset"));
-    }
-    let asset = crate::catalog::lock_stored(&mut tx, id).await?;
-    its_own(&asset, addon)?;
+    lock_own(&mut tx, addon, id).await?;
     sqlx::query(
         "UPDATE assets SET retired_at = now(), holder_id = NULL
          WHERE id = $1 AND retired_at IS NULL",
@@ -140,6 +138,26 @@ pub async fn retire(db: &PgPool, addon: &str, id: Uuid) -> Result<()> {
     .await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// Locks the asset's customer, refused when offboarded, then the asset, refused unless `addon` is
+/// its source. Returns the customer and the asset as stored.
+async fn lock_own(
+    tx: &mut Transaction<'_, Postgres>,
+    addon: &str,
+    id: Uuid,
+) -> Result<(Uuid, StoredAsset)> {
+    // An asset never changes customer, so its customer can be read before it is locked; the
+    // customer is locked first, as by every change to its sites and assets.
+    let customer: Uuid = sqlx::query_scalar("SELECT customer_id FROM assets WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(Error::NotFound("asset"))?;
+    crate::customers::lock_active(tx, customer).await?;
+    let asset = crate::catalog::lock_stored(tx, id).await?;
+    its_own(&asset, addon)?;
+    Ok((customer, asset))
 }
 
 /// Refuses an asset `addon` is not the source of.
@@ -316,13 +334,11 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            again,
-            Supplied {
-                id: first.id,
-                created: false
-            },
+            (again.asset.id, again.created),
+            (first.asset.id, false),
             "the same reference updates the same asset"
         );
+        assert_eq!(again.asset.name, "srv-01", "answered as stored");
         let assets = crate::catalog::assets_of(&db, brightfield).await.unwrap();
         assert_eq!(assets.len(), 1, "no second asset");
         let asset = &assets[0];
@@ -333,7 +349,7 @@ mod tests {
                 asset.serial_number.as_deref(),
                 asset.site.is_none(),
                 asset.source_addon.as_deref(),
-                asset.source_ref.as_deref(),
+                asset.reference.as_deref(),
             ),
             (
                 server,
@@ -478,6 +494,28 @@ mod tests {
             ),
             "the customer is offboarded"
         );
+        // Nor are an offboarded customer's assets updated or retired.
+        let (harbor_pc,): (Uuid,) = sqlx::query_as("SELECT id FROM assets WHERE customer_id = $1")
+            .bind(harbor)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(
+            refusal(
+                update(
+                    &db,
+                    "watchtower",
+                    harbor_pc,
+                    &details("Laptop", "PC-02", None, None)
+                )
+                .await
+            ),
+            "the customer is offboarded"
+        );
+        assert_eq!(
+            refusal(retire(&db, "watchtower", harbor_pc).await),
+            "the customer is offboarded"
+        );
     }
 
     #[sqlx::test]
@@ -496,6 +534,7 @@ mod tests {
         )
         .await
         .unwrap()
+        .asset
         .id;
         let mine = supply(
             &db,
@@ -506,6 +545,7 @@ mod tests {
         )
         .await
         .unwrap()
+        .asset
         .id;
         let renamed = details("Laptop", "Renamed", None, None);
 
@@ -560,6 +600,7 @@ mod tests {
         let pc = supply(&db, "watchtower", brightfield, "host-1", &laptop)
             .await
             .unwrap()
+            .asset
             .id;
         let holder = |db: PgPool| async move {
             let asset = crate::catalog::assets_of(&db, brightfield).await.unwrap();
@@ -589,18 +630,28 @@ mod tests {
         let back = supply(&db, "watchtower", brightfield, "host-1", &laptop)
             .await
             .unwrap();
-        assert_eq!(
-            back,
-            Supplied {
-                id: pc,
-                created: false
-            }
-        );
+        assert_eq!((back.asset.id, back.created), (pc, false));
         assert_eq!(holder(db.clone()).await, (None, false));
-        // Updated by its id, as supplying it again does.
+        // Updated by its id, it does not come back: what the add-on sends about an asset it retired
+        // may be older than the retirement.
         retire(&db, "watchtower", pc).await.unwrap();
-        update(&db, "watchtower", pc, &laptop).await.unwrap();
-        assert_eq!(holder(db.clone()).await, (None, false));
+        assert_eq!(
+            refusal(
+                update(
+                    &db,
+                    "watchtower",
+                    pc,
+                    &details("Laptop", "Renamed", None, None)
+                )
+                .await
+            ),
+            "PC-0042 is retired: supplying it again with its reference brings it back"
+        );
+        let asset = &crate::catalog::assets_of(&db, brightfield).await.unwrap()[0];
+        assert_eq!(
+            (asset.name.as_str(), asset.retired_at.is_some()),
+            ("PC-0042", true)
+        );
     }
 
     /// The database keeps an asset's source within the rules even when the code above is

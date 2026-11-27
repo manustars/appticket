@@ -223,8 +223,9 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   will follow the same rule.
 - An add-on knows each asset it supplies by a reference of its own, which names one asset of one
   customer for good: supplying an asset with a reference the add-on gave before updates that asset,
-  and brings it back if the add-on retired it. It names the kind from the help desk's list and the
-  site from the customer's active sites. Agents give a supplied asset a holder, which the add-on
+  and brings it back if the add-on retired it; nothing else brings back a retired asset. It names
+  the kind from the help desk's list and the site from the customer's active sites, and changes
+  nothing of an offboarded customer. Agents give a supplied asset a holder, which the add-on
   supplying it again leaves, but change nothing else its source supplied, nor retire it.
 - An asset has at most one source and can be linked to other add-ons, which only supply live
   details and links. An add-on that finds an asset matching one it would supply (same name or
