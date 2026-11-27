@@ -212,7 +212,17 @@ mod tests {
     #[sqlx::test]
     async fn an_addon_opens_a_ticket_without_a_requester(db: PgPool) {
         let brightfield = testing::customer(&db, "Brightfield").await;
-        let pc = testing::asset(&db, brightfield, "Server", "SRV-01").await;
+        let data_centre = crate::sites::create(&db, brightfield, "Data centre", "Via dei Tigli 1")
+            .await
+            .unwrap();
+        let server = testing::asset_kind(&db, "Server").await;
+        let pc = crate::catalog::create_asset(
+            &db,
+            brightfield,
+            &testing::asset_details(server, "SRV-01", None, Some(data_centre), None),
+        )
+        .await
+        .unwrap();
         let mail = crate::catalog::create_service(&db, "Hosted mail", "")
             .await
             .unwrap();
@@ -247,6 +257,12 @@ mod tests {
         assert_eq!(
             ticket.services.iter().map(|s| s.id).collect::<Vec<_>>(),
             [mail]
+        );
+        let at = crate::tickets::sites(&db, &[ticket.id]).await.unwrap();
+        assert_eq!(
+            at[&ticket.id].iter().map(|s| s.id).collect::<Vec<_>>(),
+            [data_centre],
+            "at the site of its asset"
         );
         match &ticket.timeline[..] {
             [TimelineEntry::Note(note)] => {
@@ -465,6 +481,25 @@ mod tests {
             .collect();
         assert_eq!(to, [Some("lena@brightfield.test".to_owned())]);
         assert!(ticket.requester.is_none());
+
+        // Lena's answer comes back to the ticket by its headers; it still has no requester.
+        let sent: String =
+            sqlx::query_scalar("SELECT rfc_message_id FROM messages WHERE direction = 'outbound'")
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        let raw = format!(
+            "From: Lena <lena@brightfield.test>\r\nTo: helpdesk@helpdesk.test\r\nMessage-ID: <l1@brightfield.test>\r\nIn-Reply-To: <{sent}>\r\nSubject: Re: Backup failed\r\n\r\nThanks.\r\n"
+        );
+        let mut tx = db.begin().await.unwrap();
+        crate::mail::store(&mut tx, 1, raw.as_bytes())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let ticket = detail(&db, n).await.unwrap();
+        assert_eq!(ticket.timeline.len(), 2, "the answer joined the ticket");
+        assert!(ticket.requester.is_none());
+        assert_eq!(ticket.state, TicketState::Open, "the answer reopened it");
     }
 
     /// The database keeps the rules also when the code is bypassed: a note has exactly one
