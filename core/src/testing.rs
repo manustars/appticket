@@ -3,7 +3,16 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::error::{Error, Result};
 use crate::outbound::Sender;
+
+/// The sentence of a refusal by a rule, failing the test on anything else.
+pub fn refusal<T: std::fmt::Debug>(result: Result<T>) -> String {
+    match result {
+        Err(Error::Rule(why)) => why,
+        other => panic!("not refused by a rule: {other:?}"),
+    }
+}
 
 /// The help desk's own organization.
 pub async fn help_desk(db: &PgPool) -> Uuid {

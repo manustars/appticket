@@ -12,10 +12,12 @@ use uuid::Uuid;
 
 use crate::catalog::AssetKey;
 use crate::error::{Error, Result, rule};
+use crate::supplied_assets::reference_of_another_customer;
 
 /// What the asset the add-on would supply has in common with the asset it matched.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema, sqlx::Type)]
 #[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
 pub enum MatchedBy {
     /// The same serial number, ignoring case.
     SerialNumber,
@@ -23,17 +25,16 @@ pub enum MatchedBy {
     Name,
 }
 
-impl MatchedBy {
-    fn as_str(self) -> &'static str {
-        match self {
-            MatchedBy::SerialNumber => "serial_number",
-            MatchedBy::Name => "name",
-        }
-    }
+/// Where a link proposal stands: open until an agent decides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[sqlx(type_name = "text", rename_all = "lowercase")]
+enum State {
+    Open,
+    Discarded,
 }
 
 /// A proposal that the asset an add-on would supply is an asset its customer already has.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
 pub struct AssetLinkProposal {
     pub id: Uuid,
     /// The add-on that would supply the asset.
@@ -41,12 +42,12 @@ pub struct AssetLinkProposal {
     /// The add-on's own reference for the asset it would supply.
     pub reference: String,
     pub customer_id: Uuid,
-    /// The name the add-on sent.
+    /// The name the add-on sent last.
     pub name: String,
-    /// The serial number the add-on sent, if any.
+    /// The serial number the add-on sent last, if any.
     pub serial_number: Option<String>,
-    /// What the two assets have in common: when both a serial number and a name match, the serial
-    /// number decides.
+    /// What the two assets had in common when the proposal was recorded: when both a serial number
+    /// and a name match, the serial number decides.
     pub matched_by: MatchedBy,
     /// The asset it matched, of the same customer.
     pub asset_id: Uuid,
@@ -54,41 +55,6 @@ pub struct AssetLinkProposal {
     pub asset_name: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-}
-
-#[derive(sqlx::FromRow)]
-struct ProposalRow {
-    id: Uuid,
-    addon: String,
-    reference: String,
-    customer_id: Uuid,
-    name: String,
-    serial_number: Option<String>,
-    matched_by: String,
-    asset_id: Uuid,
-    asset_name: String,
-    created_at: OffsetDateTime,
-}
-
-impl From<ProposalRow> for AssetLinkProposal {
-    fn from(row: ProposalRow) -> Self {
-        AssetLinkProposal {
-            id: row.id,
-            addon: row.addon,
-            reference: row.reference,
-            customer_id: row.customer_id,
-            name: row.name,
-            serial_number: row.serial_number,
-            matched_by: if row.matched_by == "serial_number" {
-                MatchedBy::SerialNumber
-            } else {
-                MatchedBy::Name
-            },
-            asset_id: row.asset_id,
-            asset_name: row.asset_name,
-            created_at: row.created_at,
-        }
-    }
 }
 
 /// The proposals picked by the end of the query (on `asset_link_proposals p`), with the name of the
@@ -107,11 +73,13 @@ macro_rules! select_proposals {
 }
 
 /// When `addon` would create the asset of `customer` it knows by `reference`, the link proposal
-/// it gets instead, if any: the open one for that reference, already recorded, or a new one when
-/// the customer has an active asset with the same serial number, else the same name, that the
-/// add-on is not the source of. None when there is no match, or when agents discarded a proposal
-/// for that reference: the add-on then creates its own asset. The caller has locked the customer,
-/// so that two attempts at once do not both find no proposal.
+/// it gets instead, if any: the open one for that reference, already recorded, now showing the
+/// `name` and `serial_number` the add-on sends, or a new one when the customer has an active asset
+/// with the same serial number, else the same name, that the add-on is not the source of. An open
+/// proposal stays open even when the asset it matched was renamed or retired since: an agent
+/// decides. None when there is no match, or when agents discarded a proposal for that reference:
+/// the add-on then creates its own asset. The caller has locked the customer, so that two attempts
+/// at once do not both find no proposal.
 pub(crate) async fn proposed(
     tx: &mut Transaction<'_, Postgres>,
     addon: &str,
@@ -120,27 +88,37 @@ pub(crate) async fn proposed(
     name: &str,
     serial_number: Option<&str>,
 ) -> Result<Option<AssetLinkProposal>> {
-    let open: Option<ProposalRow> = sqlx::query_as(select_proposals!(
-        "WHERE p.addon = $1 AND p.reference = $2 AND p.state = 'open'"
-    ))
+    let open: Option<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT id, customer_id FROM asset_link_proposals
+         WHERE addon = $1 AND reference = $2 AND state = $3
+         FOR UPDATE",
+    )
     .bind(addon)
     .bind(reference)
+    .bind(State::Open)
     .fetch_optional(&mut **tx)
     .await?;
-    if let Some(open) = open {
-        if open.customer_id != customer {
-            return rule(another_customer(reference));
+    if let Some((id, owner)) = open {
+        if owner != customer {
+            return rule(reference_of_another_customer(reference));
         }
-        return Ok(Some(open.into()));
+        sqlx::query("UPDATE asset_link_proposals SET name = $2, serial_number = $3 WHERE id = $1")
+            .bind(id)
+            .bind(name)
+            .bind(serial_number)
+            .execute(&mut **tx)
+            .await?;
+        return Ok(Some(read(tx, id).await?));
     }
     let discarded: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM asset_link_proposals
                         WHERE addon = $1 AND reference = $2 AND customer_id = $3
-                          AND state = 'discarded')",
+                          AND state = $4)",
     )
     .bind(addon)
     .bind(reference)
     .bind(customer)
+    .bind(State::Discarded)
     .fetch_one(&mut **tx)
     .await?;
     if discarded {
@@ -161,7 +139,7 @@ pub(crate) async fn proposed(
     .bind(reference)
     .bind(customer)
     .bind(asset)
-    .bind(matched_by.as_str())
+    .bind(matched_by)
     .bind(name)
     .bind(serial_number)
     .execute(&mut **tx)
@@ -170,22 +148,19 @@ pub(crate) async fn proposed(
         // The same reference, proposed at the same time for another customer: the customer
         // locked keeps out the attempts for this one.
         sqlx::Error::Database(d) if d.constraint() == Some("asset_link_proposals_one_open") => {
-            Error::Rule(another_customer(reference))
+            Error::Rule(reference_of_another_customer(reference))
         }
         other => other.into(),
     })?;
-    let row: ProposalRow = sqlx::query_as(select_proposals!("WHERE p.id = $1"))
-        .bind(id)
-        .fetch_one(&mut **tx)
-        .await?;
-    Ok(Some(row.into()))
+    Ok(Some(read(tx, id).await?))
 }
 
-fn another_customer(reference: &str) -> String {
-    format!(
-        "the reference {reference} is proposed as an asset of another customer: a reference names \
-         one asset of one customer"
-    )
+/// The link proposal as stored.
+async fn read(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<AssetLinkProposal> {
+    Ok(sqlx::query_as(select_proposals!("WHERE p.id = $1"))
+        .bind(id)
+        .fetch_one(&mut **tx)
+        .await?)
 }
 
 /// The active asset of `customer` that `addon` is not the source of with the serial number, else
@@ -216,13 +191,13 @@ async fn matching(
 
 /// The open link proposals on the customer's assets, oldest first.
 pub async fn open_of(db: &PgPool, customer: Uuid) -> Result<Vec<AssetLinkProposal>> {
-    let rows: Vec<ProposalRow> = sqlx::query_as(select_proposals!(
-        "WHERE p.customer_id = $1 AND p.state = 'open' ORDER BY p.created_at, p.id"
+    Ok(sqlx::query_as(select_proposals!(
+        "WHERE p.customer_id = $1 AND p.state = $2 ORDER BY p.created_at, p.id"
     ))
     .bind(customer)
+    .bind(State::Open)
     .fetch_all(db)
-    .await?;
-    Ok(rows.into_iter().map(AssetLinkProposal::from).collect())
+    .await?)
 }
 
 /// Discards an open link proposal, for `agent`: the add-on's next attempt with its reference creates
@@ -238,20 +213,21 @@ pub async fn discard(db: &PgPool, id: Uuid, agent: Uuid) -> Result<()> {
             .await?
             .ok_or(Error::NotFound("link proposal"))?;
     crate::customers::lock_active(&mut tx, customer).await?;
-    let state: String =
+    let state: State =
         sqlx::query_scalar("SELECT state FROM asset_link_proposals WHERE id = $1 FOR UPDATE")
             .bind(id)
             .fetch_one(&mut *tx)
             .await?;
-    if state != "open" {
+    if state != State::Open {
         return rule("the link proposal is no longer open");
     }
     sqlx::query(
-        "UPDATE asset_link_proposals SET state = 'discarded', decided_at = now(), decided_by = $2
+        "UPDATE asset_link_proposals SET state = $3, decided_at = now(), decided_by = $2
          WHERE id = $1",
     )
     .bind(id)
     .bind(agent)
+    .bind(State::Discarded)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -262,7 +238,7 @@ pub async fn discard(db: &PgPool, id: Uuid, agent: Uuid) -> Result<()> {
 mod tests {
     use super::*;
     use crate::supplied_assets::{Supplied, SuppliedDetails, supply};
-    use crate::testing;
+    use crate::testing::{self, refusal};
 
     fn laptop(name: &str, serial: Option<&str>) -> SuppliedDetails {
         SuppliedDetails {
@@ -302,14 +278,6 @@ mod tests {
         )
         .await
         .unwrap()
-    }
-
-    /// The sentence of a refusal, failing the test on anything else.
-    fn refusal<T: std::fmt::Debug>(result: Result<T>) -> String {
-        match result {
-            Err(Error::Rule(why)) => why,
-            other => panic!("not refused by a rule: {other:?}"),
-        }
     }
 
     #[sqlx::test]
@@ -413,19 +381,61 @@ mod tests {
             );
         }
 
-        // Sending the same asset again records no second proposal while one is open.
+        // Sending the same asset again records no second proposal while one is open, but the
+        // proposal shows what the add-on sends now, even when that would match nothing.
         let again = proposal(
             supply(
                 &db,
                 "watchtower",
                 brightfield,
                 "host-1",
-                &laptop("PC-0042", None),
+                &laptop("Ada's laptop", Some("SN-0077")),
             )
             .await
             .unwrap(),
         );
-        assert_eq!(again.id, by_name.id);
+        assert_eq!(
+            (
+                again.id,
+                again.name.as_str(),
+                again.serial_number.as_deref(),
+                again.asset_id,
+                again.matched_by,
+            ),
+            (
+                by_name.id,
+                "Ada's laptop",
+                Some("SN-0077"),
+                pc,
+                MatchedBy::Name
+            )
+        );
+        // It stays open when the asset it matched is renamed or retired meanwhile: an agent
+        // decides.
+        let kind = testing::asset_kind(&db, "Laptop").await;
+        crate::catalog::update_asset(&db, pc, &testing::asset_fields(kind, "PC-0042 old"))
+            .await
+            .unwrap();
+        crate::catalog::retire_asset(&db, pc).await.unwrap();
+        let after_retiring = proposal(
+            supply(
+                &db,
+                "watchtower",
+                brightfield,
+                "host-1",
+                &laptop("Ada's laptop", None),
+            )
+            .await
+            .unwrap(),
+        );
+        assert_eq!(
+            (
+                after_retiring.id,
+                after_retiring.asset_name.as_str(),
+                after_retiring.serial_number.as_deref()
+            ),
+            (by_name.id, "PC-0042 old", None)
+        );
         let open = open_of(&db, brightfield).await.unwrap();
         assert_eq!(
             open.iter().map(|p| p.id).collect::<Vec<_>>(),
@@ -457,8 +467,8 @@ mod tests {
                 )
                 .await
             ),
-            "the reference host-1 is proposed as an asset of another customer: a reference \
-             names one asset of one customer"
+            "the reference host-1 belongs to another customer: a reference names one asset of one \
+             customer"
         );
     }
 

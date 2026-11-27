@@ -196,8 +196,10 @@ second one. It records a link proposal, that the add-on's asset is that existing
 - The add-on's own assets never match: two assets with the same name in the add-on's system are
   two assets. Retired assets and assets of other customers do not match either.
 - Sending the asset again while the proposal is open records no second proposal: the answer is
-  the same proposal, still 202. The reference stays with its customer meanwhile: sending it for
-  another customer is refused (409).
+  the same proposal, still 202, now with the `name` and `serial_number` just sent, so that agents
+  compare what the add-on sends now. It stays open, proposing the same asset, even when that asset
+  was renamed or retired meanwhile: an agent decides. The reference stays with its customer
+  meanwhile: sending it for another customer is refused (409).
 - Agents who manage the catalog see the proposal on the customer's assets and discard it; once
   discarded, the add-on's next attempt with that reference creates its own asset (201), and later
   ones update it as usual. Updating an asset by its id (`PUT`) never proposes a link.
