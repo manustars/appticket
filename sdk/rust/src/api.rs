@@ -60,9 +60,13 @@ pub struct Asset {
     /// The add-on it came from, when an add-on supplies it.
     #[serde(default)]
     pub source_addon: Option<String>,
-    /// The add-on's own reference for it, when the add-on reading it is its source.
+    /// The add-on's own reference for it, when the add-on reading it is its source or linked to it.
     #[serde(default)]
     pub reference: Option<String>,
+    /// The other add-ons linked to it, by name, besides its source: they change nothing of it and
+    /// only supply live details and links. Empty from a core that predates linked add-ons.
+    #[serde(default)]
+    pub linked_addons: Vec<String>,
 }
 
 /// What an add-on supplies of an asset it is the source of (scope `catalog:write`): everything but
@@ -94,7 +98,8 @@ pub struct SuppliedAsset {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Supplied {
     /// The asset as the core stored it: created (201), or the one the add-on supplied before with
-    /// that reference updated (200).
+    /// that reference updated (200), or the one it is linked to by that reference, unchanged (200;
+    /// its `source_addon` is then another add-on or none).
     Asset { asset: Asset, created: bool },
     /// Nothing was created (202): the customer already has an asset with the same serial number or
     /// name, and the core proposes to the agents that the add-on's asset is that one.
@@ -104,7 +109,8 @@ pub enum Supplied {
 /// A proposal, waiting for the agents, that the asset an add-on would create is one its customer
 /// already has, entered by hand or supplied by another add-on. Supplying the asset again while it
 /// is open answers the same proposal, with the name and serial number just sent; once agents
-/// discard it, the next attempt creates the asset.
+/// discard it, the next attempt creates the asset, and once they accept it, the add-on is linked to
+/// the asset that matched and its reference reaches that asset.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinkProposal {
     pub id: Uuid,

@@ -260,9 +260,11 @@ impl Client {
     /// before with that reference (bringing it back if it retired it), so that the add-on can send
     /// its whole inventory again safely. When it would create the asset and the customer already
     /// has an active one with the same serial number or name, not supplied by this add-on, the
-    /// core creates nothing and answers with a link proposal for the agents. The core refuses (409)
-    /// an unknown kind, a site that is not one of the customer's active sites, and a reference of
-    /// another customer's asset. Scope `catalog:write`.
+    /// core creates nothing and answers with a link proposal for the agents. Once they accept it,
+    /// the reference reaches the asset the add-on is linked to: sending what it has answers it,
+    /// unchanged, and any change to its kind, name, serial number or site is refused (409). The
+    /// core refuses (409) an unknown kind, a site that is not one of the customer's active sites,
+    /// and a reference of another customer's asset. Scope `catalog:write`.
     pub async fn supply_asset(&self, asset: &SuppliedAsset) -> Result<Supplied, Error> {
         let response = self
             .http
@@ -282,7 +284,8 @@ impl Client {
     }
 
     /// Updates an asset the add-on is the source of; the core refuses (409) one entered by hand or
-    /// supplied by another add-on. Scope `catalog:write`.
+    /// supplied by another add-on, and any change to one the add-on is linked to. Scope
+    /// `catalog:write`.
     pub async fn update_asset(&self, id: Uuid, details: &SuppliedDetails) -> Result<Asset, Error> {
         let response = self
             .http
@@ -295,11 +298,26 @@ impl Client {
     }
 
     /// Retires an asset the add-on is the source of, when it leaves the add-on's system; retiring
-    /// it again changes nothing. Scope `catalog:write`.
+    /// it again changes nothing. An add-on linked to an asset is refused (409): it unlinks itself
+    /// instead, with [`Client::unlink_asset`]. Scope `catalog:write`.
     pub async fn retire_asset(&self, id: Uuid) -> Result<(), Error> {
         let response = self
             .http
             .post(self.url(&format!("/assets/{id}/retire")))
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+        Self::read_nothing(response).await
+    }
+
+    /// Unlinks the add-on from an asset it is linked to, when the asset leaves the add-on's system:
+    /// the asset stays as it was, and the add-on's reference no longer reaches it. Unlinking again
+    /// changes nothing; the asset's source is refused (409), which retires it instead. Scope
+    /// `catalog:write`.
+    pub async fn unlink_asset(&self, id: Uuid) -> Result<(), Error> {
+        let response = self
+            .http
+            .post(self.url(&format!("/assets/{id}/unlink")))
             .bearer_auth(&self.token)
             .send()
             .await?;

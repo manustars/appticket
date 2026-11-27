@@ -234,6 +234,11 @@ Decided in [ADR 0008](adr/0008-identity-providers-authenticate-the-product-autho
   over the name. A reference of an add-on has at most one open link proposal. Every agent sees it
   on the customer's assets; accepting or discarding it needs managing the catalog, and once it is
   discarded the add-on's next attempt with that reference creates its own asset.
+- Accepting a link proposal links the add-on to that asset, if it is still active, with its
+  reference; an add-on is linked to an asset at most once, and never to one it is the source of.
+  From then on the reference reaches that asset, and any change the add-on sends to its kind,
+  name, serial number or site is refused. A linked add-on unlinks itself when the asset leaves its
+  system, which never retires the asset; an asset lists its source and its linked add-ons.
 - Agents who manage customers set a customer's external references in an add-on's system,
   choosing from the names the add-on lists; the add-on only reads them. A name maps its subgroups
   too, unless a subgroup is mapped to another customer. Anything of the external system that maps

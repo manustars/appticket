@@ -142,7 +142,8 @@ _Avoid_: Origin, owner, provider
 
 **Link proposal**:
 A proposal, recorded by the core, that an asset an add-on would create is one its customer already
-has, with the same name or serial number; agents who manage the catalog accept or discard it.
+has, with the same name or serial number; agents who manage the catalog accept it, linking the
+add-on to that asset, or discard it.
 _Avoid_: Match, duplicate, merge request
 
 **Alert**:
