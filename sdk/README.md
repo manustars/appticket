@@ -85,7 +85,7 @@ closed ticket never moves again.
 | `ticket_number` | The ticket. |
 | `old_state`, `new_state` | The state it left and the state it is in now; never the same. |
 | `changed_by` | Who or what changed it, by `kind`. |
-| `reference` | Your own reference for the ticket, when you opened it with one (see [Tickets](#tickets)); left out otherwise, and never sent to other add-ons. |
+| `reference` | Your ticket reference, when you opened the ticket with one (see [Tickets](#tickets)); left out otherwise, and never sent to other add-ons. |
 
 | `kind` | When | Other fields |
 |---|---|---|
@@ -161,14 +161,14 @@ sentence saying which scope is missing.
 | `GET /api/addon/customers/{id}/services` | `directory:read` | The active services a customer uses. |
 | `GET /api/addon/tickets?requester_email=…` or `?customer=…` | `tickets:read` | Tickets that are not closed, of the requester the address belongs to (any of their addresses) or of a customer. |
 | `GET /api/addon/tickets/{number}` | `tickets:read` | A ticket with its messages, links and open proposals, and whether an agent has worked on it; internal notes and announcements are never given to add-ons. |
-| `GET /api/addon/tickets/by-reference?reference=…` | `tickets:read` | The ticket the add-on opened with that reference, in any state. |
-| `GET /api/addon/tickets/opened` | `tickets:read` | Every ticket the add-on opened that is not closed, with its reference. |
+| `GET /api/addon/tickets/by-reference?reference=…` | `tickets:read` | The ticket the add-on opened with that ticket reference, in any state. |
+| `GET /api/addon/tickets/opened` | `tickets:read` | Every ticket the add-on opened that is not closed, with its ticket reference. |
 | `POST /api/addon/proposals` | `proposals:write` | Proposes something to the agents. |
 | `POST /api/addon/assets` | `catalog:write` | Creates an asset of a customer known by the add-on's reference, or updates the one the add-on supplied with that reference; proposes a link instead when the customer already has a matching asset. |
 | `PUT /api/addon/assets/{id}` | `catalog:write` | Updates an asset the add-on is the source of. |
 | `POST /api/addon/assets/{id}/retire` | `catalog:write` | Retires an asset the add-on is the source of. |
 | `POST /api/addon/assets/{id}/unlink` | `catalog:write` | Unlinks the add-on from an asset it is linked to, which stays as it was. |
-| `POST /api/addon/tickets` | `tickets:write` | Opens a ticket without a requester for a customer, or answers the one the add-on opened before with the same reference. |
+| `POST /api/addon/tickets` | `tickets:write` | Opens a ticket without a requester for a customer, or answers the one the add-on opened before with the same ticket reference. |
 | `POST /api/addon/tickets/{number}/notes` | `tickets:write` | Adds an internal note to a ticket. |
 | `POST /api/addon/tickets/{number}/resolve` | `tickets:write` | Resolves a ticket the add-on opened. |
 | `PUT /api/addon/names` | `names:write` | Replaces the name list of the add-on's system, which agents pick customers' external references from. |
@@ -410,25 +410,26 @@ sentence naming what does not fit: an offboarded customer, an asset of another c
 asset or service, a service the customer does not use. A customer, asset or service that does not
 exist is not found (404), as when an agent links it.
 
-`reference` is optional: the add-on's own reference for the ticket, such as the id of the problem
-of its system the ticket is about. It names that ticket for good, so the add-on can retry, or catch
-up after being down, without opening a second ticket: opening again with a reference it gave
-before opens nothing and answers 200 (not 201) with the `number` of the ticket opened then, in any
-state, closed included, and changes nothing on it, whatever else the request says; two opens with
-the same reference at the same time are answered the same way, one 201 and one 200. A reference is
-at most 255 characters once trimmed, neither blank nor with control characters, and is compared
-exactly (case counts); one that does not fit is refused (409) with a sentence. References are each
-add-on's own: another add-on can give the same one to a ticket of its own. Without a reference,
-every call opens a new ticket.
+`reference` is optional: the add-on's ticket reference, its own name for the ticket, such as the
+id of the problem of its system the ticket is about. It names that ticket for good, so the add-on
+can retry, or catch up after being down, without opening a second ticket: opening again with a
+ticket reference it gave before opens nothing and answers 200 (not 201) with the `number` of the
+ticket opened then, in any state, closed included, and changes nothing on it, whatever else the
+request says. An open that comes while another with the same ticket reference is still under way
+waits for it and is answered the same way, one 201 and one 200, even when the rest of what it sends
+would be refused on its own. A ticket reference is at most 255 characters once trimmed, neither
+blank nor with control characters, and is compared exactly (case counts); one that does not fit
+is refused (409) with a sentence. Ticket references are each add-on's own: another add-on can give
+the same one to a ticket of its own. Without one, every call opens a new ticket.
 
-The add-on finds its tickets by reference. `GET /api/addon/tickets/by-reference?reference=…`
-answers the ticket it opened with that reference, in any state, as `GET /api/addon/tickets/{number}`
-does; a reference it never gave, another add-on's included, is not found (404).
-`GET /api/addon/tickets/opened` lists every ticket it opened that is not closed, with or without a
-reference, most recent first and without the limit of the other ticket lists. Both need
-`tickets:read`. The add-on's own reads of a ticket it opened with a reference, those ticket lists
-included, and the `ticket.state_changed` events it receives about it carry `reference`; other
-add-ons and agents never read it.
+The add-on finds its tickets by ticket reference.
+`GET /api/addon/tickets/by-reference?reference=…` answers the ticket it opened with that ticket
+reference, in any state, as `GET /api/addon/tickets/{number}` does; one it never gave, another
+add-on's included, is not found (404). `GET /api/addon/tickets/opened` lists every ticket it opened
+that is not closed, with or without a ticket reference, most recent first and without the limit of
+the other ticket lists. Both need `tickets:read`. The add-on's own reads of a ticket it opened with
+a ticket reference, those ticket lists included, and the `ticket.state_changed` events it receives
+about it carry it as `reference`; other add-ons and agents never read it.
 
 `POST /api/addon/tickets/{number}/notes` with `{"body": "…"}` adds an internal note to any ticket,
 closed ones too. Agents see the add-on as the author of the ticket and of its notes; a ticket read

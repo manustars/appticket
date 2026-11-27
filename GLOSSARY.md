@@ -107,6 +107,13 @@ A ticket of the help desk's own organization that tracks one failure affecting s
 and each customer's ticket attached to it.
 _Avoid_: Major incident, problem, master ticket
 
+**Ticket reference**:
+The add-on's own name for a ticket it opens, such as the id of the alert's problem in the
+monitoring system; it names that ticket for good, so opening again with it opens no second ticket,
+and only that add-on reads it. Not an External reference (a customer's name in another system),
+nor the reference a source knows an asset by.
+_Avoid_: External ID, problem ID, correlation key
+
 **Priority**:
 How soon a ticket needs attention: low, normal, high or urgent.
 _Avoid_: Severity, urgency, importance

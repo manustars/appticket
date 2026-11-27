@@ -80,11 +80,11 @@ async fn an_addon_opens_one_ticket_per_reference_through_the_api(db: PgPool) {
     for (reference, sentence) in [
         (
             "  ".to_owned(),
-            "A ticket's reference cannot be blank.".to_owned(),
+            "A ticket reference cannot be blank.".to_owned(),
         ),
         (
             "x".repeat(limit + 1),
-            format!("A ticket's reference is longer than {limit} characters."),
+            format!("A ticket reference is longer than {limit} characters."),
         ),
     ] {
         let (status, refused) = watchtower
@@ -107,8 +107,8 @@ async fn two_opens_with_the_same_reference_at_the_same_time_open_one_ticket(db: 
     let brightfield = testing::customer(&db, "Brightfield").await;
     let watchtower = addon(&db, &api, "watchtower", &[TICKETS_WRITE]).await;
 
-    // Holding the customer makes both opens wait after finding no ticket with the reference, so
-    // that they write it together once it is let go.
+    // Holding the customer makes the first open wait before writing its ticket, and the second
+    // waits for the first: both are under way at once when it is let go.
     let mut holder = db.begin().await.unwrap();
     sqlx::query("SELECT 1 FROM customers WHERE id = $1 FOR UPDATE")
         .bind(brightfield)
@@ -156,6 +156,78 @@ async fn two_opens_with_the_same_reference_at_the_same_time_open_one_ticket(db: 
         (1, 1, 1),
         "one ticket, one ticket.opened, one description"
     );
+}
+
+/// Waits until `count` connections to the test database wait for a lock, for at most 10 seconds.
+async fn until_waiting(db: &PgPool, count: i64) {
+    let mut waiting = 0;
+    for _ in 0..500 {
+        waiting = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(db)
+        .await
+        .unwrap();
+        if waiting == count {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("{waiting} connections wait for a lock, not {count}");
+}
+
+/// An open that comes while another with the same reference is still being written answers that
+/// ticket once it is, with 200, also when the rest of what it sends would be refused on its own:
+/// a blank title, an offboarded customer, an asset that does not exist.
+#[sqlx::test]
+async fn an_open_racing_one_with_the_same_reference_answers_its_ticket_whatever_it_sends(
+    db: PgPool,
+) {
+    let api = Client::new(&db).await;
+    let brightfield = testing::customer(&db, "Brightfield").await;
+    let gone = testing::customer(&db, "Old Mill").await;
+    crate::customers::offboard(&db, gone).await.unwrap();
+    let watchtower = addon(&db, &api, "watchtower", &[TICKETS_WRITE]).await;
+
+    let wrong = [
+        ticket(brightfield, "   ", Some("4711")),
+        ticket(gone, "Disk full", Some("4712")),
+        json!({"customer_id": brightfield, "title": "Disk full", "reference": "4713",
+            "asset_ids": [uuid::Uuid::new_v4()]}),
+    ];
+    for second in wrong {
+        let reference = second["reference"].as_str().unwrap().to_owned();
+        let first = ticket(brightfield, "SRV-01: disk full", Some(&reference));
+        // The first open waits on the customer, held here, while the second one comes.
+        let mut holder = db.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM customers WHERE id = $1 FOR UPDATE")
+            .bind(brightfield)
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        let ((status_first, a), (status_second, b), ()) = tokio::join!(
+            watchtower.call("POST", "/api/addon/tickets", Some(first)),
+            async {
+                until_waiting(&db, 1).await;
+                watchtower
+                    .call("POST", "/api/addon/tickets", Some(second.clone()))
+                    .await
+            },
+            async {
+                until_waiting(&db, 2).await;
+                holder.commit().await.unwrap();
+            },
+        );
+        assert_eq!(status_first, StatusCode::CREATED, "{a}");
+        assert_eq!(status_second, StatusCode::OK, "{second}: {b}");
+        assert_eq!(a["number"], b["number"]);
+    }
+    let tickets: i64 = sqlx::query_scalar("SELECT count(*) FROM tickets")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(tickets, 3);
 }
 
 /// The add-on reads the ticket it opened by its reference, in any state, as it reads it by number
@@ -409,11 +481,17 @@ fn the_specification_and_the_contract_give_the_limit_of_a_reference() {
         spec["components"]["schemas"][name]["properties"]["reference"]["maxLength"],
         json!(limit)
     );
+    assert!(
+        spec["components"]["schemas"]["TicketDetail"]["properties"]
+            .get("reference")
+            .is_none(),
+        "the ticket agents read does not describe it"
+    );
     let contract = include_str!("../../../../sdk/README.md")
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    let said = format!("A reference is at most {limit} characters once trimmed");
+    let said = format!("A ticket reference is at most {limit} characters once trimmed");
     assert!(
         contract.contains(&said),
         "sdk/README.md does not say {said:?}"

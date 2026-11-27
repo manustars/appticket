@@ -26,7 +26,7 @@ pub struct NewTicket {
     /// Active services the customer uses that the ticket is about.
     #[serde(default)]
     pub service_ids: Vec<Uuid>,
-    /// The add-on's own reference for the ticket, such as the id of the problem of its system the
+    /// The add-on's ticket reference, such as the id of the problem of its system the
     /// ticket is about: it names the ticket for good, so opening again with it opens no second
     /// ticket and answers the one opened then, unchanged ([`OpenedTicket::created`] is then
     /// false). At most 255 characters once trimmed, neither blank nor with control characters,
