@@ -1,63 +1,33 @@
 //! The `hd` binary connects to a database given as separate parameters, as a DBA hands them over:
 //! a password used as it is, with no percent-encoding.
 
+#[allow(dead_code, reason = "not every helper is used here")]
 mod common;
 
 use std::process::Output;
 
-use common::{database_url, dir, hd};
-use sqlx::postgres::{PgConnectOptions, PgConnection};
-use sqlx::{AssertSqlSafe, Connection};
+use common::{OwnDatabase, dir, hd};
 
 /// A password with the characters a connection string would need percent-encoded.
 const PASSWORD: &str = "desk@42/blue:sky";
 
-/// A PostgreSQL user with `PASSWORD` and a database it owns, made for one test on the test server
-/// and dropped with it, also when the test fails.
-struct OwnDatabase {
+/// A database of its own on the test server, owned by a PostgreSQL user of its own with
+/// `PASSWORD`, and where the server is.
+struct Parameters {
+    database: OwnDatabase,
     host: String,
     port: String,
-    user: String,
-    name: String,
 }
 
-fn block_on<T>(future: impl Future<Output = T>) -> T {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(future)
-}
-
-impl OwnDatabase {
+impl Parameters {
     fn create() -> Self {
-        let url = database_url();
-        let options: PgConnectOptions = url.parse().unwrap();
-        let id = uuid::Uuid::new_v4().simple();
-        let database = Self {
-            host: options.get_host().to_owned(),
-            port: options.get_port().to_string(),
-            user: format!("hd_parameters_{id}"),
-            name: format!("hd_parameters_{id}"),
-        };
-        block_on(async {
-            let mut admin = PgConnection::connect(&url).await.unwrap();
-            sqlx::raw_sql(AssertSqlSafe(format!(
-                r#"CREATE ROLE "{}" LOGIN PASSWORD '{PASSWORD}'"#,
-                database.user
-            )))
-            .execute(&mut admin)
-            .await
-            .unwrap();
-            sqlx::raw_sql(AssertSqlSafe(format!(
-                r#"CREATE DATABASE "{}" OWNER "{}""#,
-                database.name, database.user
-            )))
-            .execute(&mut admin)
-            .await
-            .unwrap();
-        });
-        database
+        let database = OwnDatabase::create_with_owner("parameters", PASSWORD);
+        let url = url::Url::parse(&database.url()).unwrap();
+        Self {
+            host: url.host_str().unwrap().to_owned(),
+            port: url.port().unwrap_or(5432).to_string(),
+            database,
+        }
     }
 
     /// The separate parameters of the database, with `password` given by the caller.
@@ -65,34 +35,10 @@ impl OwnDatabase {
         vec![
             ("HD_DATABASE_HOST", self.host.as_str()),
             ("HD_DATABASE_PORT", self.port.as_str()),
-            ("HD_DATABASE_NAME", self.name.as_str()),
-            ("HD_DATABASE_USER", self.user.as_str()),
+            ("HD_DATABASE_NAME", self.database.name.as_str()),
+            ("HD_DATABASE_USER", self.database.owner.as_deref().unwrap()),
             password,
         ]
-    }
-}
-
-impl Drop for OwnDatabase {
-    fn drop(&mut self) {
-        let dropped = block_on(async {
-            let mut admin = PgConnection::connect(&database_url()).await?;
-            sqlx::raw_sql(AssertSqlSafe(format!(
-                r#"DROP DATABASE IF EXISTS "{}" WITH (FORCE)"#,
-                self.name
-            )))
-            .execute(&mut admin)
-            .await?;
-            sqlx::raw_sql(AssertSqlSafe(format!(
-                r#"DROP ROLE IF EXISTS "{}""#,
-                self.user
-            )))
-            .execute(&mut admin)
-            .await?;
-            Ok::<_, sqlx::Error>(())
-        });
-        if let Err(e) = dropped {
-            eprintln!("dropping {} and {}: {e}", self.name, self.user);
-        }
     }
 }
 
@@ -106,7 +52,7 @@ fn assert_success(output: &Output) {
 
 #[test]
 fn the_core_connects_with_separate_parameters_and_the_password_as_it_is() {
-    let database = OwnDatabase::create();
+    let database = Parameters::create();
     let dir = dir();
 
     let migrated = hd(
@@ -133,7 +79,7 @@ fn the_core_connects_with_separate_parameters_and_the_password_as_it_is() {
 
 #[test]
 fn the_database_password_is_read_from_its_file() {
-    let database = OwnDatabase::create();
+    let database = Parameters::create();
     let dir = dir();
     let file = dir.join("database-password");
     std::fs::write(&file, format!("{PASSWORD}\n")).unwrap();

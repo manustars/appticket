@@ -191,10 +191,13 @@ Add the two lines to `.env` once: the script writes the same files each time it 
 server again. Without them the test says it is skipped, except in CI, where it fails;
 `CONTAINER_ENGINE=docker` runs the script with Docker, as CI does.
 
-The tests of the separate database parameters (`core/tests/database_parameters.rs`) create a
-PostgreSQL user and a database of their own on the `DATABASE_URL` server and drop them afterwards,
-so the user of `DATABASE_URL` needs to be allowed to create both: `hd`, the test server's user, is a
-PostgreSQL superuser.
+The tests that run the `hd` binary (`core/tests/`) never give it the database of `DATABASE_URL`,
+which is the one the core runs on during development: each creates a database of its own on that
+server and drops it afterwards, also when the test fails, so no test migrates the development
+database to the migrations of the branch it runs from. The tests of the separate database
+parameters (`core/tests/database_parameters.rs`) also create a PostgreSQL user of their own that
+owns it. The user of `DATABASE_URL` therefore needs to be allowed to create both: `hd`, the test
+server's user, is a PostgreSQL superuser.
 
 ## API specification
 
