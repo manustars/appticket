@@ -19,6 +19,8 @@
 #               HD_DATABASE_* settings and secrets/db_password name (docs/external-database.md)
 #   dumps       the dumps of an existing database, without db; db has them already (dumps.md)
 #   assistant   the Assistant add-on, once registered on the core (secrets/README.md)
+#   zabbix      the Zabbix add-on, once registered on the core, with its zabbix.toml beside
+#               this file (secrets/README.md)
 #   greenmail   a test mail server, to try the help desk; not for production
 #   https       Caddy in front of the core, for a host with no reverse proxy of its own; without
 #               it the proxy the host has does HTTPS (reverse-proxy.md)
@@ -28,8 +30,8 @@ name: hd
 
 services:
   core:
-    # In a release's archive this image and the Assistant's name the release's version, which
-    # .env.example shows; in the repository both read it from .env.
+    # In a release's archive this image and the add-ons' name the release's version, which
+    # .env.example shows; in the repository they read it from .env.
     image: ghcr.io/manustars/hd-core:${HD_VERSION:?set HD_VERSION in .env, such as 1.2.3}
     restart: unless-stopped
     # The core's settings, each passed only when .env (or the environment) sets it, so that the
@@ -367,6 +369,38 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
 
+  # The Zabbix add-on, which the core reaches at http://zabbix:8091 for live details and events,
+  # and Zabbix's media type at /webhook on its port, published on the host for the reverse proxy
+  # in front of the install, on the host's loopback address unless HD_ZABBIX_ADDRESS says
+  # otherwise (reverse-proxy.md); Caddy of the profile https passes /webhook on to it. It needs
+  # the token and event secret that registering it on the core prints, the API token of its
+  # Zabbix user and the webhook's secret, in secrets/zabbix_token, secrets/zabbix_event_secret,
+  # secrets/zabbix_api_token and secrets/zabbix_webhook_secret (secrets/README.md), and its
+  # configuration file zabbix.toml beside this file, made from zabbix.example.toml, so it is
+  # started after that. Its settings are in addons/zabbix/README.md.
+  zabbix:
+    profiles: [zabbix]
+    image: ghcr.io/manustars/hd-zabbix:${HD_VERSION:?set HD_VERSION in .env, such as 1.2.3}
+    restart: unless-stopped
+    # The webhook's secret is read from the file that webhook.secret_file names in zabbix.toml,
+    # /run/secrets/zabbix_webhook_secret.
+    environment:
+      - HD_ZABBIX_CONFIG=/etc/hd/zabbix.toml
+      - HD_ZABBIX_TOKEN_FILE=/run/secrets/zabbix_token
+      - HD_ZABBIX_EVENT_SECRET_FILE=/run/secrets/zabbix_event_secret
+      - HD_ZABBIX_API_TOKEN_FILE=/run/secrets/zabbix_api_token
+      - HD_ZABBIX_LOG
+    configs:
+      - source: zabbix_config
+        target: /etc/hd/zabbix.toml
+    secrets: [zabbix_token, zabbix_event_secret, zabbix_api_token, zabbix_webhook_secret]
+    ports:
+      - "${HD_ZABBIX_ADDRESS:-127.0.0.1}:${HD_ZABBIX_PORT:-8091}:8091"
+    depends_on: [core]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
   # A test mail server that accepts any message and keeps it in memory, in the mailbox
   # helpdesk@helpdesk.test (login helpdesk, password helpdesk); nothing leaves it. Its SMTP and
   # IMAP ports are published on the host's loopback address, for sending it messages and
@@ -455,6 +489,14 @@ secrets:
     file: ./secrets/assistant_event_secret
   assistant_api_key:
     file: ${HD_SECRET_ASSISTANT_API_KEY:-/dev/null}
+  zabbix_token:
+    file: ./secrets/zabbix_token
+  zabbix_event_secret:
+    file: ./secrets/zabbix_event_secret
+  zabbix_api_token:
+    file: ./secrets/zabbix_api_token
+  zabbix_webhook_secret:
+    file: ./secrets/zabbix_webhook_secret
   tls_certificate:
     file: ${HD_SECRET_TLS_CERTIFICATE:-/dev/null}
   tls_key:
@@ -463,6 +505,12 @@ secrets:
     file: ${HD_DATABASE_CA:-/dev/null}
   mail_ca:
     file: ${HD_MAIL_CA:-/dev/null}
+
+# The Zabbix add-on's configuration file, which the install writes beside this file from
+# zabbix.example.toml.
+configs:
+  zabbix_config:
+    file: ./zabbix.toml
 
 volumes:
   db-data:

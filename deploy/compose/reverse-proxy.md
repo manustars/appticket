@@ -54,7 +54,8 @@ Each is for `helpdesk.example.com` and the port 8080: put in your host name, `HD
 certificate.
 
 - **nginx**: [`examples/nginx.conf`](examples/nginx.conf), a file for `/etc/nginx/conf.d/`. The
-  test of the install (`scripts/test-compose.sh`) runs this file.
+  test of the install (`scripts/test-compose.sh`) runs this file, the Zabbix add-on's webhook
+  included.
 - **Traefik**: [`examples/traefik.yaml`](examples/traefik.yaml), for Traefik's file provider, with
   the entry point `websecure` and the certificate resolver `letsencrypt` of Traefik's own
   configuration. A Traefik in a container reaches the core by joining the network `hd_default`,
@@ -63,6 +64,24 @@ certificate.
 
 Traefik and Caddy add `X-Forwarded-For` and accept requests of any size by themselves; nginx is
 told both.
+
+## The Zabbix add-on's webhook
+
+With the profile `zabbix`, Zabbix's media type sends its alerts to the add-on's webhook, which
+the proxy serves at `/webhook` of the help desk's address, such as
+`https://helpdesk.example.com/webhook`: the parameter `url` of the media type
+([the add-on's README](../../addons/zabbix/README.md#setting-it-up-in-zabbix)). The add-on's port
+is published on the host's loopback address, `HD_ZABBIX_ADDRESS` and `HD_ZABBIX_PORT`
+(`127.0.0.1:8091`), as the core's is, and the proxy passes that one path on to it; the add-on's
+other paths are the core's, which reaches them inside the install as `http://zabbix:8091`. Caddy
+of the profile `https` does so by itself, and each example below has the lines that do; without
+the profile `zabbix` they answer 502, or leave them out. The webhook takes no alert without the
+secret Zabbix sends in a header, which HTTPS keeps from being read on the way.
+
+A Zabbix server on the same host, or one that reaches the host over a network you trust, can be
+given the published port instead (`HD_ZABBIX_ADDRESS` set to an address of the host it reaches,
+such as `192.0.2.10`, and the media type's `url` then `http://192.0.2.10:8091/webhook`), in plain
+HTTP: the secret then travels in the clear.
 
 ## Caddy, the profile `https`
 

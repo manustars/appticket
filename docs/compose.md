@@ -55,8 +55,8 @@ of them. Set at least:
 
 - `COMPOSE_PROFILES`: what runs beside the core. `db`, as it ships, is the install's own
   PostgreSQL; leave it out for [an existing database](#with-an-existing-database). Add
-  `https` for [Caddy](#https), `assistant` for [the Assistant](#first-steps), `greenmail` for a
-  test mail server, not for production.
+  `https` for [Caddy](#https), `assistant` for [the Assistant](#first-steps), `zabbix` for
+  [the Zabbix add-on](#first-steps), `greenmail` for a test mail server, not for production.
 - `HD_PUBLIC_URL`: the `https://` address agents open the help desk at, with no path.
 - `HD_HTTP_PORT` (and `HD_HTTP_ADDRESS`): where the core is published on the host for the proxy
   in front of it, `127.0.0.1:8080` unless set.
@@ -171,7 +171,11 @@ lists those the install passes on. The identity provider's client secret is the 
 `secrets/oidc_client_secret`, and the Assistant is registered as
 [secrets/README.md](../deploy/compose/secrets/README.md#the-assistants-token-and-event-secret)
 says, its token and event secret written to files of `secrets/`, then started with the profile
-`assistant`.
+`assistant`. The Zabbix add-on likewise, as
+[secrets/README.md](../deploy/compose/secrets/README.md#the-zabbix-add-ons-secrets-and-configuration)
+says, with its settings in `zabbix.toml` beside `compose.yaml`, then started with the profile
+`zabbix`; the reverse proxy passes `/webhook` on to it, where Zabbix's media type sends its
+alerts ([reverse-proxy.md](../deploy/compose/reverse-proxy.md#the-zabbix-add-ons-webhook)).
 
 ## Backups
 

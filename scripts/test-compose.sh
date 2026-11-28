@@ -16,10 +16,13 @@
 #      the only secret; /api/health answers that the database is up, and the database takes the
 #      file's password and refuses another. After `down` and `up -d` the core reaches it again,
 #      with the same file, which running the command again keeps;
-#   3. the profiles greenmail and assistant added, their secrets in files: a message sent to the
-#      test mail server's port on the host is read by the core, and the Assistant, registered on
-#      the core with `hd addon add` inside the core's container, reaches the core with its
-#      token; neither `compose config` nor `inspect` of any container shows any secret's value;
+#   3. the profiles greenmail, assistant and zabbix added, their secrets in files: a message sent
+#      to the test mail server's port on the host is read by the core, and the Assistant and the
+#      Zabbix add-on, registered on the core with `hd addon add` inside the core's container,
+#      reach the core with their tokens; the Zabbix add-on, with its zabbix.toml made from
+#      zabbix.example.toml and a Zabbix that does not exist, keeps running and answers on its
+#      published port, refusing the webhook without its secret and taking the secret of its
+#      file; neither `compose config` nor `inspect` of any container shows any secret's value;
 #   4. without the profile db: the core starts on a PostgreSQL of the test's own, given to it
 #      through the HD_DATABASE_* parameters and secrets/db_password, with another database,
 #      user and password than the bundled one's; /api/health answers that the database is up,
@@ -57,11 +60,13 @@
 #      the session cookie, which a request needing it then takes. A failed sign-in counts under
 #      the address nginx saw it from, not the one the client made up, also with
 #      HD_TRUSTED_PROXIES set to the gateway in .env, and under nginx's address with it set
-#      empty. Caddy is not started;
+#      empty. Caddy is not started. With the profile zabbix, nginx passes /webhook on to the
+#      Zabbix add-on, as the example says;
 #  10. with the profile https and the certificate internal: Caddy's root certificate is read as
 #      reverse-proxy.md gives it, /api/health answers over HTTPS through Caddy verified against
 #      it, plain HTTP is sent to HTTPS, and an agent signs in through Caddy, a failed sign-in
-#      counting under the address Caddy saw it from, the gateway;
+#      counting under the address Caddy saw it from, the gateway; with the profile zabbix, Caddy
+#      passes /webhook on to the Zabbix add-on;
 #  11. with the certificate files: a certificate the test makes, in secrets/, is the one Caddy
 #      serves;
 #  12. with the certificate acme: Caddy turns the install's Caddyfile into a configuration that
@@ -77,10 +82,11 @@
 # Usage:
 #   bash scripts/test-compose.sh VERSION
 #
-# VERSION is the tag of ghcr.io/manustars/hd-core and ghcr.io/manustars/hd-assistant that the
-# local engine holds, such as images built with
+# VERSION is the tag of ghcr.io/manustars/hd-core, ghcr.io/manustars/hd-assistant and
+# ghcr.io/manustars/hd-zabbix that the local engine holds, such as images built with
 #   docker build -f deploy/Dockerfile --target core      -t ghcr.io/manustars/hd-core:VERSION .
 #   docker build -f deploy/Dockerfile --target assistant -t ghcr.io/manustars/hd-assistant:VERSION .
+#   docker build -f deploy/Dockerfile --target zabbix    -t ghcr.io/manustars/hd-zabbix:VERSION .
 # The repository's compose.yaml reads it from .env (HD_VERSION), where the test sets it. A
 # release's archive names its own version in its compose.yaml and reads none: the test sets none,
 # and VERSION must be the archive's, as CI tests it with
@@ -98,7 +104,8 @@
 # "$CONTAINER_ENGINE compose"), PROJECT (the Compose project, hd-test-compose), PORT (a free
 # local port for the core, 55479; the two after it are the test mail server's), PROXY_PORT (the
 # first of four free local ports, the three after PORT's by default: nginx's HTTP and HTTPS, then
-# Caddy's), SUBNET (the install's network, a /24: 172.16.N.0/24 by default, N being the core's
+# Caddy's), ZABBIX_PORT (a free local port for the Zabbix add-on, the one after those four),
+# SUBNET (the install's network, a /24: 172.16.N.0/24 by default, N being the core's
 # port modulo 256).
 #
 # nginx runs on the host's network, which Docker and Podman on Linux have. With Podman (or Docker)
@@ -122,6 +129,8 @@ nginx_http_port=$proxy_port
 nginx_https_port=$((proxy_port + 1))
 caddy_http_port=$((proxy_port + 2))
 caddy_https_port=$((proxy_port + 3))
+# The Zabbix add-on's port on the host, where a proxy on the host passes /webhook on.
+zabbix_port=${ZABBIX_PORT:-$((proxy_port + 4))}
 # The install's network, one of this run's own so that runs on one engine do not collide: a /24,
 # whose gateway is the first address.
 subnet=${SUBNET:-172.16.$((port % 256)).0/24}
@@ -199,7 +208,8 @@ finish() {
     if [ "$status" -ne 0 ]; then
       diagnose
     fi
-    hd_compose --profile db --profile assistant --profile greenmail --profile https down -v \
+    hd_compose --profile db --profile assistant --profile zabbix --profile greenmail \
+      --profile https down -v \
       --remove-orphans > /dev/null 2>&1 || true
   fi
   if [ -n "${proxy_started:-}" ]; then
@@ -412,11 +422,39 @@ certificate() {
     2> "$tls/openssl.txt" || fail "openssl made no certificate for $name: $(cat "$tls/openssl.txt")"
 }
 
+# Writes the Zabbix add-on's zabbix.toml beside compose.yaml from zabbix.example.toml, as
+# secrets/README.md says, with a Zabbix that does not exist, so that no Zabbix is needed.
+zabbix_settings() {
+  grep -qx 'url = "https://zabbix.example.com"' "$install/zabbix.example.toml" \
+    || fail "zabbix.example.toml names no Zabbix at https://zabbix.example.com"
+  sed 's|^url = "https://zabbix.example.com"$|url = "http://zabbix.invalid"|' \
+    "$install/zabbix.example.toml" > "$install/zabbix.toml"
+  chmod 644 "$install/zabbix.toml"
+  setting HD_ZABBIX_PORT "$zabbix_port"
+}
+
+# Posts an empty event to the Zabbix add-on's webhook at URL with the curl command given after
+# it, and leaves in $answer the status and the body it answered, such as `401 the webhook's
+# secret is wrong`. The add-on takes a few seconds to listen once started.
+webhook() {
+  local url=$1 status=""
+  shift
+  for _ in $(seq 30); do
+    if status=$("$@" -o "$work/webhook.txt" -w '%{http_code}' -X POST \
+      -H 'Content-Type: application/json' -d '{}' "$url" 2> "$work/curl.txt") \
+      && [ "$status" != 000 ] && [ "$status" != 502 ]; then
+      break
+    fi
+    sleep 1
+  done
+  answer="$status $(cat "$work/webhook.txt" 2> /dev/null)"
+}
+
 # ---------------------------------------------------------------------------------------------
 step "Tools"
 "${compose_command[@]}" version
 curl --version | head -n 1
-for image in hd-core hd-assistant; do
+for image in hd-core hd-assistant hd-zabbix; do
   "$engine" image inspect "ghcr.io/manustars/$image:$version" > /dev/null \
     || fail "the engine holds no ghcr.io/manustars/$image:$version: build it first (see the usage)"
   ok "the engine holds ghcr.io/manustars/$image:$version"
@@ -435,7 +473,7 @@ if grep -q HD_VERSION "$install/compose.yaml"; then
   version_from_env=yes
 fi
 settings
-setting COMPOSE_PROFILES db,greenmail,assistant,https
+setting COMPOSE_PROFILES db,greenmail,assistant,zabbix,https
 for variable in $optional_secrets; do
   name_secret "$variable"
 done
@@ -443,7 +481,8 @@ setting HD_DATABASE_CA ./secrets/database_ca
 setting HD_MAIL_CA ./secrets/mail_ca
 # The secrets as variables, as .env set them before they were files: none may be passed on.
 secret_variables="HD_DATABASE_URL HD_DATABASE_PASSWORD $optional_secrets HD_ASSISTANT_TOKEN"
-secret_variables="$secret_variables HD_ASSISTANT_EVENT_SECRET POSTGRES_PASSWORD"
+secret_variables="$secret_variables HD_ASSISTANT_EVENT_SECRET HD_ZABBIX_TOKEN"
+secret_variables="$secret_variables HD_ZABBIX_EVENT_SECRET HD_ZABBIX_API_TOKEN POSTGRES_PASSWORD"
 for variable in $secret_variables; do
   extra "$variable" "$(password)"
 done
@@ -451,14 +490,17 @@ hd_compose config > "$work/config.yaml"
 service db < "$work/config.yaml" > "$work/db.yaml"
 service core < "$work/config.yaml" > "$work/core.yaml"
 service assistant < "$work/config.yaml" > "$work/assistant.yaml"
+service zabbix < "$work/config.yaml" > "$work/zabbix.yaml"
 service dumps-schedule < "$work/config.yaml" > "$work/dumps-schedule.yaml"
 [ -s "$work/db.yaml" ] || fail "the configuration has no service db: $(cat "$work/config.yaml")"
 [ -s "$work/core.yaml" ] || fail "the configuration has no service core: $(cat "$work/config.yaml")"
 [ -s "$work/assistant.yaml" ] \
   || fail "the configuration has no service assistant: $(cat "$work/config.yaml")"
+[ -s "$work/zabbix.yaml" ] \
+  || fail "the configuration has no service zabbix: $(cat "$work/config.yaml")"
 [ -s "$work/dumps-schedule.yaml" ] \
   || fail "the configuration has no service dumps-schedule: $(cat "$work/config.yaml")"
-for image in core assistant; do
+for image in core assistant zabbix; do
   grep -qxF "    image: ghcr.io/manustars/hd-$image:$version" "$work/$image.yaml" \
     || fail "the install runs $(sed -n 's/^    image: //p' "$work/$image.yaml")," \
       "not hd-$image:$version"
@@ -487,6 +529,10 @@ given db.yaml POSTGRES_PASSWORD_FILE /run/secrets/db_password
 given assistant.yaml HD_ASSISTANT_TOKEN_FILE /run/secrets/assistant_token
 given assistant.yaml HD_ASSISTANT_EVENT_SECRET_FILE /run/secrets/assistant_event_secret
 given assistant.yaml HD_ASSISTANT_API_KEY_FILE /run/secrets/assistant_api_key
+given zabbix.yaml HD_ZABBIX_TOKEN_FILE /run/secrets/zabbix_token
+given zabbix.yaml HD_ZABBIX_EVENT_SECRET_FILE /run/secrets/zabbix_event_secret
+given zabbix.yaml HD_ZABBIX_API_TOKEN_FILE /run/secrets/zabbix_api_token
+given zabbix.yaml HD_ZABBIX_CONFIG /etc/hd/zabbix.toml
 ok "every secret is given to its services as a file, through its _FILE variable"
 given core.yaml HD_DATABASE_CA_FILE /run/secrets/database_ca
 given core.yaml HD_MAIL_CA_FILE /run/secrets/mail_ca
@@ -501,7 +547,7 @@ ok "no secret is given as a variable, even one that .env sets"
 
 # Without the optional secrets named in .env, no service is told of them.
 settings
-setting COMPOSE_PROFILES db,greenmail,assistant,https
+setting COMPOSE_PROFILES db,greenmail,assistant,zabbix,https
 hd_compose config > "$work/config.yaml"
 if grep -E "^      (${optional_secrets// /|})_FILE:" "$work/config.yaml"; then
   fail "an optional secret that .env does not name is given"
@@ -553,7 +599,7 @@ db_password_command "secrets/db_password is there: kept"
 ok "running db-password again keeps secrets/db_password"
 
 # ---------------------------------------------------------------------------------------------
-step "3. Add the profiles greenmail and assistant beside db, their secrets in files"
+step "3. Add the profiles greenmail, assistant and zabbix beside db, their secrets in files"
 imap_url="imap://helpdesk:helpdesk@127.0.0.1:3143/INBOX"
 smtp_url="smtp://127.0.0.1:3025"
 secret imap_url "$imap_url"
@@ -617,7 +663,45 @@ hd_compose up -d
   || fail "adding the Assistant's settings recreated the core"
 expect_log assistant "connected to the core"
 ok "the Assistant reached the core with its token, and the core kept running"
-no_secret_shown "$db_password" "$imap_url" "$smtp_url" "$token" "$event_secret" "$api_key"
+
+# The Zabbix add-on, as secrets/README.md registers it and writes its secrets, with its
+# zabbix.toml made from zabbix.example.toml and a Zabbix that does not exist: it starts all the
+# same, and tries again at each round.
+hd_compose exec -T core hd addon add zabbix --url http://zabbix:8091 \
+  --scope directory:read --scope catalog:write --scope names:write --scope conflicts:write \
+  --scope tickets:read --scope tickets:write --event ticket.state_changed > "$work/addon.txt"
+zabbix_token=$(sed -n 's/^token: //p' "$work/addon.txt")
+zabbix_event_secret=$(sed -n 's/^event secret: //p' "$work/addon.txt")
+[ -n "$zabbix_token" ] && [ -n "$zabbix_event_secret" ] \
+  || fail "hd addon add zabbix printed no token and event secret: $(cat "$work/addon.txt")"
+ok "the Zabbix add-on is registered on the core"
+zabbix_api_token=$(password)
+webhook_secret=$(password)
+secret zabbix_token "$zabbix_token"
+secret zabbix_event_secret "$zabbix_event_secret"
+secret zabbix_api_token "$zabbix_api_token"
+secret zabbix_webhook_secret "$webhook_secret"
+zabbix_settings
+setting COMPOSE_PROFILES db,greenmail,assistant,zabbix
+hd_compose up -d
+[ "$(hd_compose ps -q core)" = "$core_before" ] \
+  || fail "adding the Zabbix add-on recreated the core"
+# Its round asks the core who it is before it asks Zabbix: Zabbix's address in the round's error
+# says the core took its token.
+expect_log zabbix "calling hostgroup.get on http://zabbix.invalid/api_jsonrpc.php"
+expect_log zabbix "answering the core's reads of live details"
+expect_log zabbix "receiving Zabbix's alerts through its webhook"
+ok "the Zabbix add-on reached the core with its token, and runs without Zabbix"
+webhook "http://127.0.0.1:$zabbix_port/webhook" curl -sS
+[ "$answer" = "401 the webhook's secret is wrong" ] \
+  || fail "the webhook without its secret answered '$answer'"
+webhook "http://127.0.0.1:$zabbix_port/webhook" curl -sS -H "Authorization: Bearer $webhook_secret"
+[ "${answer%% *}" = 400 ] \
+  || fail "the webhook with the secret of secrets/zabbix_webhook_secret answered '$answer'"
+ok "the Zabbix add-on's webhook answers on the port published on the host: without its secret" \
+  "refused, with that of secrets/zabbix_webhook_secret taken (an empty event: $answer)"
+no_secret_shown "$db_password" "$imap_url" "$smtp_url" "$token" "$event_secret" "$api_key" \
+  "$zabbix_token" "$zabbix_event_secret" "$zabbix_api_token" "$webhook_secret"
 hd_compose down -v
 ok "stopped, with its volume removed"
 
@@ -818,6 +902,15 @@ services_started() {
 # A fresh install's secrets/, with nothing but what it ships.
 fresh_secrets() {
   find "$secrets" -mindepth 1 ! -name README.md ! -name .gitignore -delete
+}
+
+# The Zabbix add-on's secrets, for an add-on the core does not know: it starts, and answers on
+# its webhook, all the same.
+zabbix_secrets_unregistered() {
+  local name
+  for name in zabbix_token zabbix_event_secret zabbix_api_token zabbix_webhook_secret; do
+    secret "$name" "$(password)"
+  done
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1243,6 +1336,8 @@ replace "$work/nginx.conf" "listen 80;" "listen $nginx_http_port;"
 replace "$work/nginx.conf" "listen 443 ssl;" "listen $nginx_https_port ssl;"
 replace "$work/nginx.conf" "proxy_pass http://127.0.0.1:8080;" \
   "proxy_pass http://127.0.0.1:$port;"
+replace "$work/nginx.conf" "proxy_pass http://127.0.0.1:8091;" \
+  "proxy_pass http://127.0.0.1:$zabbix_port;"
 # The first value of the nginx DIRECTIVE in the example.
 directive() {
   awk -v name="$1" '$1 == name { sub(/;$/, "", $2); print $2; exit }' "$work/nginx.conf"
@@ -1299,6 +1394,16 @@ address=$(through_nginx_address trusting-none@example.com)
   || fail "with HD_TRUSTED_PROXIES empty a sign-in through nginx counted under '$address'"
 ok "with HD_TRUSTED_PROXIES empty in .env, no proxy is trusted: it counts under nginx's" \
   "address ($gateway)"
+
+# The Zabbix add-on beside it, not registered: its webhook answers all the same.
+zabbix_secrets_unregistered
+zabbix_settings
+setting COMPOSE_PROFILES db,zabbix
+hd_compose up -d
+webhook "$base/webhook" "${through_nginx[@]}"
+[ "$answer" = "401 the webhook's secret is wrong" ] \
+  || fail "/webhook through nginx answered '$answer', not the Zabbix add-on's refusal"
+ok "nginx passes /webhook on to the Zabbix add-on, with the example's configuration ($answer)"
 "$engine" rm -f "$proxy" > /dev/null
 proxy_started=""
 hd_compose down -v
@@ -1371,6 +1476,17 @@ caddy_address=$("$engine" inspect -f '{{range .NetworkSettings.Networks}}{{.IPAd
   || fail "a sign-in through Caddy counted under '$address', not under $gateway, Caddy's client"
 ok "a failed sign-in through Caddy counts under the address Caddy saw it from ($gateway)," \
   "not under Caddy's ($caddy_address) nor the one the client made up"
+
+# The Zabbix add-on beside it, not registered: Caddy passes /webhook on to it.
+zabbix_secrets_unregistered
+zabbix_settings
+setting COMPOSE_PROFILES db,https,zabbix
+hd_compose up -d
+webhook "$base/webhook" "${through_caddy[@]}"
+[ "$answer" = "401 the webhook's secret is wrong" ] \
+  || fail "/webhook through Caddy answered '$answer', not the Zabbix add-on's refusal"
+ok "Caddy passes /webhook on to the Zabbix add-on ($answer)"
+hd_compose rm -sf zabbix > /dev/null 2>&1
 
 # ---------------------------------------------------------------------------------------------
 step "11. The same install with the certificate files: one of the test's own, in secrets/"

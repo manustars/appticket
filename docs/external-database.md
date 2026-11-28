@@ -145,7 +145,7 @@ naming it, when it cannot. It also stops when the file is given:
 
 ## Secrets from files
 
-Every secret of the core and of the Assistant can be read from a file instead of a variable, such
+Every secret of the core and of the add-ons can be read from a file instead of a variable, such
 as a mounted Kubernetes Secret or a Compose secret: set the `_FILE` variable to the file's path.
 The Compose install does so for every secret, from the files of `deploy/compose/secrets/`, which
 [its README](../deploy/compose/secrets/README.md) describes with the permissions they need; it
@@ -163,10 +163,13 @@ gives the database as the separate parameters, its password in `secrets/db_passw
 | `HD_ASSISTANT_TOKEN` | `HD_ASSISTANT_TOKEN_FILE` | The Assistant. |
 | `HD_ASSISTANT_EVENT_SECRET` | `HD_ASSISTANT_EVENT_SECRET_FILE` | The Assistant. |
 | `HD_ASSISTANT_API_KEY` | `HD_ASSISTANT_API_KEY_FILE` | The Assistant. |
+| `HD_ZABBIX_TOKEN` | `HD_ZABBIX_TOKEN_FILE` | The Zabbix add-on. |
+| `HD_ZABBIX_EVENT_SECRET` | `HD_ZABBIX_EVENT_SECRET_FILE` | The Zabbix add-on. |
+| `HD_ZABBIX_API_TOKEN` | `HD_ZABBIX_API_TOKEN_FILE` | The Zabbix add-on. |
 
 The file's content is used with the surrounding whitespace (such as a final newline) removed.
 Setting a variable and its `_FILE` together, or naming a missing or empty file, stops the core or
-the Assistant with a message saying which; the Assistant stops even for a provider that takes no
+the add-on with a message saying which; the Assistant stops even for a provider that takes no
 key. Each `_FILE` of the core is also an option, the secret's option with `-file` added:
 `--database-url-file`, or `--password-file` beside `hd agent add --password`.
 

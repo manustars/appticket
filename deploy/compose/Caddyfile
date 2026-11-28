@@ -1,6 +1,7 @@
 # Caddy in front of the core, with the profile https (reverse-proxy.md): HTTPS for the address of
 # HD_PUBLIC_URL, plain HTTP sent there, and every request passed on to the core with the
-# browser's address in X-Forwarded-For. The settings come from .env through compose.yaml.
+# browser's address in X-Forwarded-For, but for /webhook, the Zabbix add-on's webhook, passed on
+# to the add-on of the profile zabbix. The settings come from .env through compose.yaml.
 {
 	http_port {$HD_CADDY_HTTP_PORT}
 	https_port {$HD_CADDY_HTTPS_PORT}
@@ -36,5 +37,7 @@
 
 {$HD_PUBLIC_URL} {
 	import {$HD_HTTPS_CERTIFICATE}
+	# Where Zabbix's media type sends its alerts; without the profile zabbix, answered 502.
+	reverse_proxy /webhook zabbix:8091
 	reverse_proxy core:8080
 }

@@ -1,0 +1,29 @@
+# The Zabbix add-on's configuration in the Compose install, with the profile zabbix: copy this
+# file to zabbix.toml beside compose.yaml, set what is marked, and make it readable by every
+# user (chmod 644 zabbix.toml), since the add-on reads it as a user of its own. Every setting,
+# the rules for alerts included, is in addons/zabbix/README.md ("Configuration"). Its secrets are
+# not here but in secrets/ (secrets/README.md).
+
+[core]
+# The core, as the add-on reaches it inside the install.
+url = "http://core:8080"
+# The help desk's UI as agents' browsers reach it, HD_PUBLIC_URL of .env: the address of a
+# ticket's page that Zabbix's event menu opens.
+ui_url = "https://helpdesk.example.com"
+
+[zabbix]
+# Zabbix's frontend; the API is <url>/api_jsonrpc.php.
+url = "https://zabbix.example.com"
+
+[assets]
+# The asset kind of a host, from the help desk's list.
+default_kind = "Server"
+
+[addon]
+# Every address of the container: the core reaches it at http://zabbix:8091, and the reverse
+# proxy at the port compose.yaml publishes.
+listen = "0.0.0.0:8091"
+
+[webhook]
+# The webhook's secret, which Zabbix's media type sends: secrets/zabbix_webhook_secret.
+secret_file = "/run/secrets/zabbix_webhook_secret"

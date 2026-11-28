@@ -2,7 +2,7 @@
 
 The passwords, the mail servers' URLs and the tokens of the install are files in this directory,
 one secret per file, and never in `.env`. `compose.yaml` mounts each into the containers that
-read it, at `/run/secrets/<file>`, and gives the core and the Assistant its path in the matching
+read it, at `/run/secrets/<file>`, and gives the core and the add-ons its path in the matching
 `_FILE` variable ([Secrets from files](../../../docs/external-database.md#secrets-from-files));
 the bundled PostgreSQL reads its password through `POSTGRES_PASSWORD_FILE`. Compose shows the
 files' paths, never their content: neither `docker compose config` nor `docker inspect` holds a
@@ -17,6 +17,10 @@ secret.
 | `assistant_token` | The token `hd addon add` printed. | With the profile `assistant`. |
 | `assistant_event_secret` | The event secret `hd addon add` printed. | With the profile `assistant`. |
 | `assistant_api_key` | `HD_ASSISTANT_API_KEY`, the model service's key. | For a provider that takes one, with `HD_SECRET_ASSISTANT_API_KEY` in `.env`. |
+| `zabbix_token` | The token `hd addon add zabbix` printed. | With the profile `zabbix`. |
+| `zabbix_event_secret` | The event secret `hd addon add zabbix` printed. | With the profile `zabbix`. |
+| `zabbix_api_token` | The API token of the Zabbix add-on's user in Zabbix. | With the profile `zabbix`. |
+| `zabbix_webhook_secret` | The webhook's secret, which Zabbix's media type sends. | With the profile `zabbix`. |
 | `tls_certificate` | The certificate Caddy serves, followed by its chain, in PEM. | With the profile `https` and the certificate `files`, with `HD_SECRET_TLS_CERTIFICATE` in `.env` ([reverse-proxy.md](../reverse-proxy.md)). |
 | `tls_key` | Its private key, in PEM. | The same, with `HD_SECRET_TLS_KEY` in `.env`. |
 | `database_ca` | The certificate of the authority that issued the database's, in PEM. | For an existing database whose certificate comes from an authority of one's own, with `HD_DATABASE_CA` in `.env`. |
@@ -45,7 +49,7 @@ chmod 644 secrets/*
 
 A clone or an unpacked archive gives the directory the usual mode (`755`): `chmod 700` it before
 writing the first secret. The files must be readable by everyone because the containers read
-them as users of their own, not as the user that runs Compose: the core and the Assistant as
+them as users of their own, not as the user that runs Compose: the core and the add-ons as
 10001, PostgreSQL as 999 (as root first), the dumps as root without any capability, Caddy as a
 root with no right to bypass a file's mode. Compose mounts each file on its own, so a container
 never goes through the directory, and no other user of the host can.
@@ -57,7 +61,7 @@ printf '%s\n' 'imaps://helpdesk:password@mail.example.com/INBOX' > secrets/imap_
 ```
 
 A secret is read when its service starts. After changing one, recreate the service:
-`docker compose up -d --force-recreate core` (or `assistant`).
+`docker compose up -d --force-recreate core` (or `assistant`, or `zabbix`).
 
 ## The database's password
 
@@ -89,3 +93,25 @@ sed -n 's/^token: //p' secrets/addon.txt > secrets/assistant_token
 sed -n 's/^event secret: //p' secrets/addon.txt > secrets/assistant_event_secret
 rm secrets/addon.txt
 ```
+
+## The Zabbix add-on's secrets and configuration
+
+Registering the Zabbix add-on on the core prints its token and event secret once; write them to
+their files, with the API token of the add-on's user in Zabbix and a webhook secret of your own,
+which Zabbix's media type sends ([the add-on's README](../../../addons/zabbix/README.md#setting-it-up-in-zabbix)):
+
+```sh
+docker compose exec -T core hd addon add zabbix --url http://zabbix:8091 \
+  --scope directory:read --scope catalog:write --scope names:write --scope conflicts:write \
+  --scope tickets:read --scope tickets:write --event ticket.state_changed > secrets/addon.txt
+sed -n 's/^token: //p' secrets/addon.txt > secrets/zabbix_token
+sed -n 's/^event secret: //p' secrets/addon.txt > secrets/zabbix_event_secret
+rm secrets/addon.txt
+printf '%s\n' 'API-TOKEN-MADE-IN-ZABBIX' > secrets/zabbix_api_token
+openssl rand -hex 32 > secrets/zabbix_webhook_secret
+```
+
+Its settings are the file `zabbix.toml` beside `compose.yaml`, which is not a secret: copy
+[`zabbix.example.toml`](../zabbix.example.toml) to it, set the Zabbix frontend's URL, the help
+desk's address and an asset kind, and make it readable by every user (`chmod 644 zabbix.toml`).
+Then add `zabbix` to `COMPOSE_PROFILES` in `.env` and start it.
