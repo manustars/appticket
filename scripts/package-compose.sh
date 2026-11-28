@@ -63,10 +63,10 @@ done
 # The images, named by the version in compose.yaml rather than read from .env, so that the next
 # release's files run the next version with the .env an install keeps; .env.example shows it.
 compose="$dir/compose.yaml"
-image='^( +image: ghcr\.io/manustars/hd-(core|assistant)):'
+image='^( +image: ghcr\.io/manustars/hd-(core|assistant|zabbix)):'
 variable='\$\{HD_VERSION:\?[^}]*\}$'
-for component in core assistant; do
-  [ "$(grep -cE "${image/(core|assistant)/$component}$variable" "$compose")" = 1 ] \
+for component in core assistant zabbix; do
+  [ "$(grep -cE "${image/(core|assistant|zabbix)/$component}$variable" "$compose")" = 1 ] \
     || refuse "compose.yaml has no line, or more than one, naming the image of hd-$component" \
       "by HD_VERSION (image: ghcr.io/manustars/hd-$component:\${HD_VERSION:?...})"
 done

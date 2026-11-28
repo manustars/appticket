@@ -213,13 +213,15 @@ jobs:
   # The Compose install as a release ships it: the release archive that release.yml attaches to
   # a GitHub release, built by the same script (scripts/package-compose.sh) under a test
   # version, which that script's own test checks first, and unpacked into a directory outside
-  # the checkout. From there, with both images built here under that version, as the archive
-  # names them: docker compose starts it with its own PostgreSQL (the profile db), then with the
-  # Assistant and the test mail server beside it, and then without the profile db on a
+  # the checkout. From there, with the three images built here under that version, as the
+  # archive names them: docker compose starts it with its own PostgreSQL (the profile db), then
+  # with the Assistant, the Zabbix add-on (without a Zabbix, which it does not need to start) and
+  # the test mail server beside it, and then without the profile db on a
   # PostgreSQL that the script starts itself and gives through HD_DATABASE_*; it dumps both
   # databases and restores a dump into a fresh install; and then it runs behind proxies: an
   # nginx that the script starts on the host's network with the documented example, and Caddy of
-  # the profile https with each of its three certificates. The images build from the cache that
+  # the profile https with each of its three certificates, both passing the Zabbix add-on's
+  # webhook on to it. The images build from the cache that
   # the deploy job wrote on earlier runs: both jobs run at once, so a change to the Dockerfile or
   # the code builds here without it.
   compose:
@@ -250,6 +252,15 @@ jobs:
           push: false
           load: true
           tags: ghcr.io/manustars/hd-assistant:${{ env.TEST_VERSION }}
+          cache-from: type=gha,scope=hd
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile
+          target: zabbix
+          push: false
+          load: true
+          tags: ghcr.io/manustars/hd-zabbix:${{ env.TEST_VERSION }}
           cache-from: type=gha,scope=hd
       - name: Build the release archive and unpack it outside the checkout
         id: archive

@@ -1,7 +1,10 @@
 # Caddy on the host in front of the Compose install (../reverse-proxy.md): HTTPS for the host
 # name of HD_PUBLIC_URL, with a certificate Caddy obtains, and every request passed on to the
 # core, published on the host's loopback address at HD_HTTP_PORT (8080). Caddy adds
-# X-Forwarded-For by itself. For a host with no proxy, the profile https starts one instead.
+# X-Forwarded-For by itself. /webhook, the Zabbix add-on's webhook, goes to the add-on of the
+# profile zabbix at HD_ZABBIX_PORT (8091). For a host with no proxy, the profile https starts one
+# instead.
 helpdesk.example.com {
+	reverse_proxy /webhook 127.0.0.1:8091
 	reverse_proxy 127.0.0.1:8080
 }

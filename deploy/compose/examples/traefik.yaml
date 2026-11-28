@@ -2,7 +2,8 @@
 # file provider: HTTPS for the host name of HD_PUBLIC_URL on the entry point websecure, with a
 # certificate from the resolver letsencrypt, both of Traefik's own configuration, and every
 # request passed on to the core, published on the host's loopback address at HD_HTTP_PORT (8080).
-# Traefik adds X-Forwarded-For by itself.
+# Traefik adds X-Forwarded-For by itself. /webhook, the Zabbix add-on's webhook, goes to the
+# add-on of the profile zabbix at HD_ZABBIX_PORT (8091): leave its router out without it.
 http:
   routers:
     helpdesk:
@@ -11,8 +12,18 @@ http:
       service: helpdesk
       tls:
         certResolver: letsencrypt
+    helpdesk-zabbix-webhook:
+      rule: Host(`helpdesk.example.com`) && Path(`/webhook`)
+      entryPoints: [websecure]
+      service: helpdesk-zabbix
+      tls:
+        certResolver: letsencrypt
   services:
     helpdesk:
       loadBalancer:
         servers:
           - url: http://127.0.0.1:8080
+    helpdesk-zabbix:
+      loadBalancer:
+        servers:
+          - url: http://127.0.0.1:8091

@@ -35,7 +35,7 @@ expected_files() {
   printf '%s\n' "$top/" "$top/.env.example" "$top/Caddyfile" "$top/compose.yaml" \
     "$top/dumps.md" "$top/examples/" "$top/examples/Caddyfile" "$top/examples/nginx.conf" \
     "$top/examples/traefik.yaml" "$top/reverse-proxy.md" "$top/secrets/" \
-    "$top/secrets/.gitignore" "$top/secrets/README.md"
+    "$top/secrets/.gitignore" "$top/secrets/README.md" "$top/zabbix.example.toml"
 }
 
 # Builds the archive of the version $1 into the new directory $2 from the repository REPO (this
@@ -132,7 +132,8 @@ echo "ok 2 - a .env, secrets and a file that git does not track are left out of 
 install="$unpacked/$top"
 images=$(grep -E '^ +image: ghcr\.io/manustars/' "$install/compose.yaml" || true)
 expected_images="    image: ghcr.io/manustars/hd-core:$version
-    image: ghcr.io/manustars/hd-assistant:$version"
+    image: ghcr.io/manustars/hd-assistant:$version
+    image: ghcr.io/manustars/hd-zabbix:$version"
 [ "$images" = "$expected_images" ] || fail "the archive's compose.yaml names the images $images"
 ! grep -n HD_VERSION "$install/compose.yaml" \
   || fail "the archive's compose.yaml reads HD_VERSION"
@@ -177,7 +178,7 @@ done < "$work/urls"
 # the text of a link to its address.
 top_dirs=$(git -C "$root" ls-files | sed -n 's|^\([^./][^/]*\)/.*|\1|p' | sort -u | paste -sd '|' -)
 sed -E 's/\[[^]]*\]\(https:[^)]*\)//g; s#https://[^ )>`"]*##g' "$install"/.env.example \
-  "$install"/*.yaml "$install"/*.md "$install"/Caddyfile "$install"/examples/* \
+  "$install"/*.yaml "$install"/*.md "$install"/*.toml "$install"/Caddyfile "$install"/examples/* \
   "$install"/secrets/README.md > "$work/text"
 ! grep -nE "(^|[^A-Za-z0-9_./-])($top_dirs)/" "$work/text" \
   || fail "the archive names files of the repository by their paths, which lead nowhere outside it"
