@@ -4,7 +4,7 @@
 #   podman build -f deploy/Dockerfile --target assistant -t hd-assistant .
 #   podman build -f deploy/Dockerfile --target zabbix    -t hd-zabbix .
 #
-# They share one Rust build stage, so building the second image reuses the first's work.
+# They share one Rust build stage, so the image built after the first reuses its work.
 
 # The agents' UI, built into /src/web/dist.
 FROM docker.io/library/node:24.22.3-trixie-slim AS web

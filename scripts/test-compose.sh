@@ -1486,6 +1486,9 @@ webhook "$base/webhook" "${through_caddy[@]}"
 [ "$answer" = "401 the webhook's secret is wrong" ] \
   || fail "/webhook through Caddy answered '$answer', not the Zabbix add-on's refusal"
 ok "Caddy passes /webhook on to the Zabbix add-on ($answer)"
+# Step 11 runs this install on without the profile zabbix, which its .env no longer names: the
+# add-on's container goes now, rather than be left to the up and down of a profile they are not
+# given, which may keep it running beside the install.
 hd_compose rm -sf zabbix > /dev/null 2>&1
 
 # ---------------------------------------------------------------------------------------------
