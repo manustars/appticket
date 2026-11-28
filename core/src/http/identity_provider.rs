@@ -369,6 +369,17 @@ mod tests {
         get(state, &path_of(&back), Some(&cookie)).await
     }
 
+    /// Shows the core's log in the output of a test that fails, such as what the ID token's group
+    /// claim held when the core refused a sign-in, until the guard is dropped.
+    fn show_the_log() -> tracing::subscriber::DefaultGuard {
+        use tracing_subscriber::util::SubscriberInitExt;
+        tracing_subscriber::fmt()
+            .with_test_writer()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .set_default()
+    }
+
     async fn agent(db: &PgPool, email: &str, name: &str) -> Uuid {
         crate::agents::add(db, &Grant::command_line(), email, name, None, None)
             .await
@@ -597,6 +608,7 @@ mod tests {
     #[sqlx::test]
     #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
     async fn a_first_sign_in_in_the_keycloak_group_makes_an_agent(db: PgPool) {
+        let _log = show_the_log();
         let state = state_with_group(&db, GROUP, "groups");
         agent(&db, "ada@helpdesk.test", "Ada").await;
 
@@ -638,6 +650,7 @@ mod tests {
     #[sqlx::test]
     #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
     async fn keycloak_sign_ins_outside_the_authorized_group_are_refused(db: PgPool) {
+        let _log = show_the_log();
         // Nadia is an agent, but not in the group at Keycloak.
         agent(&db, "nadia.quist@example.com", "Nadia").await;
         let not_in_group = "/?sign_in_error=not_in_authorized_group";
@@ -667,6 +680,7 @@ mod tests {
     #[sqlx::test]
     #[ignore = "needs the development Keycloak (podman compose up -d keycloak)"]
     async fn a_deactivated_agent_in_the_keycloak_group_is_refused_and_not_recreated(db: PgPool) {
+        let _log = show_the_log();
         let state = state_with_group(&db, GROUP, "groups");
         agent(&db, "ada@helpdesk.test", "Ada").await;
         let piet = agent(&db, "piet.oak@example.com", "Piet").await;

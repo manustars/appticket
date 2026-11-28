@@ -119,6 +119,15 @@ impl AuthorizedGroupClaim {
             AuthorizedGroup::NotMember
         }
     }
+
+    /// What the claim holds, for the log of a refusal: telling a claim the provider does not send
+    /// from a group named otherwise there, such as by its path.
+    fn held(&self, claims: &OtherClaims) -> String {
+        claims.0.get(&self.claim).map_or_else(
+            || "nothing: the ID token has no such claim".to_owned(),
+            serde_json::Value::to_string,
+        )
+    }
 }
 
 /// A configured identity provider.
@@ -393,7 +402,18 @@ impl Provider {
             name,
             authorized_group: match &self.config.authorized_group {
                 None => AuthorizedGroup::NotConfigured,
-                Some(group) => group.check(claims.additional_claims()),
+                Some(group) => {
+                    let answer = group.check(claims.additional_claims());
+                    if answer == AuthorizedGroup::NotMember {
+                        tracing::info!(
+                            subject = claims.subject().as_str(),
+                            claim = group.claim,
+                            held = group.held(claims.additional_claims()),
+                            "the ID token does not put the person in the authorized group"
+                        );
+                    }
+                    answer
+                }
             },
         })
     }
@@ -636,6 +656,25 @@ mod tests {
         ] {
             assert_eq!(member(not.clone()), AuthorizedGroup::NotMember, "{not}");
         }
+    }
+
+    #[test]
+    fn a_refusal_s_log_tells_an_absent_claim_from_what_it_held() {
+        let rule = AuthorizedGroupClaim {
+            claim: "groups".to_owned(),
+            value: "helpdesk-agents".to_owned(),
+        };
+        let held = |json| rule.held(&claims(json));
+        assert_eq!(
+            held(serde_json::json!({"roles": ["helpdesk-agents"]})),
+            "nothing: the ID token has no such claim"
+        );
+        assert_eq!(
+            held(serde_json::json!({"groups": ["/helpdesk-agents"]})),
+            r#"["/helpdesk-agents"]"#
+        );
+        assert_eq!(held(serde_json::json!({"groups": []})), "[]");
+        assert_eq!(held(serde_json::json!({"groups": null})), "null");
     }
 
     const PUBLIC_URL: Option<&str> = Some("https://helpdesk.example.com/");

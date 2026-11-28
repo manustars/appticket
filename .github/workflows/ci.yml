@@ -51,6 +51,7 @@ jobs:
           -e KC_HOSTNAME=http://127.0.0.1:55080
           -v "$GITHUB_WORKSPACE/dev/keycloak:/opt/keycloak/data/import:ro"
           quay.io/keycloak/keycloak:26.8.2 start-dev --import-realm
+          --log-level=info,org.keycloak.events:debug
       # A PostgreSQL of the leg's version serving TLS with a certificate from a test authority made
       # by the script, for the test that connects with verify-full. Not a service: the certificate
       # is copied in.
@@ -83,6 +84,11 @@ jobs:
       # Includes the tests that need the test mail server, Keycloak and the TLS test database. The
       # Zabbix add-on's tests run in the job zabbix, beside the Zabbix they need.
       - run: cargo test --locked --workspace --exclude hd-zabbix -- --include-ignored
+      # Keycloak's log, with its sign-in events, to tell what it did when a test of signing in
+      # through it failed.
+      - name: Keycloak's log
+        if: failure()
+        run: docker logs keycloak
       - name: The UI's copy of the API specification is current
         if: matrix.checks
         run: cargo run -q --locked -p hd-core -- openapi | diff -u web/openapi.json -
