@@ -14,6 +14,22 @@ use std::time::{Duration, Instant};
 use common::{Core, TestZabbix};
 use serde_json::{Value, json};
 
+/// What the README's role for the add-on's user allows: Zabbix's API with the methods the add-on
+/// calls (but apiinfo.version and user.checkAuthentication, which every user may call and
+/// which a role does not list), and of the actions, acknowledging problems and commenting on them.
+fn readme_role() -> Value {
+    json!({
+        "api.access": 1,
+        // An allow list.
+        "api.mode": 1,
+        "api": ["hostgroup.get", "host.get", "item.get", "problem.get", "event.get",
+                "event.acknowledge", "alert.get", "mediatype.get", "user.get"],
+        "actions.default_access": 0,
+        "actions": [{"name": "acknowledge_problems", "status": 1},
+                    {"name": "add_problem_comments", "status": 1}],
+    })
+}
+
 /// The add-on's binary, run in a directory of its own with the configuration file it is given
 /// and nothing of the test's environment but its secrets; stopped with it.
 struct Addon {
@@ -22,7 +38,7 @@ struct Addon {
 }
 
 impl Addon {
-    fn start(config: &str, webhook_secret: &str, core: &Core, zabbix: &TestZabbix) -> Addon {
+    fn start(config: &str, webhook_secret: &str, core: &Core, api_token: &str) -> Addon {
         // Outside the repository, so that no .env of a checkout is read.
         let dir = std::env::temp_dir().join(format!("hd-zabbix-addon-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -39,7 +55,7 @@ impl Addon {
             .env("HD_ZABBIX_CONFIG", dir.join("zabbix.toml"))
             .env("HD_ZABBIX_TOKEN", &core.token)
             .env("HD_ZABBIX_EVENT_SECRET", &core.event_secret)
-            .env("HD_ZABBIX_API_TOKEN", &zabbix.api_token)
+            .env("HD_ZABBIX_API_TOKEN", api_token)
             .env("HD_ZABBIX_LOG", "info")
             .stdout(std::fs::File::create(dir.join("addon.log")).unwrap())
             .stderr(Stdio::inherit())
@@ -126,19 +142,28 @@ async fn a_problem_raised_in_zabbix_opens_one_ticket_its_recovery_adds_a_note_an
         .await;
 
     // Zabbix's side, as the README sets it up: the media type with the webhook's URL and the
-    // secret in the global macro, a user with the media, and an action sending problems,
-    // recoveries and updates.
+    // secret in the global macro; the add-on's own user, of the type User with the README's
+    // role, in a user group that reads the customer's host group alone, with an API token and
+    // the media type as its media; and an action sending problems, recoveries and updates to it.
     let secret = uuid::Uuid::new_v4().simple().to_string();
     let media_type = zabbix.media_type(&reached, &secret).await;
-    let receiver = zabbix
+    let role = zabbix
+        .role_of_type("Help desk add-on", 1, readme_role())
+        .await;
+    let readers = zabbix
+        .user_group("Help desk add-on", json!([{"id": group, "permission": 2}]))
+        .await;
+    let addon_user = zabbix
         .user(
             "helpdesk",
-            json!({"medias": [{"mediatypeid": media_type, "sendto": "helpdesk",
+            json!({"roleid": role, "usrgrps": [{"usrgrpid": readers}],
+                   "medias": [{"mediatypeid": media_type, "sendto": "helpdesk",
                                "active": 0, "severity": 63,
                                "period": "1-7,00:00-24:00"}]}),
         )
         .await;
-    let action = zabbix.action(&group, &media_type, &receiver).await;
+    let api_token = zabbix.token_of(&addon_user).await;
+    let action = zabbix.action(&group, &media_type, &addon_user).await;
 
     // The add-on with the default rules.
     let config = format!(
@@ -163,7 +188,7 @@ media_type = "{media_type_name}"
         zabbix_url = common::zabbix_url(),
         media_type_name = zabbix.name("Help desk"),
     );
-    let mut addon = Addon::start(&config, &secret, &core, &zabbix);
+    let mut addon = Addon::start(&config, &secret, &core, &api_token);
     // Its first round makes the host an asset of Brightfield.
     wait_for(
         &mut addon,
@@ -243,7 +268,7 @@ media_type = "{media_type_name}"
     let [(user, action_bits, message)] = &acknowledged[..] else {
         panic!("one acknowledgement, not {acknowledged:?}");
     };
-    assert_eq!(user, "Admin", "the add-on's Zabbix user");
+    assert_eq!(user, &addon_user, "the add-on's Zabbix user");
     assert_eq!(*action_bits, 6, "acknowledged with a message");
     assert!(
         message.starts_with(&format!(
@@ -252,8 +277,9 @@ media_type = "{media_type_name}"
         "{message}"
     );
 
-    // What Zabbix sent: the problem, its recovery and the add-on's acknowledgement, each
-    // delivered; still one ticket, resolved, with no note added since.
+    // What Zabbix sent: the problem and its recovery, each delivered, and not the add-on's own
+    // acknowledgement, since Zabbix sends no user its own updates; still one ticket, resolved,
+    // with no note added since.
     wait_for(
         &mut addon,
         Duration::from_secs(90),
@@ -267,13 +293,20 @@ media_type = "{media_type_name}"
                 )
                 .await
                 .unwrap();
-            (sent.len() >= 3 && sent.iter().all(|a| a["status"] == "1")).then_some(())
+            (sent.len() >= 2 && sent.iter().all(|a| a["status"] == "1")).then_some(())
         },
     )
     .await;
     assert_eq!(core.tickets().await, [number], "still one ticket");
     assert_eq!(core.ticket(number).await["state"], "resolved");
     assert_eq!(core.addon_notes(number).await.len(), 2);
+    // The README's role and rights were enough for all of it, the reconciliation's reads of the
+    // media type and its alerts included: nothing was refused, nor warned of.
+    let log = addon.log();
+    assert!(
+        !log.contains(" WARN ") && !log.contains(" ERROR "),
+        "the add-on warned: {log}"
+    );
 
     drop(addon);
     zabbix.clean_up().await;

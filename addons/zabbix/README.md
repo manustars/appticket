@@ -244,10 +244,12 @@ groups*, the tab *Host permissions*) with
 
 The user's role (*Users → User roles*) must allow, under *Access to actions*, *Acknowledge
 problems* and *Add problem comments*, and *Close problems* when a rule closes them; and under
-*Access to API*, the API, with these methods when it lists those allowed: `apiinfo.version`,
-`hostgroup.get`, `host.get`, `item.get`, `problem.get`, `event.get`, `event.acknowledge`,
-`alert.get`, `mediatype.get`, `user.get` and `user.checkAuthentication`. A role of the type
-*User* is enough from Zabbix 7.0.6, which opened `mediatype.get` to it; on an earlier 7.0,
+*Access to API*, the API, with these methods when it lists those allowed: `hostgroup.get`,
+`host.get`, `item.get`, `problem.get`, `event.get`, `event.acknowledge`, `alert.get`,
+`mediatype.get` and `user.get`. The add-on also calls `apiinfo.version` and
+`user.checkAuthentication`, which every user may call and a role does not list. A role of the
+type *User* is enough from Zabbix 7.0.6, which opened `mediatype.get` to it (the acceptance test
+runs the add-on with such a role, and *Read* on its host group alone); on an earlier 7.0,
 Zabbix refuses that method to such a user, and the add-on then takes every recovery as missed
 (see the [reconciliation](#reconciliation)). A Super admin reads every host whatever its groups,
 and every alert (see step 4 below).
@@ -654,8 +656,11 @@ port, run them one at a time (`-- --ignored --test-threads=1`).
 The acceptance test (`tests/acceptance.rs`) runs the add-on's own binary, as an install runs
 it, with a configuration file and its secrets, and lets Zabbix send it everything: a problem
 raised opens one ticket, its recovery adds a note to the ticket an agent worked on, and the
-agent resolving the ticket acknowledges the event. It imports the media type as the test of
-alerts does, and binds the add-on's port as that test binds the webhook's.
+agent resolving the ticket acknowledges the event. The add-on runs as a user of its own set up
+as [its user in Zabbix](#its-user-in-zabbix) says: a role of the type *User* with the methods
+listed there, *Read* on the customer's host group alone, and the media type as its media; it
+logs no warning. The test imports the media type as the test of alerts does, and binds the
+add-on's port as that test binds the webhook's.
 
 The tests of the reconciliation and the safety limit raise problems the same way and run the
 reconciliation themselves, with a limit of 2 tickets in 5 minutes so that nothing waits for the
