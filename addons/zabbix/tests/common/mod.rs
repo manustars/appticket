@@ -476,6 +476,7 @@ pub struct TestZabbix {
     media_types: Vec<String>,
     global_macros: Vec<String>,
     roles: Vec<String>,
+    user_groups: Vec<String>,
 }
 
 impl TestZabbix {
@@ -529,6 +530,7 @@ impl TestZabbix {
             media_types: vec![],
             global_macros: vec![],
             roles: vec![],
+            user_groups: vec![],
         }
     }
 
@@ -642,6 +644,13 @@ impl TestZabbix {
             let _: Value = self
                 .admin
                 .call("user.delete", json!(self.users))
+                .await
+                .unwrap();
+        }
+        if !self.user_groups.is_empty() {
+            let _: Value = self
+                .admin
+                .call("usergroup.delete", json!(self.user_groups))
                 .await
                 .unwrap();
         }
@@ -1074,16 +1083,39 @@ impl TestZabbix {
     /// A user role named `name` after the prefix, of the Super admin type, with these `rules`
     /// (such as actions it does not allow); answers its id, for a user's `roleid`.
     pub async fn role(&mut self, name: &str, rules: Value) -> String {
+        self.role_of_type(name, 3, rules).await
+    }
+
+    /// A user role named `name` after the prefix, of the user type `kind` (1 User, 2 Admin, 3
+    /// Super admin), with these `rules`; answers its id, for a user's `roleid`.
+    pub async fn role_of_type(&mut self, name: &str, kind: u8, rules: Value) -> String {
         let created: Value = self
             .admin
             .call(
                 "role.create",
-                json!({"name": self.name(name), "type": 3, "rules": rules}),
+                json!({"name": self.name(name), "type": kind, "rules": rules}),
             )
             .await
             .unwrap();
         let id = created["roleids"][0].as_str().unwrap().to_owned();
         self.roles.push(id.clone());
+        id
+    }
+
+    /// A user group named `name` after the prefix, with these host groups' rights (such as
+    /// `[{"id": group, "permission": 2}]`, 2 being read and 3 read-write); answers its id, for a
+    /// user's `usrgrps`.
+    pub async fn user_group(&mut self, name: &str, hostgroup_rights: Value) -> String {
+        let created: Value = self
+            .admin
+            .call(
+                "usergroup.create",
+                json!({"name": self.name(name), "hostgroup_rights": hostgroup_rights}),
+            )
+            .await
+            .unwrap();
+        let id = created["usrgrpids"][0].as_str().unwrap().to_owned();
+        self.user_groups.push(id.clone());
         id
     }
 
