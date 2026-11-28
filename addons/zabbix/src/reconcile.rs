@@ -225,8 +225,9 @@ impl Alerts {
     }
 
     /// The statuses of the media type's alerts for each of these recovery events, by event id;
-    /// none when the add-on's Zabbix user cannot read them all, logged with what to change: every
-    /// recovery is then taken as missed.
+    /// none when the add-on's Zabbix user cannot read them all, or Zabbix refuses them, logged
+    /// with what to change: every recovery is then taken as missed, and the reconciliation goes
+    /// on.
     async fn deliveries(
         &self,
         recoveries: &[String],
@@ -234,6 +235,22 @@ impl Alerts {
         if recoveries.is_empty() {
             return Ok(Some(HashMap::new()));
         }
+        match self.read_deliveries(recoveries).await {
+            Ok(deliveries) => Ok(deliveries),
+            Err(e) => {
+                tracing::warn!(media_type = %self.media_type, error = format!("{e:#}"),
+                    "Zabbix does not let the add-on read the webhook's alerts, so it cannot tell \
+                     which recoveries the webhook received: handling every one it finds, once per \
+                     run");
+                Ok(None)
+            }
+        }
+    }
+
+    async fn read_deliveries(
+        &self,
+        recoveries: &[String],
+    ) -> anyhow::Result<Option<HashMap<String, Vec<AlertStatus>>>> {
         let Some(media_type) = self
             .zabbix
             .media_type_id(&self.media_type)
@@ -259,12 +276,28 @@ impl Alerts {
                  it finds, once per run");
             return Ok(None);
         }
-        Ok(Some(
-            self.zabbix
-                .alert_statuses(recoveries, &media_type)
+        let statuses = self
+            .zabbix
+            .alert_statuses(recoveries, &media_type)
+            .await
+            .context("reading the media type's alerts for the recoveries")?;
+        // Reading only its own alerts, the add-on reads none when the action sends to another
+        // user: say so when it reads not one alert of the media type.
+        if statuses.is_empty()
+            && !access.super_admin
+            && !self
+                .zabbix
+                .any_alert(&media_type)
                 .await
-                .context("reading the media type's alerts for the recoveries")?,
-        ))
+                .context("reading whether any alert of the media type is readable")?
+        {
+            tracing::warn!(media_type = %self.media_type,
+                "the add-on's Zabbix user reads no alert of the webhook's media type at all: if \
+                 the action sends its messages to another user, the add-on reads none of them, \
+                 and handles every recovery it finds as missed. Make the action send to the \
+                 add-on's own user, or make that user a Super admin");
+        }
+        Ok(Some(statuses))
     }
 }
 
@@ -272,8 +305,133 @@ impl Alerts {
 mod tests {
     use super::*;
     use hd_addon_sdk::api::Priority;
+    use serde_json::{Value, json};
     use time::OffsetDateTime;
     use uuid::Uuid;
+
+    /// A Zabbix whose API answers each method as `answer` says: a result, or `None` for a refusal
+    /// such as a role that does not allow the method gives.
+    async fn zabbix(answer: fn(&str, &Value) -> Option<Value>) -> crate::zabbix::Zabbix {
+        let app = axum::Router::new().route(
+            "/api_jsonrpc.php",
+            axum::routing::post(move |body: axum::body::Bytes| async move {
+                let call: Value = serde_json::from_slice(&body).unwrap();
+                let method = call["method"].as_str().unwrap_or_default();
+                let mut answered = match answer(method, &call["params"]) {
+                    Some(result) => json!({"result": result}),
+                    None => json!({"error": {"code": -32500, "message": "Application error.",
+                        "data": format!("No permissions to call \"{method}\".")}}),
+                };
+                answered["jsonrpc"] = json!("2.0");
+                answered["id"] = call["id"].clone();
+                axum::Json(answered)
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        crate::zabbix::Zabbix::new(&url, "zabbix-token", std::time::Duration::from_secs(5)).unwrap()
+    }
+
+    fn alerts(zabbix: crate::zabbix::Zabbix) -> Alerts {
+        // The core is never called.
+        let core = hd_addon_sdk::Client::new("http://127.0.0.1:9", "core-token").unwrap();
+        Alerts::new(core, zabbix, "Zabbix", crate::rules::Rules::default_list())
+    }
+
+    /// A Super admin's Zabbix, with the media type 7, that answers `alert.get` as `alerts` says.
+    fn readable(method: &str, alerts: Option<Value>) -> Option<Value> {
+        match method {
+            "mediatype.get" => Some(json!([{"mediatypeid": "7"}])),
+            "user.checkAuthentication" => Some(json!({"userid": "1", "type": 3})),
+            "alert.get" => alerts,
+            _ => None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_zabbix_that_refuses_the_alerts_or_the_media_type_leaves_the_deliveries_unknown() {
+        let refused_alerts = alerts(zabbix(|method, _| readable(method, None)).await);
+        assert_eq!(
+            refused_alerts.deliveries(&ids(&["4220"])).await.unwrap(),
+            None
+        );
+        let refused_media_type = alerts(
+            zabbix(|method, _| match method {
+                "mediatype.get" => None,
+                _ => readable(method, Some(json!([]))),
+            })
+            .await,
+        );
+        assert_eq!(
+            refused_media_type
+                .deliveries(&ids(&["4220"]))
+                .await
+                .unwrap(),
+            None
+        );
+        let refused_user = alerts(
+            zabbix(|method, _| match method {
+                "user.checkAuthentication" => None,
+                _ => readable(method, Some(json!([]))),
+            })
+            .await,
+        );
+        assert_eq!(
+            refused_user.deliveries(&ids(&["4220"])).await.unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_user_with_the_media_who_reads_no_alert_at_all_takes_every_recovery_as_missed() {
+        // An Admin with the media type 7, to whom the action sends nothing.
+        let own_media = alerts(
+            zabbix(|method, _| match method {
+                "mediatype.get" => Some(json!([{"mediatypeid": "7"}])),
+                "user.checkAuthentication" => Some(json!({"userid": "5", "type": 2})),
+                "user.get" => Some(json!([{"userid": "5", "medias": [{"mediatypeid": "7"}]}])),
+                "alert.get" => Some(json!([])),
+                _ => None,
+            })
+            .await,
+        );
+        assert_eq!(
+            own_media.deliveries(&ids(&["4220"])).await.unwrap(),
+            Some(HashMap::new())
+        );
+        // Without the media, it cannot tell.
+        let no_media = alerts(
+            zabbix(|method, _| match method {
+                "mediatype.get" => Some(json!([{"mediatypeid": "7"}])),
+                "user.checkAuthentication" => Some(json!({"userid": "5", "type": 2})),
+                "user.get" => Some(json!([{"userid": "5", "medias": []}])),
+                _ => None,
+            })
+            .await,
+        );
+        assert_eq!(no_media.deliveries(&ids(&["4220"])).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_zabbix_that_answers_gives_the_deliveries_by_recovery_event() {
+        let answering = alerts(
+            zabbix(|method, _| {
+                readable(
+                    method,
+                    Some(json!([{"eventid": "4220", "status": "1", "alerttype": "0"}])),
+                )
+            })
+            .await,
+        );
+        assert_eq!(
+            answering.deliveries(&ids(&["4220", "4221"])).await.unwrap(),
+            Some(HashMap::from([(
+                "4220".to_owned(),
+                vec![AlertStatus::Sent]
+            )]))
+        );
+    }
 
     fn ticket(number: i64, state: TicketState, reference: Option<&str>) -> TicketSummary {
         TicketSummary {

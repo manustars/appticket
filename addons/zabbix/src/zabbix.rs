@@ -561,6 +561,17 @@ impl Zabbix {
             .await?;
         Ok(statuses(alerts))
     }
+
+    /// Whether the add-on's user reads any alert of the media type `media_type` at all.
+    pub async fn any_alert(&self, media_type: &str) -> anyhow::Result<bool> {
+        let alerts: Vec<Value> = self
+            .call(
+                "alert.get",
+                json!({"mediatypeids": [media_type], "output": ["alertid"], "limit": 1}),
+            )
+            .await?;
+        Ok(!alerts.is_empty())
+    }
 }
 
 impl From<RawHost> for HostWithGroups {
