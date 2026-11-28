@@ -317,8 +317,66 @@ mod tests {
     }
 
     /// Opens the provider's page in `browser`, signs in there when it asks, and returns where
-    /// the provider sends the browser back to.
+    /// the provider sends the browser back to; Keycloak warmed up first.
     async fn at_keycloak(browser: &reqwest::Client, url: &str, user: &str) -> String {
+        warm_up_keycloak().await;
+        log_in_at_keycloak(browser, url, user).await
+    }
+
+    /// Signs Lena in at Keycloak alone, code exchanged for tokens, once per test process before
+    /// any test signs in there. When the first sign-ins at the development Keycloak (26.8.2 in
+    /// development mode) come at once, as the tests' do, about one start in a hundred leaves ID
+    /// tokens without the claim `groups`, mostly everyone's until its realm cache is cleared;
+    /// after one sign-in alone it did not happen in 400 fresh starts.
+    async fn warm_up_keycloak() {
+        static WARMED_UP: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+        WARMED_UP
+            .get_or_init(|| async {
+                let (challenge, verifier) = openidconnect::PkceCodeChallenge::new_random_sha256();
+                let redirect = format!("http://127.0.0.1:8080{}", crate::oidc::CALLBACK_PATH);
+                let mut url =
+                    url::Url::parse(&format!("{ISSUER}/protocol/openid-connect/auth")).unwrap();
+                url.query_pairs_mut()
+                    .append_pair("client_id", "hd-core")
+                    .append_pair("response_type", "code")
+                    .append_pair("scope", "openid")
+                    .append_pair("redirect_uri", &redirect)
+                    .append_pair("state", "warm-up")
+                    .append_pair("nonce", "warm-up")
+                    .append_pair("code_challenge", challenge.as_str())
+                    .append_pair("code_challenge_method", "S256");
+                let back = log_in_at_keycloak(&browser(), url.as_str(), "lena").await;
+                let code = url::Url::parse(&back)
+                    .unwrap()
+                    .query_pairs()
+                    .find(|(name, _)| name == "code")
+                    .expect("a code")
+                    .1
+                    .into_owned();
+                let tokens = browser()
+                    .post(format!("{ISSUER}/protocol/openid-connect/token"))
+                    .basic_auth("hd-core", Some(crate::oidc::keycloak::SECRET))
+                    .form(&[
+                        ("grant_type", "authorization_code"),
+                        ("code", &code),
+                        ("redirect_uri", &redirect),
+                        ("code_verifier", verifier.secret()),
+                    ])
+                    .send()
+                    .await
+                    .unwrap();
+                assert!(
+                    tokens.status().is_success(),
+                    "{}",
+                    tokens.text().await.unwrap()
+                );
+            })
+            .await;
+    }
+
+    /// Opens the provider's page in `browser`, signs in there when it asks, and returns where
+    /// the provider sends the browser back to.
+    async fn log_in_at_keycloak(browser: &reqwest::Client, url: &str, user: &str) -> String {
         let page = browser.get(url).send().await.unwrap();
         if page.status().is_redirection() {
             // Still signed in at the provider: straight back.
