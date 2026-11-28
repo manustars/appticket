@@ -17,14 +17,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
-        arm: [plain, load]
+        include:
+          - { arm: plain, shard: 1 }
+          - { arm: plain, shard: 2 }
+          - { arm: plain, shard: 3 }
+          - { arm: plain, shard: 4 }
+          - { arm: warm, shard: 1 }
+          - { arm: warm, shard: 2 }
+          - { arm: warm, shard: 3 }
+          - { arm: warm, shard: 4 }
+          - { arm: warm, shard: 5 }
+          - { arm: warm, shard: 6 }
+          - { arm: warm, shard: 7 }
+          - { arm: warm, shard: 8 }
     steps:
       - uses: actions/checkout@v5
       - name: Rounds
         env:
           ARM: ${{ matrix.arm }}
-          ROUNDS: "40"
+          ROUNDS: "50"
         run: bash .github/hunt/burst.sh
       - uses: actions/upload-artifact@v4
         with:

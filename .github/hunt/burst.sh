@@ -2,12 +2,15 @@
 # Temporary: boots a fresh Keycloak ROUNDS times; each time signs in otto, lena, lena and piet at
 # once by the code flow, as the first sign-ins of the caught failure did, then each of them again
 # one at a time, and prints whether each ID token carries the groups claim.
-# ARM: plain, load (CPU load beside Keycloak) or warm (one sign-in of nadia before the burst).
+# ARM: plain (on a hit, asks the admin API, then clears the user cache and then the realm cache,
+# signing in again after each) or warm (one sign-in of lena alone before the burst).
 set -u
 rounds=${ROUNDS:-40}
 arm=${ARM:-plain}
 image=${IMAGE:-quay.io/keycloak/keycloak:26.8.2}
-kc=http://127.0.0.1:55080/realms/helpdesk/protocol/openid-connect
+base=http://127.0.0.1:55080
+kc=$base/realms/helpdesk/protocol/openid-connect
+admin=$base/admin/realms/helpdesk
 redirect=http://127.0.0.1:8080/api/session/identity-provider/callback
 verifier=verifier-of-the-keycloak-group-burst-0123456789-abcdefghij
 challenge=$(printf '%s' "$verifier" | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '=')
@@ -32,30 +35,48 @@ sign_in() { # user tag → "user=groups" or "user=NONE" or "user=failed"
   else echo "$user=NONE"; fi
 }
 
-if [ "$arm" = load ]; then
-  for _ in $(seq "$(nproc)"); do nice -n 10 sh -c 'while :; do :; done' & done
-fi
+diagnose() { # what the admin API says, and which cache clearing brings the groups back
+  local at client
+  at=$(curl -s -d grant_type=password -d client_id=admin-cli -d username=hunt \
+    -d password=hunt-only-password "$base/realms/master/protocol/openid-connect/token" |
+    sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+  echo "  lena's groups by the admin API: $(curl -s -H "Authorization: Bearer $at" \
+    "$admin/users/6f1c2a0e-8d3b-4c55-9a41-0b7e2d6f3a01/groups")"
+  client=$(curl -s -H "Authorization: Bearer $at" "$admin/clients?clientId=hd-core" |
+    sed -n 's/^\[{"id":"\([^"]*\)".*/\1/p')
+  echo "  hd-core's mappers by the admin API: $(curl -s -H "Authorization: Bearer $at" \
+    "$admin/clients/$client/protocol-mappers/models" | grep -o '"name":"[^"]*"' | tr '\n' ' ')"
+  echo "  again before clearing: $(sign_in lena "$round-d0")"
+  curl -s -o /dev/null -X POST -H "Authorization: Bearer $at" "$admin/clear-user-cache"
+  echo "  after clearing the user cache: $(sign_in lena "$round-d1") $(sign_in piet "$round-d1p")"
+  curl -s -o /dev/null -X POST -H "Authorization: Bearer $at" "$admin/clear-realm-cache"
+  echo "  after clearing the realm cache: $(sign_in lena "$round-d2") $(sign_in piet "$round-d2p")"
+}
+
 for round in $(seq "$rounds"); do
   docker rm -f keycloak > /dev/null 2>&1 || true
-  docker run -d --name keycloak -p 127.0.0.1:55080:8080 -e KC_HOSTNAME=http://127.0.0.1:55080 \
+  docker run -d --name keycloak -p 127.0.0.1:55080:8080 -e KC_HOSTNAME=$base \
+    -e KC_BOOTSTRAP_ADMIN_USERNAME=hunt -e KC_BOOTSTRAP_ADMIN_PASSWORD=hunt-only-password \
     -v "$GITHUB_WORKSPACE/dev/keycloak:/opt/keycloak/data/import:ro" \
     "$image" start-dev --import-realm --log-level=info,org.keycloak.events:debug > /dev/null
   for _ in $(seq 90); do
-    curl -sf http://127.0.0.1:55080/realms/helpdesk/.well-known/openid-configuration > /dev/null && break
+    curl -sf "$base/realms/helpdesk/.well-known/openid-configuration" > /dev/null && break
     sleep 1
   done
   # As in the caught round: a wrong secret and an invalid code before the first sign-ins.
   curl -s -o /dev/null -u hd-core:wrong -d grant_type=authorization_code -d code=x "$kc/token"
   curl -s -o /dev/null -u hd-core:dev-only-client-secret -d grant_type=authorization_code -d code=x "$kc/token"
   warm=""
-  [ "$arm" = warm ] && warm="warm: $(sign_in nadia "$round-w") |"
+  [ "$arm" = warm ] && warm="warm: $(sign_in lena "$round-w") |"
   burst=$(for u in otto lena lena piet; do sign_in "$u" "$round-$u-$RANDOM" & done; wait)
   sleep 1
   after=$(for u in lena otto piet; do sign_in "$u" "$round-again-$u"; done)
   line="round $round $arm: $warm burst: $(echo $burst) | after: $(echo $after)"
   echo "$line"
   case "$line" in *NONE*|*failed*)
-    mkdir -p "$RUNNER_TEMP/caught"; echo "$line" > "$RUNNER_TEMP/caught/round-$round.txt"
+    mkdir -p "$RUNNER_TEMP/caught"
+    echo "$line" > "$RUNNER_TEMP/caught/round-$round.txt"
+    [ "$arm" = plain ] && diagnose | tee "$RUNNER_TEMP/caught/round-$round-diagnosis.txt"
     docker logs keycloak > "$RUNNER_TEMP/caught/round-$round-keycloak.log" 2>&1 ;;
   esac
 done
