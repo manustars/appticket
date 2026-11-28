@@ -1,5 +1,6 @@
 # An example of a staging install in a lab cluster: one small database, a test mail server, the
-# Assistant on a self-hosted model. Copy it, change what is marked, and install with
+# Assistant on a self-hosted model and the Zabbix add-on. Copy it, change what is marked, and
+# install with
 #
 #   helm install hd deploy/chart -n helpdesk-staging -f values-staging.yaml
 #
@@ -68,6 +69,21 @@ assistant:
     # One call at a time: a self-hosted model is often a single shared GPU (the default for
     # openai-compatible already).
     concurrency: "1"
+
+zabbix:
+  # Enable after registering the add-on and creating the Secret (docs/deploy.md).
+  enabled: false
+  secret:
+    existingSecret: hd-zabbix              # keys: token, event-secret, api-token, webhook-secret
+  config: |
+    [zabbix]
+    url = "https://zabbix-staging.example.com"   # your Zabbix
+
+    [assets]
+    default_kind = "Server"
+  # The media type in Zabbix sends to https://helpdesk-staging.example.com/webhook.
+  ingress:
+    enabled: true
 
 networkPolicy:
   enabled: false

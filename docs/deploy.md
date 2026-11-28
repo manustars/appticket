@@ -1,17 +1,19 @@
 # Deploying the help desk
 
-The help desk ships as two container images, a Helm chart and an archive for Compose:
+The help desk ships as three container images, a Helm chart and an archive for Compose:
 
 | | |
 |---|---|
 | `ghcr.io/manustars/hd-core` | The core: API, the agents' UI (served by the core itself), mail reading and sending, add-on events. Runs `hd serve`; any other `hd` command runs the same way. |
 | `ghcr.io/manustars/hd-assistant` | The Assistant add-on (optional). |
-| `oci://ghcr.io/manustars/charts/hd` | The Helm chart `hd` (its source is `deploy/chart`): both components, the database in one of three modes (a PostgreSQL the chart runs itself, a PostgreSQL cluster through CloudNativePG, or one of your own), backups, an optional test mail server for staging. |
+| `ghcr.io/manustars/hd-zabbix` | The Zabbix add-on (optional). |
+| `oci://ghcr.io/manustars/charts/hd` | The Helm chart `hd` (its source is `deploy/chart`): the core and the add-ons, the database in one of three modes (a PostgreSQL the chart runs itself, a PostgreSQL cluster through CloudNativePG, or one of your own), backups, an optional test mail server for staging. |
 | `hd-compose-1.2.3.tar.gz` | The Compose install for a single host (its source is `deploy/compose`), attached to the GitHub release of each version with its SHA-256 checksum (`hd-compose-1.2.3.tar.gz.sha256`): it unpacks into `hd-compose-1.2.3/`, whose `compose.yaml` runs the images of that version. |
 
 The images are published by `.github/workflows/release.yml` when a version tag (`v1.2.3`) is
-pushed: tagged with the version and, for a final version, `latest`. Both are built from
-`deploy/Dockerfile` (`--target core` / `--target assistant`), run as the non-root user 10001 and
+pushed: tagged with the version and, for a final version, `latest`. They are built from
+`deploy/Dockerfile` (`--target core`, `--target assistant`, `--target zabbix`), run as the
+non-root user 10001 and
 stop cleanly on SIGTERM. The same workflow then publishes the chart with the tag's version
 (`1.2.3`, or `1.2.3-rc.1` for a pre-release), and last creates the tag's GitHub release, a
 pre-release for a pre-release version, with the Compose archive attached. It publishes nothing
@@ -480,4 +482,55 @@ mail goes to a model service outside its pod's host; with a self-hosted model us
 `openai-compatible` (or `ollama`) and `model.url`. Self-hosted servers get one model call at a
 time by default (`model.concurrency`). Its README (`addons/assistant/README.md`) describes every
 setting.
+
+## The Zabbix add-on
+
+The Zabbix add-on brings Zabbix's hosts into the catalog and opens tickets from its alerts by
+rules; its README (`addons/zabbix/README.md`) describes its settings, its user in Zabbix and
+how Zabbix is set up to send it the alerts. As for the Assistant, the order is: install (with
+`zabbix.enabled=false`), register, create the Secret, enable.
+
+```sh
+kubectl -n helpdesk exec deploy/hd-core -- hd addon add zabbix \
+  --url http://hd-zabbix:8091 \
+  --scope directory:read --scope catalog:write --scope names:write --scope conflicts:write \
+  --scope tickets:read --scope tickets:write --event ticket.state_changed
+```
+
+The command prints a token and an event secret once. Put them in a Secret, with the API token
+of the add-on's user in Zabbix and a webhook secret of your own, of 16 characters or more, which
+Zabbix's media type sends:
+
+```sh
+kubectl -n helpdesk create secret generic hd-zabbix \
+  --from-literal=token='…' --from-literal=event-secret='…' --from-literal=api-token='…' \
+  --from-literal=webhook-secret="$(openssl rand -hex 32)"
+```
+
+Then set the values and upgrade. `zabbix.config` is the add-on's configuration file without the
+sections `[core]`, `[addon]` and `[webhook]`, which the chart writes from the other values:
+
+```yaml
+zabbix:
+  enabled: true
+  secret:
+    existingSecret: hd-zabbix
+  config: |
+    [zabbix]
+    url = "https://zabbix.example.com"
+
+    [assets]
+    default_kind = "Server"
+  # The webhook at https://<ingress.host>/webhook, for a Zabbix outside the cluster.
+  ingress:
+    enabled: true
+```
+
+Zabbix's media type then sends to `https://helpdesk.example.com/webhook`, through the ingress
+controller, which passes that path alone on to the add-on; a Zabbix server in the cluster uses
+`http://hd-zabbix.helpdesk.svc:8091/webhook`. The add-on starts without a Zabbix that answers,
+and tries again at each round. With `networkPolicy.enabled`, the add-on's NetworkPolicy lets in
+the core and `networkPolicy.zabbix.webhookFrom` (and `networkPolicy.coreFrom` with the Ingress),
+and lets it reach the name service, the core and Zabbix's API (`networkPolicy.zabbix.apiTo` on
+`apiPorts`, any address on 443 and 80 by default).
 

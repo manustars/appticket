@@ -1,8 +1,8 @@
 apiVersion: v2
 name: hd
 description: >-
-  The help desk: the core (API, agents' UI, mail) and, optionally, the Assistant add-on, on a
-  PostgreSQL the chart runs itself (the default), a PostgreSQL cluster managed by CloudNativePG,
+  The help desk: the core (API, agents' UI, mail) and, optionally, the Assistant and Zabbix
+  add-ons, on a PostgreSQL the chart runs itself (the default), a PostgreSQL cluster managed by CloudNativePG,
   or a database of your own. Upgrading from 0.3 with the CloudNativePG cluster: set
   postgresql.mode=cloudnativepg.
 type: application

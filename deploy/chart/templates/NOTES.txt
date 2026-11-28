@@ -62,6 +62,28 @@ To add the Assistant, register it first:
 
 then put the printed token and event secret in a Secret and enable assistant.* in the values.
 {{- end }}
+{{- if .Values.zabbix.enabled }}
+{{- if .Values.zabbix.webhook.enabled }}
+
+The Zabbix add-on receives Zabbix's alerts at
+  http://{{ include "hd.zabbixName" . }}.{{ .Release.Namespace }}.svc:8091/webhook inside the cluster
+{{- if .Values.zabbix.ingress.enabled }}
+  https://{{ .Values.ingress.host }}/webhook through the Ingress
+{{- end }}
+Set it as the parameter url of the media type Help desk in Zabbix (addons/zabbix/README.md).
+{{- end }}
+{{- else }}
+
+To add the Zabbix add-on, register it first:
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "hd.coreName" . }} -- hd addon add zabbix \
+    --url http://{{ include "hd.zabbixName" . }}:8091 \
+    --scope directory:read --scope catalog:write --scope names:write --scope conflicts:write \
+    --scope tickets:read --scope tickets:write --event ticket.state_changed
+
+then put the printed token and event secret, the Zabbix user's API token and a webhook secret in
+a Secret, write its configuration in zabbix.config and enable zabbix.* in the values.
+{{- end }}
 {{- if .Values.greenmail.enabled }}
 
 Staging mail: GreenMail runs next to the core and keeps all mail in {{ .Values.greenmail.address }}.
