@@ -292,6 +292,24 @@ expect_lines zabbix.yaml Ingress hd-zabbix '  ingressClassName: nginx
                   name: http'
 finish "zabbix.ingress: the path /webhook alone of the help desk's host, over its TLS"
 
+# The core's Ingress has cert-manager issue the host's certificate into ingress.tls.secretName:
+# the webhook's, on the same host and Secret, takes the other annotations but not cert-manager's,
+# so that one Certificate alone claims that Secret.
+render "${zabbix[@]}" --set ingress.enabled=true --set ingress.host=helpdesk.example.com \
+  --set zabbix.ingress.enabled=true --set ingress.tls.secretName=helpdesk-tls \
+  --set 'ingress.annotations.cert-manager\.io/cluster-issuer=letsencrypt' \
+  --set-string 'ingress.annotations.acme\.cert-manager\.io/http01-edit-in-place=true' \
+  --set 'ingress.annotations.nginx\.ingress\.kubernetes\.io/proxy-body-size=10m' \
+  --set-string 'zabbix.ingress.annotations.nginx\.ingress\.kubernetes\.io/limit-rps=5'
+expect_lines core.yaml Ingress hd-core '    cert-manager.io/cluster-issuer: letsencrypt'
+expect_lines zabbix.yaml Ingress hd-zabbix '  annotations:
+    nginx.ingress.kubernetes.io/limit-rps: "5"
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m'
+if document zabbix.yaml Ingress hd-zabbix | grep -qF 'cert-manager.io/'; then
+  problem "zabbix.yaml: the Ingress hd-zabbix has cert-manager's annotations"
+fi
+finish "zabbix.ingress: the core's Ingress annotations but cert-manager's, which the core's Ingress issues the certificate with"
+
 # ---------------------------------------------------------------------------------------------
 # NetworkPolicies
 # ---------------------------------------------------------------------------------------------
@@ -359,6 +377,12 @@ expect_lines networkpolicy.yaml NetworkPolicy hd-zabbix '        # The ingress c
   egress:'
 finish "NetworkPolicy with zabbix.ingress: the ingress controller reaches the webhook"
 
+# The add-on reaches the core only at its pods, so through the core's Service and no other way.
+render "${zabbix[@]}" --set networkPolicy.enabled=true --namespace helpdesk \
+  --set zabbix.coreUrl=http://hd-core.helpdesk.svc.cluster.local:80
+expect_line zabbix.yaml '    url = "http://hd-core.helpdesk.svc.cluster.local:80"'
+finish "NetworkPolicy: zabbix.coreUrl may name the core's Service by its full name"
+
 # ---------------------------------------------------------------------------------------------
 # Notes, refusals, lint
 # ---------------------------------------------------------------------------------------------
@@ -373,6 +397,14 @@ notes "${zabbix[@]}" --set ingress.enabled=true --set ingress.host=helpdesk.exam
 expect_note 'https://helpdesk.example.com/webhook'
 finish "with zabbix.ingress: the notes give the webhook's address through the Ingress"
 
+notes "${zabbix[@]}"
+expect_note 'Set it as the parameter url of the media type Help desk in Zabbix'
+finish "the notes name the media type Help desk by default"
+
+notes "${zabbix[@]}" --set zabbix.webhook.mediaType="Help desk (production)"
+expect_note 'Set it as the parameter url of the media type Help desk (production) in Zabbix'
+finish "the notes name the media type of zabbix.webhook.mediaType"
+
 refused "refused: no Secret" "zabbix.secret.existingSecret is required" \
   --set zabbix.enabled=true --set-file "zabbix.config=$work/config.toml"
 refused "refused: no configuration" "zabbix.config is required" \
@@ -383,8 +415,18 @@ refused "refused: a section the chart writes" \
   --set-file "zabbix.config=$work/with-core.toml"
 refused "refused: the webhook's Ingress without the webhook" \
   "zabbix.ingress.enabled needs zabbix.webhook.enabled" \
-  "${zabbix[@]}" --set ingress.host=helpdesk.example.com --set zabbix.ingress.enabled=true \
-  --set zabbix.webhook.enabled=false
+  "${zabbix[@]}" --set ingress.enabled=true --set ingress.host=helpdesk.example.com \
+  --set zabbix.ingress.enabled=true --set zabbix.webhook.enabled=false
+refused "refused: the webhook's Ingress without the core's" \
+  "zabbix.ingress.enabled needs ingress.enabled" \
+  "${zabbix[@]}" --set zabbix.ingress.enabled=true
+refused "refused: with the NetworkPolicies, a core's URL other than its Service" \
+  "with networkPolicy.enabled, zabbix.coreUrl must be the core's Service" \
+  "${zabbix[@]}" --set networkPolicy.enabled=true --set zabbix.coreUrl=https://helpdesk.example.com
+refused "refused: with the NetworkPolicies, the Service of another namespace" \
+  "with networkPolicy.enabled, zabbix.coreUrl must be the core's Service" \
+  "${zabbix[@]}" --set networkPolicy.enabled=true --namespace helpdesk \
+  --set zabbix.coreUrl=http://hd-core.elsewhere.svc:80
 
 lint "helm lint: the add-on enabled" "${zabbix[@]}" --set networkPolicy.enabled=true \
   --set ingress.enabled=true --set zabbix.ingress.enabled=true

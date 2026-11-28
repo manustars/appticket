@@ -9,11 +9,21 @@
 {{- if regexMatch "(?m)^[ \\t]*\\[[ \\t]*(core|addon|webhook)[ \\t]*\\]" $z.config }}
 {{- fail "zabbix.config has a [core], [addon] or [webhook] section, which the chart writes itself: set zabbix.coreUrl, zabbix.uiUrl and zabbix.webhook.* instead" }}
 {{- end }}
+{{- if and $z.ingress.enabled (not .Values.ingress.enabled) }}
+{{- fail "zabbix.ingress.enabled needs ingress.enabled: the webhook is the path /webhook of the help desk's host, beside the core's Ingress" }}
+{{- end }}
 {{- if and $z.ingress.enabled (not .Values.ingress.host) }}
 {{- fail "zabbix.ingress.enabled needs ingress.host: the webhook is the path /webhook of the help desk's host" }}
 {{- end }}
 {{- if and $z.ingress.enabled (not $z.webhook.enabled) }}
 {{- fail "zabbix.ingress.enabled needs zabbix.webhook.enabled: without the webhook there is nothing to expose" }}
+{{- end }}
+{{- /* The NetworkPolicy lets the add-on reach the core at its pods alone: through its Service. */}}
+{{- if and .Values.networkPolicy.enabled $z.coreUrl }}
+{{- $service := printf `^https?://%s(\.%s(\.svc(\.cluster\.local)?)?)?(:[0-9]+)?(/.*)?$` (regexQuoteMeta (include "hd.coreName" .)) (regexQuoteMeta .Release.Namespace) }}
+{{- if not (regexMatch $service $z.coreUrl) }}
+{{- fail (printf "with networkPolicy.enabled, zabbix.coreUrl must be the core's Service, such as http://%s:%v (or leave it empty for that): the add-on's NetworkPolicy lets it reach the core's pods alone, not the core's Ingress or another address" (include "hd.coreName" .) .Values.service.port) }}
+{{- end }}
 {{- end }}
 {{- $name := include "hd.zabbixName" . }}
 {{- $coreUrl := $z.coreUrl | default (printf "http://%s:%v" (include "hd.coreName" .) .Values.service.port) }}
@@ -189,7 +199,15 @@ metadata:
   labels:
     {{- include "hd.labels" . | nindent 4 }}
     app.kubernetes.io/component: zabbix
-  {{- with (merge (dict) $z.ingress.annotations .Values.ingress.annotations) }}
+  {{- /* The core's annotations but cert-manager's: the core's Ingress has the certificate of
+       the same host and Secret issued, and a second Certificate would claim that Secret too. */}}
+  {{- $annotations := dict }}
+  {{- range $key, $value := .Values.ingress.annotations }}
+  {{- if not (regexMatch `(^|\.)cert-manager\.io/` $key) }}
+  {{- $_ := set $annotations $key $value }}
+  {{- end }}
+  {{- end }}
+  {{- with (merge (dict) ($z.ingress.annotations | default dict) $annotations) }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}

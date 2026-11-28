@@ -215,7 +215,9 @@ zabbix:
     tag: ""
     pullPolicy: IfNotPresent
 
-  # A Secret with the add-on's credentials, mounted as files.
+  # A Secret with the add-on's credentials, mounted as files (the _FILE variables), unlike the
+  # Assistant's: the add-on reads the webhook's secret from a file only (webhook.secret_file), and
+  # the other three come from the same mount.
   secret:
     existingSecret: ""
     # The token and the event secret `hd addon add` printed.
@@ -240,6 +242,8 @@ zabbix:
   config: ""
 
   # The core's URL as the add-on calls it (core.url). Empty: the core's Service in this release.
+  # With networkPolicy.enabled it must be that Service (http://<release>-core, with the namespace
+  # and port or not), which the add-on's NetworkPolicy lets it reach; the chart refuses another.
   coreUrl: ""
   # The help desk's UI as agents' browsers reach it, for the ticket's page that Zabbix's event
   # menu opens (core.ui_url). Empty: core.publicUrl, else https:// and ingress.host with the
@@ -260,8 +264,10 @@ zabbix:
     annotations: {}
 
   # The webhook through the ingress controller: the path /webhook of ingress.host, over the
-  # Ingress's TLS, to the add-on; its other paths stay inside the cluster. Uses ingress.className,
-  # ingress.tls and ingress.annotations, with these annotations over them.
+  # Ingress's TLS, to the add-on; its other paths stay inside the cluster. Needs the core's
+  # Ingress (ingress.enabled). Uses ingress.className, ingress.tls and ingress.annotations, with
+  # these annotations over them, but for cert-manager's (cert-manager.io/*): the core's Ingress
+  # has the host's certificate issued into ingress.tls.secretName, which this one uses as it is.
   ingress:
     enabled: false
     annotations: {}
@@ -519,7 +525,7 @@ networkPolicy:
     # Empty: only the core, and the ingress controller with zabbix.ingress.enabled.
     webhookFrom: []
     # Where the add-on reaches Zabbix's API (zabbix.url), as peers, such as an ipBlock. Empty:
-    # any address, on apiPorts.
+    # any address, on apiPorts only; a Zabbix on another port needs it in apiPorts.
     apiTo: []
     # The ports of Zabbix's API.
     apiPorts: [443, 80]

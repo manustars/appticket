@@ -532,5 +532,18 @@ controller, which passes that path alone on to the add-on; a Zabbix server in th
 and tries again at each round. With `networkPolicy.enabled`, the add-on's NetworkPolicy lets in
 the core and `networkPolicy.zabbix.webhookFrom` (and `networkPolicy.coreFrom` with the Ingress),
 and lets it reach the name service, the core and Zabbix's API (`networkPolicy.zabbix.apiTo` on
-`apiPorts`, any address on 443 and 80 by default).
+`apiPorts`, any address on 443 and 80 by default, so a Zabbix on another port needs it in
+`apiPorts`). It reaches the core at the core's pods only: `zabbix.coreUrl` must then be the
+core's Service, as it is when left empty, and the chart refuses another address, such as the
+Ingress's.
+
+`zabbix.ingress` needs the core's Ingress (`ingress.enabled`), whose host, class, TLS and
+annotations it takes, but for cert-manager's (`cert-manager.io/…`): the core's Ingress has the
+host's certificate issued into `ingress.tls.secretName`, which the webhook's Ingress then uses as
+it is, without a second certificate claiming the same Secret.
+
+Unlike the Assistant, which takes its secrets as variables, the Zabbix add-on reads them from
+the Secret mounted as files (the `_FILE` variables): its webhook's secret is read only from a
+file (`webhook.secret_file`), so the Secret is mounted anyway, and the other three come from the
+same mount.
 
