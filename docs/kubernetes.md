@@ -65,6 +65,7 @@ one Secret it makes itself is the generated password of its own PostgreSQL
 | database CA | `ca.crt` | an external database whose certificate comes from a private authority: `core.database.ca.existingSecret` (see [TLS to the database](#tls-to-the-database)) |
 | identity provider | `client-secret` | signing in through OpenID Connect: `core.oidc.existingSecret` (see [Signing in through an identity provider](deploy.md#signing-in-through-an-identity-provider)) |
 | Assistant | `token`, `event-secret`, and `api-key` for a hosted model | `assistant.secret.existingSecret`, after registering the add-on |
+| Zabbix add-on | `token`, `event-secret`, `api-token` (its Zabbix user's) and `webhook-secret` | `zabbix.secret.existingSecret`, after registering the add-on |
 | backup storage | `ACCESS_KEY_ID`, `ACCESS_SECRET_KEY` | object-store backups: `postgresql.backup.objectStore.credentialsSecret` |
 
 For example, the mail Secret:
@@ -132,7 +133,7 @@ the repository instead, with `deploy/chart` in place of the `oci://…` address 
 `--version`.
 
 The chart runs the images of its `appVersion`, which for a published chart is its version, unless
-`core.image.tag` and `assistant.image.tag` say otherwise; from a clone, a release must have been
+`core.image.tag`, `assistant.image.tag` and `zabbix.image.tag` say otherwise; from a clone, a release must have been
 published (a `v…` tag pushed) for that tag to exist. A package published to GitHub's container
 registry, an image or the chart, starts out private: make it public in the package settings once
 (it cannot be made private again), or sign in with `helm registry login ghcr.io` for the chart,
@@ -157,8 +158,9 @@ The most common settings:
 | `postgresql.external.*` | An external database as separate values. |
 | `postgresql.*` | The CloudNativePG cluster's instances, storage size and class, backups. |
 | `assistant.*` | See [The Assistant](deploy.md#the-assistant). |
+| `zabbix.*` | See [The Zabbix add-on](deploy.md#the-zabbix-add-on). |
 | `greenmail.enabled` | The staging test mail server. |
-| `networkPolicy.enabled` | Ingress NetworkPolicies; list the ingress controller's namespace in `networkPolicy.coreFrom`. With `standalone`, only the core and the dumps reach the database. |
+| `networkPolicy.enabled` | Ingress NetworkPolicies; list the ingress controller's namespace in `networkPolicy.coreFrom`. With `standalone`, only the core and the dumps reach the database. The Zabbix add-on's limits its egress too (`networkPolicy.zabbix.*`, see [The Zabbix add-on](deploy.md#the-zabbix-add-on)). |
 
 On a first install the core waits and restarts until the database is there (until CloudNativePG
 has created it and its Secret, or the chart's own PostgreSQL has started), usually within a

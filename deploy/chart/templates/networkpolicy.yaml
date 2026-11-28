@@ -1,6 +1,6 @@
 {{- if .Values.networkPolicy.enabled }}
-# Ingress only. Egress stays open: the core reaches the database, mail servers and add-ons, the
-# Assistant reaches the core and its model service.
+# Ingress only, but for the Zabbix add-on. Egress stays open: the core reaches the database, mail
+# servers and add-ons, the Assistant reaches the core and its model service.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -23,6 +23,9 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "hd.selectorLabels" (dict "root" . "component" "assistant") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "hd.selectorLabels" (dict "root" . "component" "zabbix") | nindent 14 }}
     {{- if .Values.greenmail.enabled }}
     # Staging: testers reach the test mail server from inside the namespace.
     - ports:
@@ -52,6 +55,63 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "hd.selectorLabels" (dict "root" . "component" "core") | nindent 14 }}
+{{- end }}
+{{- if .Values.zabbix.enabled }}
+{{- $np := .Values.networkPolicy.zabbix }}
+---
+# The Zabbix add-on: reached by the core (live details, events) and by Zabbix (the webhook) on
+# its one port; it reaches the name service, the core and Zabbix's API.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hd.zabbixName" . }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: zabbix
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "hd.selectorLabels" (dict "root" . "component" "zabbix") | nindent 6 }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - ports:
+        - port: http
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "hd.selectorLabels" (dict "root" . "component" "core") | nindent 14 }}
+        {{- with $np.webhookFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.zabbix.ingress.enabled }}
+        {{- with .Values.networkPolicy.coreFrom }}
+        # The ingress controller, as it reaches the core.
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- end }}
+  egress:
+    # The cluster's name service, wherever it runs.
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: http
+      to:
+        - podSelector:
+            matchLabels:
+              {{- include "hd.selectorLabels" (dict "root" . "component" "core") | nindent 14 }}
+    # Zabbix's API.
+    - ports:
+        {{- range $np.apiPorts }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+      {{- with $np.apiTo }}
+      to:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}
 {{- if eq (include "hd.databaseSource" .) "standalone" }}
 ---

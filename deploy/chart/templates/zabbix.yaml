@@ -1,0 +1,220 @@
+{{- if .Values.zabbix.enabled }}
+{{- $z := .Values.zabbix }}
+{{- if not $z.secret.existingSecret }}
+{{- fail "zabbix.secret.existingSecret is required: a Secret with the token and event secret that `hd addon add` printed, the Zabbix user's API token and the webhook's secret" }}
+{{- end }}
+{{- if not (trim ($z.config | default "")) }}
+{{- fail "zabbix.config is required: the add-on's configuration file with at least zabbix.url and assets.default_kind (addons/zabbix/README.md)" }}
+{{- end }}
+{{- if regexMatch "(?m)^[ \\t]*\\[[ \\t]*(core|addon|webhook)[ \\t]*\\]" $z.config }}
+{{- fail "zabbix.config has a [core], [addon] or [webhook] section, which the chart writes itself: set zabbix.coreUrl, zabbix.uiUrl and zabbix.webhook.* instead" }}
+{{- end }}
+{{- if and $z.ingress.enabled (not .Values.ingress.host) }}
+{{- fail "zabbix.ingress.enabled needs ingress.host: the webhook is the path /webhook of the help desk's host" }}
+{{- end }}
+{{- if and $z.ingress.enabled (not $z.webhook.enabled) }}
+{{- fail "zabbix.ingress.enabled needs zabbix.webhook.enabled: without the webhook there is nothing to expose" }}
+{{- end }}
+{{- $name := include "hd.zabbixName" . }}
+{{- $coreUrl := $z.coreUrl | default (printf "http://%s:%v" (include "hd.coreName" .) .Values.service.port) }}
+{{- $uiUrl := $z.uiUrl | default .Values.core.publicUrl | default (ternary (printf "https://%s" .Values.ingress.host) "" .Values.ingress.enabled) }}
+{{- $secrets := "/run/secrets/hd-zabbix" }}
+# The add-on's configuration file: the chart's sections, then zabbix.config.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: zabbix
+data:
+  zabbix.toml: |
+    # Written by the chart: zabbix.coreUrl, zabbix.uiUrl and zabbix.webhook.*.
+    [core]
+    url = {{ $coreUrl | toJson }}
+    {{- with $uiUrl }}
+    ui_url = {{ . | toJson }}
+    {{- end }}
+
+    [addon]
+    listen = "0.0.0.0:8091"
+    {{- if $z.webhook.enabled }}
+
+    [webhook]
+    secret_file = {{ printf "%s/%s" $secrets $z.secret.webhookSecretKey | toJson }}
+    {{- with $z.webhook.mediaType }}
+    media_type = {{ . | toJson }}
+    {{- end }}
+    {{- end }}
+
+    # zabbix.config
+    {{- $z.config | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: zabbix
+spec:
+  replicas: 1
+  # One instance: it keeps the safety limit's count and the recoveries it handled in memory.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "hd.selectorLabels" (dict "root" . "component" "zabbix") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hd.labels" . | nindent 8 }}
+        app.kubernetes.io/component: zabbix
+      annotations:
+        # A changed configuration file starts a new pod, which reads it.
+        checksum/config: {{ printf "%s\n%s\n%s\n%s" $coreUrl $uiUrl (toJson $z.webhook) $z.config | sha256sum }}
+        {{- with $z.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "hd.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: zabbix
+          image: {{ include "hd.image" (dict "image" $z.image "root" .) }}
+          imagePullPolicy: {{ $z.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8091
+          env:
+            - name: HD_ZABBIX_CONFIG
+              value: /etc/hd/zabbix.toml
+            - name: HD_ZABBIX_TOKEN_FILE
+              value: {{ printf "%s/%s" $secrets $z.secret.tokenKey | quote }}
+            - name: HD_ZABBIX_EVENT_SECRET_FILE
+              value: {{ printf "%s/%s" $secrets $z.secret.eventSecretKey | quote }}
+            - name: HD_ZABBIX_API_TOKEN_FILE
+              value: {{ printf "%s/%s" $secrets $z.secret.apiTokenKey | quote }}
+            - name: HD_ZABBIX_LOG
+              value: {{ $z.log | quote }}
+            {{- with $z.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/hd
+              readOnly: true
+            - name: secrets
+              mountPath: {{ $secrets }}
+              readOnly: true
+          # It has no health endpoint: an open port is the sign of life.
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            {{- toYaml $z.resources | nindent 12 }}
+          securityContext:
+            {{- include "hd.containerSecurityContext" . | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $name }}
+        - name: secrets
+          secret:
+            secretName: {{ $z.secret.existingSecret }}
+            items:
+              - key: {{ $z.secret.tokenKey }}
+                path: {{ $z.secret.tokenKey }}
+              - key: {{ $z.secret.eventSecretKey }}
+                path: {{ $z.secret.eventSecretKey }}
+              - key: {{ $z.secret.apiTokenKey }}
+                path: {{ $z.secret.apiTokenKey }}
+              {{- if $z.webhook.enabled }}
+              - key: {{ $z.secret.webhookSecretKey }}
+                path: {{ $z.secret.webhookSecretKey }}
+              {{- end }}
+      {{- with $z.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $z.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $z.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+# The core reads live details and sends events here: register the add-on with
+# --url http://<this service>:8091. Zabbix's media type sends to /webhook on it, inside the
+# cluster, or through zabbix.service.type or zabbix.ingress from outside.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: zabbix
+  {{- with $z.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $z.service.type }}
+  selector:
+    {{- include "hd.selectorLabels" (dict "root" . "component" "zabbix") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8091
+      targetPort: http
+{{- if $z.ingress.enabled }}
+---
+# The webhook alone, /webhook on the help desk's host: the add-on's other paths, the core's reads
+# and events, stay inside the cluster.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "hd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: zabbix
+  {{- with (merge (dict) $z.ingress.annotations .Values.ingress.annotations) }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      {{- with .Values.ingress.tls.secretName }}
+      secretName: {{ . }}
+      {{- end }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /webhook
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  name: http
+{{- end }}
+{{- end }}

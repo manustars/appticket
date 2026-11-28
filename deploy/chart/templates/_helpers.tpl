@@ -40,6 +40,10 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s-assistant" (include "hd.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{- define "hd.zabbixName" -}}
+{{- printf "%s-zabbix" (include "hd.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
 {{- define "hd.dbName" -}}
 {{- printf "%s-db" (include "hd.fullname" .) | trunc 50 | trimSuffix "-" }}
 {{- end }}

@@ -203,6 +203,86 @@ assistant:
   affinity: {}
 
 # ---------------------------------------------------------------------------------------------
+# The Zabbix add-on (optional): Zabbix's hosts as assets, and tickets from its alerts by rules
+# (addons/zabbix/README.md). Register it on the core first (`hd addon add zabbix …`, see
+# docs/deploy.md), put the printed token and event secret in a Secret with the Zabbix user's API
+# token and the webhook's secret, write its configuration below, then enable it.
+# ---------------------------------------------------------------------------------------------
+zabbix:
+  enabled: false
+  image:
+    repository: ghcr.io/manustars/hd-zabbix
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # A Secret with the add-on's credentials, mounted as files.
+  secret:
+    existingSecret: ""
+    # The token and the event secret `hd addon add` printed.
+    tokenKey: token
+    eventSecretKey: event-secret
+    # The API token of the add-on's Zabbix user.
+    apiTokenKey: api-token
+    # The webhook's secret, of 16 characters or more, which the media type sends from the
+    # global macro {$HD_WEBHOOK_SECRET}; needed with webhook.enabled.
+    webhookSecretKey: webhook-secret
+
+  # The configuration file (zabbix.toml) without the sections [core], [addon] and [webhook],
+  # which the chart writes from the values below: [zabbix] with url, [assets] with default_kind,
+  # and optionally [sync] and [alerts] with the rules (addons/zabbix/README.md, "Configuration").
+  # Required when enabled. Such as:
+  #   config: |
+  #     [zabbix]
+  #     url = "https://zabbix.example.com"
+  #
+  #     [assets]
+  #     default_kind = "Server"
+  config: ""
+
+  # The core's URL as the add-on calls it (core.url). Empty: the core's Service in this release.
+  coreUrl: ""
+  # The help desk's UI as agents' browsers reach it, for the ticket's page that Zabbix's event
+  # menu opens (core.ui_url). Empty: core.publicUrl, else https:// and ingress.host with the
+  # Ingress, else the core's URL above.
+  uiUrl: ""
+
+  webhook:
+    # Receive Zabbix's alerts on /webhook ([webhook]); without it the add-on opens no tickets.
+    enabled: true
+    # The name of the media type that sends them (webhook.media_type). Empty: Help desk.
+    mediaType: ""
+
+  # The add-on's Service, which the core reaches and, inside the cluster, Zabbix's server, at
+  # http://<release>-zabbix:8091/webhook. LoadBalancer or NodePort for a Zabbix outside the
+  # cluster without the Ingress below; the webhook is then plain HTTP.
+  service:
+    type: ClusterIP
+    annotations: {}
+
+  # The webhook through the ingress controller: the path /webhook of ingress.host, over the
+  # Ingress's TLS, to the add-on; its other paths stay inside the cluster. Uses ingress.className,
+  # ingress.tls and ingress.annotations, with these annotations over them.
+  ingress:
+    enabled: false
+    annotations: {}
+
+  # HD_ZABBIX_LOG
+  log: "info"
+  extraEnv: []
+
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------------------------------------------------------------------------------------------
 # The database. postgresql.mode says where it comes from:
 # - standalone, the default: PostgreSQL 18 run by the chart itself, with no operator: one
 #   instance on a volume that outlives the release, reached by the core inside the cluster
@@ -420,8 +500,10 @@ greenmail:
       memory: 384Mi
 
 # ---------------------------------------------------------------------------------------------
-# Optional NetworkPolicies, ingress only: the core accepts traffic from the peers below and from
-# the Assistant; the Assistant accepts traffic only from the core.
+# Optional NetworkPolicies: the core accepts traffic from the peers below and from the add-ons;
+# the Assistant accepts traffic only from the core. The Zabbix add-on accepts traffic from the
+# core and from zabbix.webhookFrom (and coreFrom with zabbix.ingress.enabled), and is the one
+# whose egress is limited too: to the name service, the core and zabbix.apiTo.
 # ---------------------------------------------------------------------------------------------
 networkPolicy:
   enabled: false
@@ -430,3 +512,14 @@ networkPolicy:
   #       matchLabels:
   #         kubernetes.io/metadata.name: ingress-nginx
   coreFrom: []
+  zabbix:
+    # Peers allowed to reach the add-on's webhook (its port 8091), such as Zabbix's server:
+    #   - ipBlock:
+    #       cidr: 192.0.2.10/32
+    # Empty: only the core, and the ingress controller with zabbix.ingress.enabled.
+    webhookFrom: []
+    # Where the add-on reaches Zabbix's API (zabbix.url), as peers, such as an ipBlock. Empty:
+    # any address, on apiPorts.
+    apiTo: []
+    # The ports of Zabbix's API.
+    apiPorts: [443, 80]
