@@ -18,10 +18,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arm: plain, shard: 1 }
-          - { arm: plain, shard: 2 }
-          - { arm: plain, shard: 3 }
-          - { arm: plain, shard: 4 }
           - { arm: warm, shard: 1 }
           - { arm: warm, shard: 2 }
           - { arm: warm, shard: 3 }
@@ -30,6 +26,10 @@ jobs:
           - { arm: warm, shard: 6 }
           - { arm: warm, shard: 7 }
           - { arm: warm, shard: 8 }
+          - { arm: warm, shard: 9 }
+          - { arm: warm, shard: 10 }
+          - { arm: warm, shard: 11 }
+          - { arm: warm, shard: 12 }
     steps:
       - uses: actions/checkout@v5
       - name: Rounds

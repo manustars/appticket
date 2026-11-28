@@ -68,7 +68,7 @@ for round in $(seq "$rounds"); do
   curl -s -o /dev/null -u hd-core:dev-only-client-secret -d grant_type=authorization_code -d code=x "$kc/token"
   warm=""
   [ "$arm" = warm ] && warm="warm: $(sign_in lena "$round-w") |"
-  burst=$(for u in otto lena lena piet; do sign_in "$u" "$round-$u-$RANDOM" & done; wait)
+  burst=$(i=0; for u in otto lena lena piet; do i=$((i + 1)); sign_in "$u" "$round-$u-$i" & done; wait)
   sleep 1
   after=$(for u in lena otto piet; do sign_in "$u" "$round-again-$u"; done)
   line="round $round $arm: $warm burst: $(echo $burst) | after: $(echo $after)"
