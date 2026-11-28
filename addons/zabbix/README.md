@@ -253,7 +253,8 @@ recovery resolves the ticket even when an agent has.
 A problem that reaches the add-on after it has already recovered in Zabbix, such as one Zabbix
 sends again after a failure while the problem recovered meanwhile, opens its ticket and is handled
 at once as its recovery would be: Zabbix's recovery message came when the add-on had no ticket for
-it, and nothing else would note or resolve it.
+it, and nothing else would note or resolve it. So that a problem recovering while its ticket opens
+is not missed either, the add-on reads the problem again once the core has opened the ticket.
 
 **An update.** An update with a message, such as an acknowledgement with a comment, adds a note
 with the Zabbix user, what they did and the message:
@@ -324,7 +325,14 @@ or after Zabbix stopped trying:
   if its rule says `resolve`. That happens only when Zabbix could not deliver the recovery, such
   as while the add-on was down, or when no action sends recoveries to the webhook. When the
   add-on's Zabbix user cannot read the media type (`webhook.media_type`) or its alerts (see step
-  4 above), it logs so and handles every recovery it finds in this way.
+  4 above), or Zabbix refuses `mediatype.get`, `alert.get` or `user.checkAuthentication` to it,
+  as a role can, it logs so and handles every recovery it finds in this way; the openings go on.
+
+  A user that is not a Super admin reads only the alerts sent to itself. Having the media is not
+  enough: when the action sends its messages to another user, the add-on reads none of them, and
+  takes every recovery as missed. The add-on cannot tell that case from one where no recovery was
+  sent yet; when it reads not one alert of the media type at all, it says so in its log at each
+  reconciliation, the first at startup.
 
 A reconciliation in which Zabbix or the core does not answer its first reads does nothing; a
 problem or ticket it cannot act on is logged and tried again at the next one.

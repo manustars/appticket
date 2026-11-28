@@ -94,9 +94,8 @@ async fn an_asset_of_a_host_shows_its_availability_problems_interface_and_os() {
         ))]
     );
 
-    zabbix.push(&errors, "3").await;
     zabbix
-        .wait_for_problems(&host, |problems| problems.len() == 1)
+        .push_until_problems(&errors, "3", &host, |problems| problems.len() == 1)
         .await;
     assert_eq!(
         live_details(&core, brightfield).await,

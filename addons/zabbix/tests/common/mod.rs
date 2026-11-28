@@ -756,6 +756,42 @@ impl TestZabbix {
         }
     }
 
+    /// Sends `value` to the trapper item, again until `until` holds of the host's open problems:
+    /// the server may learn of a new item before its trigger, and a value it takes then raises
+    /// no problem.
+    pub async fn push_until_problems(
+        &self,
+        item: &str,
+        value: &str,
+        host: &str,
+        until: impl Fn(&[Value]) -> bool,
+    ) {
+        let started = Instant::now();
+        loop {
+            let pushed: Value = self
+                .admin
+                .call("history.push", json!([{"itemid": item, "value": value}]))
+                .await
+                .unwrap();
+            let problems: Vec<Value> = self
+                .admin
+                .call(
+                    "problem.get",
+                    json!({"output": ["eventid", "severity"], "hostids": [host]}),
+                )
+                .await
+                .unwrap();
+            if until(&problems) {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(180),
+                "the problems of host {host} are {problems:?} after pushing values: {pushed}"
+            );
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
     /// Waits until `until` holds of the host's open problems, as `problem.get` answers them.
     pub async fn wait_for_problems(&self, host: &str, until: impl Fn(&[Value]) -> bool) {
         let started = Instant::now();
@@ -1231,7 +1267,24 @@ impl TestZabbix {
             .unwrap();
         let id = created["actionids"][0].as_str().unwrap().to_owned();
         self.actions.push(id.clone());
+        self.synced().await;
         id
+    }
+
+    /// Waits until the server has read what the test made so far into its configuration cache,
+    /// which it updates every few seconds: until then a problem raised on an item it already has
+    /// sets off no action made since, and leaves no alert. A trapper item made now takes values
+    /// once the server has read it, and so everything made before it, in the same update.
+    pub async fn synced(&self) {
+        let Some(host) = self.hosts.first() else {
+            return;
+        };
+        let key = format!("hd.synced.{}", Uuid::new_v4().simple());
+        let item = self
+            .item(host, &key, json!({"key_": key, "type": 2, "value_type": 3}))
+            .await;
+        self.push(&item, "1").await;
+        let _: Value = self.admin.call("item.delete", json!([item])).await.unwrap();
     }
 
     /// What Zabbix's alerts of the event say, for a test that waits in vain for the webhook.

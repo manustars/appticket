@@ -725,3 +725,81 @@ async fn ticket_of_within(addon: &hd_addon_sdk::Client, event: &str, within: Dur
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
+
+/// How often the stub Zabbix answered `event.get` for the problem 4213.
+static PROBLEM_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A Zabbix with the host SRV-01 in the group Brightfield and its problem 4213, still open the
+/// first time it is read and recovered by the event 4220 from then on, as when the problem
+/// recovers while the reconciliation opens its ticket.
+async fn zabbix_recovering_meanwhile() -> String {
+    let app = axum::Router::new().route(
+        "/api_jsonrpc.php",
+        // The add-on sends application/json-rpc, which axum's Json does not take.
+        axum::routing::post(|body: axum::body::Bytes| async move {
+            let call: Value = serde_json::from_slice(&body).unwrap();
+            let first_event = call["params"]["eventids"][0].as_str();
+            let result = match (call["method"].as_str().unwrap_or_default(), first_event) {
+                ("hostgroup.get", _) => json!([{"groupid": "22", "name": "Brightfield"}]),
+                ("problem.get", _) => {
+                    json!([{"eventid": "4213", "suppressed": "0", "cause_eventid": "0"}])
+                }
+                ("host.get", _) => json!([{"hostid": "10683", "host": "srv-01", "name": "SRV-01",
+                    "hostgroups": [{"groupid": "22", "name": "Brightfield"}]}]),
+                ("event.get", Some("4213")) => {
+                    let reads = PROBLEM_READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let recovery = if reads == 0 { "0" } else { "4220" };
+                    json!([{"eventid": "4213", "value": "1", "severity": "4",
+                            "name": "Mail queue is too long", "clock": "1795801516",
+                            "opdata": "", "r_eventid": recovery, "tags": [],
+                            "hosts": [{"hostid": "10683", "host": "srv-01", "name": "SRV-01"}]}])
+                }
+                ("event.get", Some("4220")) => json!([{"clock": "1795801522", "userid": "0"}]),
+                _ => json!([]),
+            };
+            axum::Json(json!({"jsonrpc": "2.0", "result": result, "id": call["id"]}))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    url
+}
+
+#[tokio::test]
+#[ignore = "needs the test database"]
+async fn a_problem_that_recovers_while_the_reconciliation_opens_its_ticket_is_handled_as_its_recovery()
+ {
+    let core = Core::start().await;
+    let brightfield = core.customer("Brightfield").await;
+    core.addon()
+        .replace_names(&hd_addon_sdk::SystemNames {
+            system: "Zabbix".into(),
+            names: vec![hd_addon_sdk::SystemName::top("Brightfield")],
+        })
+        .await
+        .unwrap();
+    core.reference(brightfield, "Brightfield").await;
+    let zabbix = hd_zabbix::zabbix::Zabbix::new(
+        &zabbix_recovering_meanwhile().await,
+        "zabbix-token",
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    let alerts = hd_zabbix::webhook::Alerts::new(
+        core.addon(),
+        zabbix,
+        "Zabbix",
+        hd_zabbix::rules::Rules::default_list(),
+    );
+
+    // The webhook's recovery came while there was no ticket, so Zabbix took it as sent.
+    let round = alerts.reconcile().await.unwrap();
+    assert_eq!((round.opened, round.failed), (1, 0), "{round:?}");
+    let number = ticket_of(&core, "4213").await;
+    assert_eq!(
+        core.addon_notes(number).await.last().unwrap(),
+        "The problem recovered in Zabbix at 2026-11-27 17:45:22 UTC."
+    );
+    assert_eq!(core.ticket(number).await["state"], "resolved");
+}

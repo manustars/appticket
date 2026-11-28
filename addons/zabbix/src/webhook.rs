@@ -252,11 +252,29 @@ impl Alerts {
         let opened = self.open_admitted(event, &opener).await;
         slot.opened(matches!(&opened, Ok((_, true))));
         let (number, created) = opened?;
-        if created && event.recovery_id.is_some() {
+        if !created {
+            return Ok(Opened::Ticket { number, created });
+        }
+        // The problem may have recovered since it was read, its recovery reaching the webhook
+        // while it had no ticket, which Zabbix then takes as received: read it again.
+        let recovered = match &event.recovery_id {
+            Some(_) => Some(event.clone()),
+            None => match self.zabbix.find_problem_event(&event.id).await {
+                Ok(now) => now.filter(|now| now.recovery_id.is_some()),
+                Err(e) => {
+                    tracing::warn!(event = %event.id, ticket = number, error = format!("{e:#}"),
+                        "reading the problem again after opening its ticket: a recovery since \
+                         is left to its message");
+                    None
+                }
+            },
+        };
+        if let Some(recovered) = recovered {
             tracing::info!(event = %event.id, ticket = number,
                 "the problem had already recovered: noting it and resolving as its rule says");
             if let Claimed::Now(claim) = self.claims.claim(&event.id) {
-                self.recover(number, event, opener.open.on_recovery).await?;
+                self.recover(number, &recovered, opener.open.on_recovery)
+                    .await?;
                 claim.finish();
             }
         }
