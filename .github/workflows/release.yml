@@ -1,7 +1,8 @@
 name: Release
 
-# A version tag (v1.2.3) builds both images and publishes them to the GitHub Container Registry
-# as ghcr.io/manustars/hd-core and ghcr.io/manustars/hd-assistant, tagged with the version and,
+# A version tag (v1.2.3) builds the images and publishes them to the GitHub Container Registry
+# as ghcr.io/manustars/hd-core, ghcr.io/manustars/hd-assistant and ghcr.io/manustars/hd-zabbix,
+# tagged with the version and,
 # for a final (not pre-release) version, `latest`; then it publishes the Helm chart with the same
 # version as oci://ghcr.io/manustars/charts/hd; and last it creates the tag's GitHub release, a
 # pre-release for a pre-release version, with the Compose install's archive attached,
@@ -95,6 +96,27 @@ jobs:
           push: true
           tags: ${{ steps.assistant.outputs.tags }}
           labels: ${{ steps.assistant.outputs.labels }}
+          cache-from: type=gha,scope=hd
+          cache-to: type=gha,scope=hd,mode=max
+
+      # The Zabbix add-on, from the same Rust build stage.
+      - id: zabbix
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/manustars/hd-zabbix
+          tags: type=semver,pattern={{version}}
+          flavor: latest=auto
+          labels: |
+            org.opencontainers.image.title=hd-zabbix
+            org.opencontainers.image.licenses=AGPL-3.0-only
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile
+          target: zabbix
+          push: true
+          tags: ${{ steps.zabbix.outputs.tags }}
+          labels: ${{ steps.zabbix.outputs.labels }}
           cache-from: type=gha,scope=hd
           cache-to: type=gha,scope=hd,mode=max
 
