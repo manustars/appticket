@@ -70,7 +70,7 @@ The Zabbix add-on receives Zabbix's alerts at
 {{- if .Values.zabbix.ingress.enabled }}
   https://{{ .Values.ingress.host }}/webhook through the Ingress
 {{- end }}
-Set it as the parameter url of the media type Help desk in Zabbix (addons/zabbix/README.md).
+Set it as the parameter url of the media type {{ .Values.zabbix.webhook.mediaType | default "Help desk" }} in Zabbix (addons/zabbix/README.md).
 {{- end }}
 {{- else }}
 
