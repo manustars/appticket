@@ -265,6 +265,11 @@ With Keycloak, add a "Group Membership" mapper to the client with the token clai
 `groups`, "Full group path" off and "Add to ID token" on; `authorizedGroup` is then the group's
 name.
 
+When people in the group are refused as not in it (`not_in_authorized_group`), the core's log
+line "the ID token does not put the person in the authorized group" says what the claim held:
+`nothing: the ID token has no such claim` when the token lacks it, or its value, such as the
+group's path when "Full group path" is on.
+
 #### Microsoft Entra ID
 
 The recommended setup sends an app role in the `roles` claim rather than the group in `groups`:
