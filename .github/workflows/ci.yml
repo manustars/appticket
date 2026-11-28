@@ -89,7 +89,8 @@ jobs:
 
   # The Zabbix add-on, its tests included that run against the Zabbix of compose.yaml (the profile
   # zabbix, on 127.0.0.1:55180) and the real core, which the tests start from the binary built
-  # here on a database of their own on the service db.
+  # here on a database of their own on the service db; among them the acceptance test
+  # (tests/acceptance.rs), which runs the add-on's binary with Zabbix sending it the alerts.
   zabbix:
     runs-on: ubuntu-latest
     services:
