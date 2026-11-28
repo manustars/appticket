@@ -107,13 +107,103 @@ three calls to Zabbix, and the core reads 8 assets of an add-on at a time within
 a page with many assets, or with a slow Zabbix, the last ones may show their details as
 unavailable.
 
-## Registering it on the core
+## Installing it
+
+The add-on is the image `ghcr.io/manustars/hd-zabbix`, which each release publishes beside the
+core's (`deploy/Dockerfile`, `--target zabbix`); it runs as the user 10001 and reads its
+configuration file at `/etc/hd/zabbix.toml` (`HD_ZABBIX_CONFIG`). As for every add-on, it is
+[registered on the core](#registering-it-on-the-core) first, which prints its credentials, and
+started once they and [its user in Zabbix](#its-user-in-zabbix) are there; Zabbix is then
+[set up](#setting-it-up-in-zabbix) to send it the alerts.
+
+- **Kubernetes**: the chart's values `zabbix.*` ([docs/deploy.md](../../docs/deploy.md#the-zabbix-add-on)).
+  Its configuration file is `zabbix.config`, without the sections `[core]`, `[addon]` and
+  `[webhook]`, which the chart writes; its secrets come from an existing Secret; the core reaches
+  it at the Service `hd-zabbix`, port 8091.
+- **Compose**: the profile `zabbix`
+  ([secrets/README.md](../../deploy/compose/secrets/README.md#the-zabbix-add-ons-secrets-and-configuration)).
+  Its configuration file is `zabbix.toml` beside `compose.yaml`, made from
+  [`zabbix.example.toml`](../../deploy/compose/zabbix.example.toml); its secrets are files of
+  `secrets/`; the core reaches it at `http://zabbix:8091`.
+
+Of the add-on's port, Zabbix's server needs only `/webhook`; `/events` and `/assets/…` are for
+the core, which reaches them inside the install. The webhook takes no alert without its secret,
+which Zabbix sends in a header: expose it over HTTPS, through the reverse proxy in front of the
+help desk, at `/webhook` of the help desk's own address, such as
+`https://helpdesk.example.com/webhook`:
+
+- in Kubernetes, `zabbix.ingress.enabled` adds an Ingress with that path alone of `ingress.host`
+  to the add-on. A Zabbix server inside the cluster reaches it at
+  `http://hd-zabbix.<namespace>.svc:8091/webhook` instead, and `zabbix.service.type` can make
+  the Service a load balancer or a node port for one outside, in plain HTTP. With the
+  NetworkPolicies on, Zabbix's server is among `networkPolicy.zabbix.webhookFrom`, and Zabbix's
+  API is reached at `networkPolicy.zabbix.apiTo` on `apiPorts` (any address on 443 and 80 by
+  default);
+- with Compose, the add-on's port is published on the host's loopback address
+  (`HD_ZABBIX_ADDRESS`, `HD_ZABBIX_PORT`, 8091), and the proxy passes `/webhook` on to it: Caddy
+  of the profile `https` does it by itself, and the examples of
+  [reverse-proxy.md](../../deploy/compose/reverse-proxy.md) have the lines for nginx, Traefik and
+  Caddy.
+
+For instance, a Zabbix at `https://zabbix.example.com` whose server and frontend are on
+`198.51.100.20`, outside the cluster, with the help desk at `helpdesk.example.com` behind the
+chart's Ingress and the NetworkPolicies on:
+
+```yaml
+ingress:
+  enabled: true
+  host: helpdesk.example.com
+zabbix:
+  enabled: true
+  secret:
+    existingSecret: hd-zabbix
+  config: |
+    [zabbix]
+    url = "https://zabbix.example.com"
+
+    [assets]
+    default_kind = "Server"
+  ingress:
+    enabled: true
+networkPolicy:
+  enabled: true
+  # The ingress controller, which passes /webhook on to the add-on as it passes the rest to the
+  # core.
+  coreFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+  zabbix:
+    # Zabbix's API, on its frontend.
+    apiTo:
+      - ipBlock:
+          cidr: 198.51.100.20/32
+    apiPorts: [443]
+```
+
+Without a Zabbix that answers, the add-on starts all the same, saying so in its log, and tries
+again at each round; it stops at startup only for a configuration file or a secret that does not
+fit.
+
+### Registering it on the core
 
 ```sh
 hd addon add zabbix --url http://127.0.0.1:8091 \
   --scope directory:read --scope catalog:write --scope names:write --scope conflicts:write \
   --scope tickets:read --scope tickets:write --event ticket.state_changed
 ```
+
+Inside an install the add-on is at `http://hd-zabbix:8091` (the chart's Service, for the release
+`hd`) or `http://zabbix:8091` (Compose), and `hd` is run in the core's container:
+`kubectl -n helpdesk exec deploy/hd-core -- hd addon add …` or
+`docker compose exec -T core hd addon add …`.
+
+The scopes are those of the calls the add-on makes ([`sdk/README.md`](../../sdk/README.md)):
+`directory:read` reads the customers, their external references and their assets and services;
+`names:write` sends the host groups as the name list, `catalog:write` supplies, retires and
+unlinks the assets of hosts, `conflicts:write` reports the hosts in conflict, `tickets:read`
+finds the tickets of problems by their ticket reference and lists those still open, and
+`tickets:write` opens them, adds their notes and resolves them.
 
 `--url` is where the core reaches the add-on's `addon.listen`, for live details and for the
 event `ticket.state_changed` (`POST /events`), which tells the add-on that an agent resolved or
@@ -140,14 +230,70 @@ their source, and each host the new one sends matches its old asset by name or s
 agents get a link proposal per host to accept. Disable the old add-on afterwards
 (`hd addon disable zabbix`).
 
-In Zabbix, give the add-on a user that can read the host groups of the customers, with an API
-token (*Users → API tokens*), and put that token in `HD_ZABBIX_API_TOKEN` or in a file named by
-`HD_ZABBIX_API_TOKEN_FILE`. The add-on sees only the groups and hosts that user can read. To go
-[back to Zabbix](#back-to-zabbix), the user's role (*Users → User roles*) must allow, among its
-actions, *Acknowledge problems* and *Add problem comments*, and *Close problems* when a rule
-closes them, with access to the API and `event.acknowledge` among the methods it may call; to
-close a problem the user also needs read-write permission on the host groups of the problem's
-hosts, which Zabbix requires for closing an event.
+### Its user in Zabbix
+
+The add-on reads Zabbix and writes to it as a user of its own, with an API token. Zabbix grants
+access to hosts to user groups, on host groups: put the user in a user group (*Users → User
+groups*, the tab *Host permissions*) with
+
+- *Read* on the host groups customers have as external references, and the groups nested in
+  them: the add-on sees only the groups and hosts its user can read, and acknowledging a problem
+  or commenting on it needs no more;
+- *Read-write* on the host groups of the problems a rule closes (`close_in_zabbix = true`), since
+  Zabbix closes an event only for a user with read-write rights on its trigger.
+
+The user's role (*Users → User roles*) must allow, under *Access to actions*, *Acknowledge
+problems* and *Add problem comments*, and *Close problems* when a rule closes them; and under
+*Access to API*, the API, with these methods when it lists those allowed: `apiinfo.version`,
+`hostgroup.get`, `host.get`, `item.get`, `problem.get`, `event.get`, `event.acknowledge`,
+`alert.get`, `mediatype.get`, `user.get` and `user.checkAuthentication`. A role of the type
+*User* is enough from Zabbix 7.0.6, which opened `mediatype.get` to it; on an earlier 7.0,
+Zabbix refuses that method to such a user, and the add-on then takes every recovery as missed
+(see the [reconciliation](#reconciliation)). A Super admin reads every host whatever its groups,
+and every alert (see step 4 below).
+
+Make its API token in *Users → API tokens*, *Create API token*, for that user, with no expiry
+date or one you renew in time. Zabbix shows the token once, as *Auth token*: put it in
+`HD_ZABBIX_API_TOKEN` or in a file named by `HD_ZABBIX_API_TOKEN_FILE` (the key `api-token` of
+the chart's Secret, `secrets/zabbix_api_token` with Compose).
+
+### Setting it up in Zabbix
+
+Zabbix sends the alerts to the [webhook](#alerts) through the media type shipped here, an
+action and a user with the media:
+
+1. Import the media type: *Alerts → Media types → Import*, the file `zabbix-media-type.yaml`.
+   Zabbix 7.0 or later. It adds the entry *Help desk ticket* to the menu of each event the add-on
+   gave a ticket's page to (`{EVENT.TAGS.hd_ticket_url}`); Zabbix shows it only for those. A media
+   type imported from an earlier version of the file has no entry: import the file again with
+   *Update existing*, then set its parameters again as below.
+2. In the media type **Help desk**, set the parameter `url` to the add-on's webhook as the Zabbix
+   server reaches it ([installing it](#installing-it)): through the reverse proxy,
+   `https://helpdesk.example.com/webhook`; inside a Kubernetes cluster,
+   `http://hd-zabbix.helpdesk.svc:8091/webhook`. Run by hand, `addon.listen` must then be an
+   address the server reaches (`0.0.0.0:8091` behind a proxy with HTTPS, for one). Set
+   `http_proxy` if the server goes through one.
+3. Give the webhook's secret to the media type: create the global macro `{$HD_WEBHOOK_SECRET}`
+   (*Administration → Macros*) of type *Secret text*, with the content of `webhook.secret_file`.
+   The parameter `secret` sends it; a secret written in the parameter itself would work too, but
+   it would show to those who can read media types.
+4. Give a user the media type as a media (*Users → Users*, the user's tab *Media*), with any
+   *Send to*, such as `helpdesk`. That user must be able to read the hosts whose problems it
+   receives. Make it the add-on's own user (the one of `HD_ZABBIX_API_TOKEN`), unless that user
+   is a Super admin: since Zabbix 7.0.9 any other user reads only the alerts sent to itself, and
+   the [reconciliation](#reconciliation) reads the media type's alerts to tell which recoveries the
+   webhook received.
+5. Create a trigger action (*Alerts → Actions → Trigger actions*) with the conditions that select
+   the problems for the help desk, such as their host groups, and:
+   - an operation that sends a message to that user through **Help desk** (*Send message*);
+   - a recovery operation *Notify all involved*, which sends the recovery to every user the
+     problem was sent to;
+   - an update operation *Notify all involved*, which sends the updates: acknowledgements,
+     comments, changes of severity and closes by hand. Zabbix sends a user none of the updates
+     that user made.
+
+   The rules still decide which problems open a ticket; the action only decides which reach the
+   add-on.
 
 ## Configuration
 
@@ -265,36 +411,6 @@ add none.
 
 A problem without a ticket, because none was opened for it, gets no note on recovery or update.
 
-### Setting it up in Zabbix
-
-1. Import the media type: *Alerts → Media types → Import*, the file `zabbix-media-type.yaml`.
-   Zabbix 7.0 or later. It adds the entry *Help desk ticket* to the menu of each event the add-on
-   gave a ticket's page to (`{EVENT.TAGS.hd_ticket_url}`); Zabbix shows it only for those. A media
-   type imported from an earlier version of the file has no entry: import the file again with
-   *Update existing*, then set its parameters again as below.
-2. In the media type **Help desk**, set the parameter `url` to the add-on's webhook as the Zabbix
-   server reaches it, such as `https://hd-zabbix.example.com/webhook`; `addon.listen` must then be
-   an address the server reaches (`0.0.0.0:8091` behind a proxy with HTTPS, for one). Set
-   `http_proxy` if the server goes through one.
-3. Give the webhook's secret to the media type: create the global macro `{$HD_WEBHOOK_SECRET}`
-   (*Administration → Macros*) of type *Secret text*, with the content of `webhook.secret_file`.
-   The parameter `secret` sends it; a secret written in the parameter itself would work too, but
-   it would show to those who can read media types.
-4. Give a user the media type as a media (*Users → Users → Media*), with any *Send to*, such as
-   `helpdesk`. That user must be able to read the hosts whose problems it receives. Make it the
-   add-on's own user (the one of `HD_ZABBIX_API_TOKEN`), unless that user is a Super admin: since
-   Zabbix 7.0.9 any other user reads only the alerts sent to itself, and the
-   [reconciliation](#reconciliation) reads the media type's alerts to tell which recoveries the
-   webhook received.
-5. Create a trigger action (*Alerts → Actions → Trigger actions*) with the conditions that select
-   the problems for the help desk, such as their host groups, and:
-   - an operation that sends a message to that user through **Help desk**;
-   - a recovery operation *Notify all involved*;
-   - an update operation *Notify all involved*.
-
-   The rules still decide which problems open a ticket; the action only decides which reach the
-   add-on.
-
 ### Reconciliation
 
 At startup and after each round of `sync.interval_minutes`, when it receives alerts (a `[webhook]`
@@ -324,8 +440,9 @@ or after Zabbix stopped trying:
   whose recovery the webhook never received gets the recovery's note again, and is resolved again
   if its rule says `resolve`. That happens only when Zabbix could not deliver the recovery, such
   as while the add-on was down, or when no action sends recoveries to the webhook. When the
-  add-on's Zabbix user cannot read the media type (`webhook.media_type`) or its alerts (see step
-  4 above), or Zabbix refuses `mediatype.get`, `alert.get` or `user.checkAuthentication` to it,
+  add-on's Zabbix user cannot read the media type (`webhook.media_type`) or its alerts (step 4
+  of [setting it up in Zabbix](#setting-it-up-in-zabbix)), or Zabbix refuses `mediatype.get`,
+  `alert.get` or `user.checkAuthentication` to it,
   as a role can, it logs so and handles every recovery it finds in this way; the openings go on.
 
   A user that is not a Super admin reads only the alerts sent to itself. Having the media is not
@@ -533,6 +650,12 @@ administrator and read the acknowledgements and the problems in Zabbix; one impo
 type, as the tests of alerts do, to read the event menu's entry and to let Zabbix send the
 add-on's acknowledgement and close back to it. With `HD_TEST_ZABBIX_WEBHOOK_LISTEN` on a fixed
 port, run them one at a time (`-- --ignored --test-threads=1`).
+
+The acceptance test (`tests/acceptance.rs`) runs the add-on's own binary, as an install runs
+it, with a configuration file and its secrets, and lets Zabbix send it everything: a problem
+raised opens one ticket, its recovery adds a note to the ticket an agent worked on, and the
+agent resolving the ticket acknowledges the event. It imports the media type as the test of
+alerts does, and binds the add-on's port as that test binds the webhook's.
 
 The tests of the reconciliation and the safety limit raise problems the same way and run the
 reconciliation themselves, with a limit of 2 tickets in 5 minutes so that nothing waits for the
