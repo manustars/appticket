@@ -1,6 +1,6 @@
-# Temporary: boots a fresh Keycloak again and again and runs the core's tests against it, as the
-# job core of CI does, to catch the Keycloak group tests that fail now and then with the core's
-# log and Keycloak's. Lives on a scratch branch only.
+# Temporary: signs in at a fresh Keycloak again and again with the burst of .github/hunt/burst.sh,
+# to find out how often its ID tokens lack the groups claim and whether that sticks. Lives on a
+# scratch branch only.
 name: Hunt the Keycloak group failure
 
 on:
@@ -11,71 +11,23 @@ permissions:
   contents: read
 
 jobs:
-  hunt:
+  burst:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    services:
-      db:
-        image: docker.io/library/postgres:16
-        env:
-          POSTGRES_USER: hd
-          POSTGRES_PASSWORD: hd
-          POSTGRES_DB: hd
-        ports: ["55432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U hd -d hd" --health-interval 2s --health-retries 30
-      mail:
-        image: docker.io/greenmail/standalone:2.1.8
-        env:
-          GREENMAIL_OPTS: >-
-            -Dgreenmail.setup.test.smtp -Dgreenmail.setup.test.imap -Dgreenmail.hostname=0.0.0.0
-            -Dgreenmail.users=helpdesk:helpdesk@helpdesk.test -Dgreenmail.users.login=local_part
-        ports: ["55025:3025", "55143:3143"]
-    env:
-      DATABASE_URL: postgres://hd:hd@127.0.0.1:55432/hd
-      HD_DATABASE_URL: postgres://hd:hd@127.0.0.1:55432/hd
-      CARGO_TERM_COLOR: never
+        shard: [1, 2, 3, 4, 5]
+        arm: [plain, load]
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: postgres-16
-          save-if: false
-      - run: cargo test --locked -p hd-core --bin hd --no-run
-      # Odd shards sign in as soon as Keycloak answers, even ones a minute later, as CI's leg
-      # without the checks does once the tests have built.
       - name: Rounds
-        run: |
-          mkdir -p "$RUNNER_TEMP/caught"
-          delay=$(( ${{ matrix.shard }} % 2 == 0 ? 60 : 0 ))
-          for round in $(seq 12); do
-            docker rm -f keycloak > /dev/null 2>&1 || true
-            docker run -d --name keycloak -p 127.0.0.1:55080:8080 \
-              -e KC_HOSTNAME=http://127.0.0.1:55080 \
-              -v "$GITHUB_WORKSPACE/dev/keycloak:/opt/keycloak/data/import:ro" \
-              quay.io/keycloak/keycloak:26.8.2 start-dev --import-realm \
-              --log-level=info,org.keycloak.events:debug > /dev/null
-            for _ in $(seq 90); do
-              curl -sf http://127.0.0.1:55080/realms/helpdesk/.well-known/openid-configuration > /dev/null && break
-              sleep 2
-            done
-            sleep "$delay"
-            log="$RUNNER_TEMP/round.log"
-            cargo test --locked -p hd-core --bin hd -- --include-ignored > "$log" 2>&1 || true
-            failed=$(grep -E '^test http::identity_provider::.* FAILED$' "$log" || true)
-            echo "round $round (delay $delay): $(grep -E '^test result' "$log") ${failed:+CAUGHT: $failed}"
-            if [ -n "$failed" ]; then
-              cp "$log" "$RUNNER_TEMP/caught/round-$round-tests.log"
-              docker logs keycloak > "$RUNNER_TEMP/caught/round-$round-keycloak.log" 2>&1
-            fi
-          done
+        env:
+          ARM: ${{ matrix.arm }}
+          ROUNDS: "40"
+        run: bash .github/hunt/burst.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: caught-${{ matrix.shard }}
+          name: caught-${{ matrix.arm }}-${{ matrix.shard }}
           path: ${{ runner.temp }}/caught
           if-no-files-found: ignore
