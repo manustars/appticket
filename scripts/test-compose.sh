@@ -292,7 +292,7 @@ given() {
 # TEXT.
 db_password_command() {
   local text=$1
-  hd_compose run --rm db-password > "$work/db-password.txt" 2>&1 \
+  hd_compose run --rm -T db-password < /dev/null > "$work/db-password.txt" 2>&1 \
     || fail "db-password failed: $(cat "$work/db-password.txt")"
   grep -qF "$text" "$work/db-password.txt" \
     || fail "db-password did not say '$text': $(cat "$work/db-password.txt")"
@@ -686,7 +686,7 @@ dump_name='hd-[0-9]{8}T[0-9]{6}Z\.dump'
 # Takes a dump now, with the command that deploy/compose/dumps.md gives, and prints the name of
 # the dump it says it took.
 dump_now() {
-  hd_compose run --rm dumps > "$work/dump.txt" 2>&1 \
+  hd_compose run --rm -T dumps < /dev/null > "$work/dump.txt" 2>&1 \
     || fail "docker compose run --rm dumps failed: $(cat "$work/dump.txt")"
   local name
   name=$(tr -d '\r' < "$work/dump.txt" | sed -nE "s/^dumped ($dump_name); kept:$/\1/p")
@@ -876,8 +876,12 @@ no_secret_shown "$db_password"
 # The one-shot dumps' container, which `run --rm` removes when it ends, kept once to be inspected:
 # it is the schedule's, but for its command.
 kept="$project-dumps-kept"
-hd_compose run --name "$kept" dumps true > "$work/kept.txt" 2>&1 \
+# Detached, then waited for: attaching to a container that ends at once can hang for good (seen
+# with Podman's compose), as any run here without -T can.
+hd_compose run -d --name "$kept" dumps true < /dev/null > "$work/kept.txt" 2>&1 \
   || fail "docker compose run dumps true failed: $(cat "$work/kept.txt")"
+[ "$("$engine" wait "$kept" | tr -d '\r')" = 0 ] \
+  || fail "the container of docker compose run dumps true ended with an error"
 "$engine" inspect "$kept" > "$work/kept.txt"
 "$engine" rm -f "$kept" > /dev/null
 if grep -qF -- "$db_password" "$work/kept.txt"; then
@@ -979,7 +983,7 @@ ok "the schedule stopped at once, in $((SECONDS - stop_start)) s, not after its 
 # Without HD_DATABASE_SSLMODE, TLS is required: the test's PostgreSQL, which serves none, is
 # refused, where verify-full would have stopped first for want of an authority.
 unsetting HD_DATABASE_SSLMODE
-if hd_compose run --rm dumps > "$work/dump.txt" 2>&1; then
+if hd_compose run --rm -T dumps < /dev/null > "$work/dump.txt" 2>&1; then
   fail "a dump without HD_DATABASE_SSLMODE reached a server without TLS: $(cat "$work/dump.txt")"
 fi
 grep -qF "SSL was required" "$work/dump.txt" \
@@ -1064,7 +1068,7 @@ ok "run --rm dumps verified the database's certificate against that authority an
 # Another authority's certificate in its place: the dumps refuse the database's.
 authority stranger "An authority the help desk's test does not sign with"
 cp "$tls/stranger.pem" "$secrets/database_ca"
-if hd_compose run --rm dumps > "$work/dump.txt" 2>&1; then
+if hd_compose run --rm -T dumps < /dev/null > "$work/dump.txt" 2>&1; then
   fail "a dump trusting another authority reached the database: $(cat "$work/dump.txt")"
 fi
 grep -qF "certificate verify failed" "$work/dump.txt" \
