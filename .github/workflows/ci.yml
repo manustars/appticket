@@ -155,8 +155,9 @@ jobs:
         env:
           SCAN_DENYLIST: none
 
-  # The deployment artifacts: the Helm chart lints and renders, both images build (nothing is
-  # pushed; publishing happens in release.yml on version tags), and the chart installs with its
+  # The deployment artifacts: the Helm chart lints and renders, with and without the Zabbix
+  # add-on, the three images build (nothing is pushed; publishing happens in release.yml on
+  # version tags), and the chart installs with its
   # own PostgreSQL and the core's image built here, in a kind cluster, and in another one is
   # upgraded from the released chart on a CloudNativePG cluster.
   deploy:
@@ -168,6 +169,9 @@ jobs:
       # default values and the staging example included.
       - name: The chart's database modes
         run: bash scripts/chart-database-modes.sh
+      # What the chart renders, lints and refuses for the Zabbix add-on (zabbix.*).
+      - name: The chart's Zabbix add-on
+        run: bash scripts/chart-zabbix.sh
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
@@ -185,6 +189,13 @@ jobs:
           context: .
           file: deploy/Dockerfile
           target: assistant
+          push: false
+          cache-from: type=gha,scope=hd
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile
+          target: zabbix
           push: false
           cache-from: type=gha,scope=hd
       # postgresql.mode=standalone in a kind cluster (the runner's own kind): install, upgrade to a
